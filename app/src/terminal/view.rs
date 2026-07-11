@@ -118,7 +118,7 @@ use crate::code_review::git_status_update::{
     GitRepoStatusModel, GitStatusMetadata, GitStatusUpdateModel,
 };
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
-use crate::projects::ProjectManagementModel;
+use crate::project_organization::model::ProjectOrganizationModel;
 use crate::remote_server::manager::{
     RemoteServerInitPhase, RemoteServerManager, RemoteServerManagerEvent,
 };
@@ -24430,14 +24430,24 @@ impl TypedActionView for TerminalView {
             }
             SummarizeConversation => self.summarize_conversation(ctx),
             AddProjectAtCurrentDirectory => {
-                // Get the current working directory and add it as a project
                 if let Some(current_dir) = self.pwd() {
                     let path = PathBuf::from(&current_dir);
-
-                    // Access the ProjectManagementModel and add the project
-                    ProjectManagementModel::handle(ctx).update(ctx, |project_model, ctx| {
-                        project_model.upsert_project(path, ctx);
-                    });
+                    if let Err(error) =
+                        ProjectOrganizationModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.touch_repository_path(path, ctx)
+                        })
+                    {
+                        let window_id = ctx.window_id();
+                        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                            toast_stack.add_ephemeral_toast(
+                                DismissibleToast::error(format!(
+                                    "Failed to add repository: {error}"
+                                )),
+                                window_id,
+                                ctx,
+                            );
+                        });
+                    }
                 }
             }
             OpenProjectRulesPane => {

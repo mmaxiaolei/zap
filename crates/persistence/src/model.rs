@@ -14,10 +14,10 @@ use super::schema::{
     generic_string_objects, ignored_suggestions, mcp_environment_variables,
     mcp_server_installations, mcp_server_panes, notebook_panes, notebooks, object_actions,
     object_metadata, object_permissions, pane_branches, pane_leaves, pane_nodes, panels,
-    project_rules, projects, repositories, repository_workspaces, server_experiments,
-    settings_panes, ssh_nodes, ssh_onekey_credentials, ssh_servers, sync_meta, tabs, team_members,
-    team_settings, teams, terminal_panes, user_profiles, welcome_panes, windows, workflow_panes,
-    workflows, workspace_teams, workspaces,
+    project_rules, repositories, repository_workspaces, server_experiments, settings_panes,
+    ssh_nodes, ssh_onekey_credentials, ssh_servers, sync_meta, tabs, team_members, team_settings,
+    teams, terminal_panes, user_profiles, welcome_panes, windows, workflow_panes, workflows,
+    workspace_teams, workspaces,
 };
 
 #[derive(Insertable)]
@@ -185,14 +185,6 @@ pub struct NewProjectRules {
     pub project_root: String,
 }
 
-#[derive(Default, Clone, Debug, Insertable, Queryable, AsChangeset)]
-#[diesel(table_name = projects)]
-pub struct Project {
-    pub path: String,
-    pub added_ts: NaiveDateTime,
-    pub last_opened_ts: Option<NaiveDateTime>,
-}
-
 #[derive(Clone, Debug, Eq, Identifiable, Insertable, PartialEq, Queryable, AsChangeset)]
 #[diesel(table_name = repositories)]
 pub struct Repository {
@@ -216,20 +208,6 @@ pub struct RepositoryWorkspace {
     pub created_at: NaiveDateTime,
     pub last_opened_at: NaiveDateTime,
 }
-
-impl Project {
-    pub fn last_used_at(&self) -> NaiveDateTime {
-        self.last_opened_ts.unwrap_or(self.added_ts)
-    }
-}
-
-impl PartialEq for Project {
-    fn eq(&self, other: &Self) -> bool {
-        self.path == other.path
-    }
-}
-
-impl Eq for Project {}
 
 #[derive(Identifiable, Insertable, Queryable)]
 pub struct WorkspaceTeam {

@@ -6,6 +6,7 @@ use diesel::connection::SimpleConnection;
 use diesel::migration::{MigrationSource, MigrationVersion};
 use diesel::prelude::*;
 use diesel::result::{DatabaseErrorKind, Error as DieselError};
+use diesel::sql_types::{BigInt, Nullable, Text, Timestamp};
 use diesel::sqlite::{Sqlite, SqliteConnection};
 use diesel_migrations::MigrationHarness;
 use warp_core::features::FeatureFlag;
@@ -37,6 +38,48 @@ use super::{
 
 // Diesel canonicalizes the directory version `2026-07-11-000000` by removing hyphens.
 const REPOSITORY_WORKSPACES_MIGRATION_VERSION: &str = "20260711000000";
+const DROP_LEGACY_PROJECTS_MIGRATION_VERSION: &str = "20260711010000";
+
+#[derive(QueryableByName)]
+struct SqliteTableCount {
+    #[diesel(sql_type = BigInt)]
+    count: i64,
+}
+
+#[derive(QueryableByName)]
+struct LegacyProjectRow {
+    #[diesel(sql_type = Text)]
+    path: String,
+    #[diesel(sql_type = Timestamp)]
+    added_ts: chrono::NaiveDateTime,
+    #[diesel(sql_type = Nullable<Timestamp>)]
+    last_opened_ts: Option<chrono::NaiveDateTime>,
+}
+
+fn sqlite_table_count(conn: &mut SqliteConnection, table_name: &str) -> i64 {
+    diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?",
+    )
+    .bind::<Text, _>(table_name)
+    .get_result::<SqliteTableCount>(conn)
+    .expect("sqlite table metadata should load")
+    .count
+}
+
+fn revert_drop_legacy_projects_migration(conn: &mut SqliteConnection) {
+    let target_version = MigrationVersion::from(DROP_LEGACY_PROJECTS_MIGRATION_VERSION);
+    let migrations =
+        <diesel_migrations::EmbeddedMigrations as MigrationSource<Sqlite>>::migrations(
+            &persistence::MIGRATIONS,
+        )
+        .expect("embedded migrations should load");
+    let migration = migrations
+        .iter()
+        .find(|migration| migration.name().version() == target_version)
+        .expect("drop legacy projects migration should be embedded");
+    conn.revert_migration(migration.as_ref())
+        .expect("drop legacy projects migration should revert");
+}
 
 fn revert_repository_workspaces_migration_and_later(conn: &mut SqliteConnection) {
     let target_version = MigrationVersion::from(REPOSITORY_WORKSPACES_MIGRATION_VERSION);
@@ -67,6 +110,42 @@ fn revert_repository_workspaces_migration_and_later(conn: &mut SqliteConnection)
         conn.revert_migration(migration.as_ref())
             .unwrap_or_else(|error| panic!("migration {version} should revert: {error}"));
     }
+}
+
+#[test]
+fn all_migrations_remove_legacy_projects_table() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    assert_eq!(sqlite_table_count(&mut conn, "projects"), 0);
+}
+
+#[test]
+fn reverting_drop_legacy_projects_backfills_from_repositories() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174099",
+        "/tmp/zap-project-backfill",
+    );
+    save_repository(&mut conn, repository.clone()).expect("repository should save");
+
+    revert_drop_legacy_projects_migration(&mut conn);
+
+    let project =
+        diesel::sql_query("SELECT path, added_ts, last_opened_ts FROM projects WHERE path = ?")
+            .bind::<Text, _>(&repository.path)
+            .get_result::<LegacyProjectRow>(&mut conn)
+            .expect("legacy project should be backfilled");
+    assert_eq!(project.path, repository.path);
+    assert_eq!(project.added_ts, repository.created_at);
+    assert_eq!(project.last_opened_ts, Some(repository.last_opened_at));
+
+    conn.run_pending_migrations(persistence::MIGRATIONS)
+        .expect("drop legacy projects migration should run again");
+    assert_eq!(sqlite_table_count(&mut conn, "projects"), 0);
 }
 
 #[test]
@@ -273,19 +352,17 @@ fn legacy_project_migration_normalizes_repository_display_name() {
     let database_path = tempdir.path().join("warp.sqlite");
     let mut conn = setup_database(&database_path).expect("database should initialize");
     revert_repository_workspaces_migration_and_later(&mut conn);
-    diesel::insert_into(crate::persistence::schema::projects::table)
-        .values((
-            crate::persistence::schema::projects::path.eq(repository_path
+    diesel::sql_query("INSERT INTO projects (path, added_ts, last_opened_ts) VALUES (?, ?, NULL)")
+        .bind::<Text, _>(
+            repository_path
                 .to_str()
-                .expect("repository path should be valid UTF-8")),
-            crate::persistence::schema::projects::added_ts.eq(chrono::DateTime::from_timestamp(
-                1_700_000_000,
-                0,
-            )
-            .expect("timestamp should be valid")
-            .naive_utc()),
-            crate::persistence::schema::projects::last_opened_ts.eq(None::<chrono::NaiveDateTime>),
-        ))
+                .expect("repository path should be valid UTF-8"),
+        )
+        .bind::<Timestamp, _>(
+            chrono::DateTime::from_timestamp(1_700_000_000, 0)
+                .expect("timestamp should be valid")
+                .naive_utc(),
+        )
         .execute(&mut conn)
         .expect("legacy project should insert");
     conn.run_pending_migrations(persistence::MIGRATIONS)

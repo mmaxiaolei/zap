@@ -70,7 +70,7 @@ use crate::notifications::{
     NotificationMailboxViewEvent,
 };
 use crate::pane_group::pane::ActionOrigin;
-use crate::projects::ProjectManagementModel;
+use crate::project_organization::model::ProjectOrganizationModel;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
 use crate::terminal::session_settings::SessionSettings;
@@ -10818,9 +10818,19 @@ impl Workspace {
 
     fn handle_open_repository(&mut self, path: &str, ctx: &mut ViewContext<Self>) {
         let path_buf = PathBuf::from(path);
-        ProjectManagementModel::handle(ctx).update(ctx, |projects, ctx| {
-            projects.upsert_project(path_buf.clone(), ctx);
-        });
+        if let Err(error) = ProjectOrganizationModel::handle(ctx).update(ctx, |model, ctx| {
+            model.touch_repository_path(&path_buf, ctx)
+        }) {
+            let window_id = ctx.window_id();
+            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(
+                    DismissibleToast::error(format!("Failed to open repository: {error}")),
+                    window_id,
+                    ctx,
+                );
+            });
+            return;
+        }
         self.add_tab_with_pane_layout(
             PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
                 initial_directory: Some(path_buf.clone()),

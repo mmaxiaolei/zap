@@ -42,7 +42,7 @@ use super::block_list::{
 use super::model::{
     self, ActiveMCPServer, CurrentUserInformation, MCPEnvironmentVariables, NewActiveMCPServer,
     NewApp, NewCommand, NewFolder, NewNotebook, NewServerExperiment, NewTab, NewTeam, NewWindow,
-    NewWorkspace, NewWorkspaceTeam, ObjectMetadata, ObjectPermissions, Project, Repository,
+    NewWorkspace, NewWorkspaceTeam, ObjectMetadata, ObjectPermissions, Repository,
     RepositoryWorkspace, Tab, Window, AI_DOCUMENT_PANE_KIND, AI_FACT_PANE_KIND, CODE_PANE_KIND,
     ENV_VAR_COLLECTION_PANE_KIND, EXECUTION_PROFILE_EDITOR_PANE_KIND, MCP_SERVER_PANE_KIND,
     NOTEBOOK_PANE_KIND, SETTINGS_PANE_KIND, TERMINAL_PANE_KIND, WELCOME_PANE_KIND,
@@ -817,12 +817,6 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
         }
         ModelEvent::DeleteObjects { ids } => {
             delete_objects(connection, ids).context("error deleting objects")
-        }
-        ModelEvent::UpsertProject { project } => {
-            save_project(connection, project).context("error upserting project")
-        }
-        ModelEvent::DeleteProject { path } => {
-            delete_project(connection, &path).context("error deleting project")
         }
         ModelEvent::UpsertRepository { repository } => {
             save_repository(connection, repository).context("error upserting repository")
@@ -1617,36 +1611,6 @@ fn decode_path(bytes: Vec<u8>) -> PathBuf {
             OsString::from_wide(wide_char_sequence).into()
         }
     }
-}
-
-fn save_project(conn: &mut SqliteConnection, project: Project) -> Result<()> {
-    use schema::projects::dsl::*;
-
-    diesel::insert_into(projects)
-        .values(project.clone())
-        .on_conflict(path)
-        .do_update()
-        .set(&project)
-        .execute(conn)?;
-
-    Ok(())
-}
-
-fn get_all_projects(conn: &mut SqliteConnection) -> Result<Vec<Project>, diesel::result::Error> {
-    use schema::projects::dsl::*;
-
-    Ok(projects
-        .load_iter::<Project, DefaultLoadingMode>(conn)?
-        .filter_map(|item| item.ok())
-        .collect_vec())
-}
-
-fn delete_project(conn: &mut SqliteConnection, project_path: &str) -> Result<()> {
-    use schema::projects::dsl::*;
-
-    diesel::delete(projects.filter(path.eq(project_path))).execute(conn)?;
-
-    Ok(())
 }
 
 fn save_repository(
@@ -3359,7 +3323,6 @@ fn read_sqlite_data(
     let ai_queries = read_ai_queries(conn)?;
 
     let multi_agent_conversations = read_agent_conversations(conn)?;
-    let projects = get_all_projects(conn)?;
     let repositories = get_all_repositories(conn)?;
     let repository_workspaces = get_all_repository_workspaces(conn)?;
     let project_rules = get_all_project_rules(conn)?;
@@ -3379,7 +3342,6 @@ fn read_sqlite_data(
         experiments: server_experiments,
         ai_queries,
         multi_agent_conversations,
-        projects,
         repositories,
         repository_workspaces,
         project_rules,

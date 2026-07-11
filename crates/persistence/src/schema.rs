@@ -333,14 +333,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    projects (path) {
-        path -> Text,
-        added_ts -> Timestamp,
-        last_opened_ts -> Nullable<Timestamp>,
-    }
-}
-
-diesel::table! {
     repositories (id) {
         id -> Text,
         display_name -> Text,

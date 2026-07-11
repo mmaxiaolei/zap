@@ -62,7 +62,7 @@ mod prefix;
 mod preview_config_migration;
 mod pricing;
 mod profiling;
-mod projects;
+mod project_organization;
 mod prompt;
 mod quit_warning;
 #[allow(dead_code)]
@@ -213,7 +213,7 @@ use crate::notebooks::manager::NotebookManager;
 use crate::notebooks::NotebookObject;
 use crate::palette::PaletteMode;
 use crate::persistence::PersistenceWriter;
-use crate::projects::ProjectManagementModel;
+use crate::project_organization::model::ProjectOrganizationModel;
 use crate::server::experiments::ServerExperiments;
 use crate::session_management::{RunningSessionSummary, SessionNavigationData};
 use crate::settings::manager::SettingsManager;
@@ -1122,7 +1122,8 @@ fn initialize_app(
         experiments,
         ai_queries,
         multi_agent_conversations,
-        persisted_projects,
+        persisted_repositories,
+        persisted_repository_workspaces,
         persisted_project_rules,
         persisted_ignored_suggestions,
         persisted_mcp_server_installations,
@@ -1141,7 +1142,8 @@ fn initialize_app(
                 sqlite_data.experiments,
                 sqlite_data.ai_queries,
                 sqlite_data.multi_agent_conversations,
-                sqlite_data.projects,
+                sqlite_data.repositories,
+                sqlite_data.repository_workspaces,
                 sqlite_data.project_rules,
                 sqlite_data.ignored_suggestions,
                 sqlite_data.mcp_server_installations,
@@ -1150,6 +1152,7 @@ fn initialize_app(
         })
         .unwrap_or_else(|| {
             (
+                Default::default(),
                 Default::default(),
                 Default::default(),
                 Default::default(),
@@ -1436,7 +1439,13 @@ fn initialize_app(
     }
 
     ctx.add_singleton_model(|ctx| {
-        ProjectManagementModel::new(persisted_projects, persistence_writer.sender(), ctx)
+        ProjectOrganizationModel::try_new(
+            persisted_repositories,
+            persisted_repository_workspaces,
+            persistence_writer.sender(),
+            ctx,
+        )
+        .unwrap_or_else(|error| panic!("Failed to initialize project organization: {error:#}"))
     });
 
     ctx.add_singleton_model(move |_| History::new(command_history));
