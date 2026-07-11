@@ -70,6 +70,7 @@ use crate::notifications::{
     NotificationMailboxViewEvent,
 };
 use crate::pane_group::pane::ActionOrigin;
+use crate::project_organization::domain::ProjectOrganizationError;
 use crate::project_organization::model::ProjectOrganizationModel;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
@@ -10786,7 +10787,9 @@ impl Workspace {
 
     fn open_repository(&mut self, path: Option<&str>, ctx: &mut ViewContext<Self>) {
         match path {
-            Some(path) => self.handle_open_repository(path, ctx),
+            Some(path) => {
+                let _ = self.handle_open_repository(path, ctx);
+            }
             None => ctx.open_file_picker(
                 |result, ctx| match result {
                     Ok(paths) => {
@@ -10816,11 +10819,18 @@ impl Workspace {
         }
     }
 
-    fn handle_open_repository(&mut self, path: &str, ctx: &mut ViewContext<Self>) {
+    fn touch_repository_for_open(
+        path: &Path,
+        ctx: &mut AppContext,
+    ) -> Result<(), ProjectOrganizationError> {
+        ProjectOrganizationModel::handle(ctx)
+            .update(ctx, |model, ctx| model.touch_repository_path(path, ctx))
+            .map(|_| ())
+    }
+
+    fn handle_open_repository(&mut self, path: &str, ctx: &mut ViewContext<Self>) -> bool {
         let path_buf = PathBuf::from(path);
-        if let Err(error) = ProjectOrganizationModel::handle(ctx).update(ctx, |model, ctx| {
-            model.touch_repository_path(&path_buf, ctx)
-        }) {
+        if let Err(error) = Self::touch_repository_for_open(&path_buf, ctx) {
             let window_id = ctx.window_id();
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
@@ -10829,7 +10839,7 @@ impl Workspace {
                     ctx,
                 );
             });
-            return;
+            return false;
         }
         self.add_tab_with_pane_layout(
             PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
@@ -10841,6 +10851,7 @@ impl Workspace {
             None,
             ctx,
         );
+        true
     }
 
     /// Navigate to an existing AI conversation, focusing on its terminal view, if it's open anywhere.

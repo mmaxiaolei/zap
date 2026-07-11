@@ -100,7 +100,9 @@ impl Workspace {
                     log::error!("Failed to convert path to string: {path:?}");
                     return;
                 };
-                self.handle_open_repository(path_str, ctx);
+                if !self.handle_open_repository(path_str, ctx) {
+                    return;
+                }
 
                 // Subscribe to the terminal view to wait for init completion
                 if let Some(terminal_view_handle) = self.active_session_view(ctx) {

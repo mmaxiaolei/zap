@@ -51,6 +51,50 @@ fn persisted_repository(id: RepositoryId, path: &Path) -> PersistedRepository {
     }
 }
 
+fn persisted_workspace(
+    id: RepositoryWorkspaceId,
+    repository_id: RepositoryId,
+    branch: &str,
+    worktree_path: &Path,
+) -> PersistedWorkspace {
+    let created_at = Utc::now().naive_utc() - Duration::minutes(30);
+    PersistedWorkspace {
+        id: id.to_string(),
+        repository_id: repository_id.to_string(),
+        display_name: branch.to_string(),
+        branch: branch.to_string(),
+        worktree_path: worktree_path
+            .to_str()
+            .expect("temporary worktree path should be valid UTF-8")
+            .to_string(),
+        created_at,
+        last_opened_at: created_at,
+    }
+}
+
+fn initialization_error(
+    app: &mut App,
+    repositories: Vec<PersistedRepository>,
+    workspaces: Vec<PersistedWorkspace>,
+) -> ProjectOrganizationError {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    app.add_model(move |ctx| {
+        match ProjectOrganizationModel::try_new(repositories, workspaces, None, ctx) {
+            Ok(_) => panic!("project organization initialization should fail"),
+            Err(error) => {
+                sender
+                    .send(error)
+                    .expect("initialization error should be captured");
+                ProjectOrganizationModel::try_new(vec![], vec![], None, ctx)
+                    .expect("empty project organization model should initialize")
+            }
+        }
+    });
+    receiver
+        .recv()
+        .expect("project organization initialization should return an error")
+}
+
 fn repository_workspace(
     id: RepositoryWorkspaceId,
     repository_id: RepositoryId,
@@ -330,6 +374,150 @@ fn touch_repository_path_updates_existing_timestamp_and_persistence_event() {
             ModelEvent::UpsertRepository { repository }
                 if repository.id == repository_id.to_string()
                     && repository.last_opened_at > previous_last_opened_at
+        ));
+    });
+}
+
+#[test]
+fn persisted_repository_with_missing_path_is_loaded_unchanged() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let missing_path = tempdir.path().join("missing-repository");
+        let repository_id = RepositoryId::from(Uuid::new_v4());
+        let repository = persisted_repository(repository_id, &missing_path);
+
+        let (model, _events) = create_model(&mut app, vec![repository], vec![]);
+        let loaded = model.read(&app, |model, _| {
+            model
+                .repository(repository_id)
+                .expect("persisted repository should be retained")
+                .clone()
+        });
+
+        assert_eq!(loaded.id, repository_id);
+        assert_eq!(loaded.source, RepositorySource::Local);
+        assert_eq!(loaded.path, missing_path);
+    });
+}
+
+#[test]
+fn persisted_workspace_with_missing_path_is_loaded_unchanged() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).expect("repository directory should be created");
+        let missing_worktree_path = tempdir.path().join("missing-worktree");
+        let repository_id = RepositoryId::from(Uuid::new_v4());
+        let workspace_id = RepositoryWorkspaceId::from(Uuid::new_v4());
+        let repository = persisted_repository(repository_id, &repository_path);
+        let workspace = persisted_workspace(
+            workspace_id,
+            repository_id,
+            "feature/missing-worktree",
+            &missing_worktree_path,
+        );
+
+        let (model, _events) = create_model(&mut app, vec![repository], vec![workspace]);
+        let loaded = model.read(&app, |model, _| {
+            model
+                .workspace(workspace_id)
+                .expect("persisted workspace should be retained")
+                .clone()
+        });
+
+        assert_eq!(loaded.repository_id, repository_id);
+        assert_eq!(loaded.worktree_path, missing_worktree_path);
+    });
+}
+
+#[test]
+fn persisted_repository_with_invalid_uuid_fails_initialization() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let mut repository = persisted_repository(
+            RepositoryId::from(Uuid::new_v4()),
+            &tempdir.path().join("repository"),
+        );
+        repository.id = "not-a-repository-uuid".to_string();
+
+        let error = initialization_error(&mut app, vec![repository], vec![]);
+
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::InvalidPersistedRepositoryId { value, .. }
+                if value == "not-a-repository-uuid"
+        ));
+    });
+}
+
+#[test]
+fn persisted_repository_with_invalid_source_fails_initialization() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let mut repository = persisted_repository(
+            RepositoryId::from(Uuid::new_v4()),
+            &tempdir.path().join("repository"),
+        );
+        repository.source = "remote".to_string();
+
+        let error = initialization_error(&mut app, vec![repository], vec![]);
+
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::InvalidPersistedRepositorySource { value, .. }
+                if value == "remote"
+        ));
+    });
+}
+
+#[test]
+fn persisted_workspace_with_invalid_uuid_fails_initialization() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let repository_id = RepositoryId::from(Uuid::new_v4());
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).expect("repository directory should be created");
+        let repository = persisted_repository(repository_id, &repository_path);
+        let mut workspace = persisted_workspace(
+            RepositoryWorkspaceId::from(Uuid::new_v4()),
+            repository_id,
+            "main",
+            &tempdir.path().join("worktree"),
+        );
+        workspace.id = "not-a-workspace-uuid".to_string();
+
+        let error = initialization_error(&mut app, vec![repository], vec![workspace]);
+
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::InvalidPersistedWorkspaceId { value, .. }
+                if value == "not-a-workspace-uuid"
+        ));
+    });
+}
+
+#[test]
+fn persisted_workspace_with_invalid_repository_id_fails_initialization() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let repository_id = RepositoryId::from(Uuid::new_v4());
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).expect("repository directory should be created");
+        let repository = persisted_repository(repository_id, &repository_path);
+        let mut workspace = persisted_workspace(
+            RepositoryWorkspaceId::from(Uuid::new_v4()),
+            repository_id,
+            "main",
+            &tempdir.path().join("worktree"),
+        );
+        workspace.repository_id = "not-a-repository-uuid".to_string();
+
+        let error = initialization_error(&mut app, vec![repository], vec![workspace]);
+
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::InvalidPersistedWorkspaceRepositoryId { value, .. }
+                if value == "not-a-repository-uuid"
         ));
     });
 }

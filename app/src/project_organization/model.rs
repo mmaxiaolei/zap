@@ -104,8 +104,34 @@ impl ProjectOrganizationModel {
         path: impl AsRef<Path>,
         ctx: &mut ModelContext<Self>,
     ) -> Result<RepositoryId, ProjectOrganizationError> {
-        let canonical_path = Self::canonicalize(path.as_ref())?;
-        let Some(repository_id) = self.repository_ids_by_path.get(&canonical_path).copied() else {
+        let original_path = path.as_ref();
+        let repository_id_for_original_path =
+            self.repository_ids_by_path.get(original_path).copied();
+        let canonical_path = Self::canonicalize(original_path)?;
+        let repository_id_for_canonical_path =
+            self.repository_ids_by_path.get(&canonical_path).copied();
+        if let (Some(original_id), Some(canonical_id)) = (
+            repository_id_for_original_path,
+            repository_id_for_canonical_path,
+        ) {
+            if original_id != canonical_id {
+                return Err(ProjectOrganizationError::RepositoryAlreadyExists {
+                    existing_repository_id: canonical_id,
+                    canonical_path,
+                });
+            }
+        }
+        let repository_id = repository_id_for_original_path
+            .or(repository_id_for_canonical_path)
+            .or_else(|| {
+                self.repositories.iter().find_map(|(repository_id, repository)| {
+                    dunce::canonicalize(&repository.path)
+                        .ok()
+                        .filter(|persisted_path| persisted_path == &canonical_path)
+                        .map(|_| *repository_id)
+                })
+            });
+        let Some(repository_id) = repository_id else {
             return self.add_local_repository(canonical_path, ctx);
         };
         let mut repository = self
@@ -113,9 +139,14 @@ impl ProjectOrganizationModel {
             .get(&repository_id)
             .expect("repository path index must reference an existing repository")
             .clone();
+        let previous_path = repository.path.clone();
+        repository.path = canonical_path;
         repository.last_opened_at = Utc::now().naive_utc();
 
         self.persist_repository(&repository, "repository access timestamp update")?;
+        self.repository_ids_by_path.remove(&previous_path);
+        self.repository_ids_by_path
+            .insert(repository.path.clone(), repository_id);
         self.repositories.insert(repository_id, repository);
         ctx.emit(ProjectOrganizationEvent::RepositoryUpdated { repository_id });
         Ok(repository_id)
@@ -443,7 +474,7 @@ impl ProjectOrganizationModel {
                 source,
             }
         })?;
-        let path = Self::canonicalize(Path::new(&repository.path))?;
+        let path = PathBuf::from(repository.path);
         Ok(Repository {
             id,
             display_name: repository.display_name,
@@ -471,7 +502,7 @@ impl ProjectOrganizationModel {
                     source,
                 }
             })?;
-        let worktree_path = Self::canonicalize(Path::new(&workspace.worktree_path))?;
+        let worktree_path = PathBuf::from(workspace.worktree_path);
         Ok(RepositoryWorkspace {
             id,
             repository_id,

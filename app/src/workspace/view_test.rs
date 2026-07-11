@@ -203,6 +203,25 @@ fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
     workspace
 }
 
+#[test]
+fn repository_open_preflight_rejects_missing_path() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|ctx| {
+            ProjectOrganizationModel::try_new(vec![], vec![], None, ctx)
+                .expect("empty project organization model should initialize")
+        });
+        let tempdir = tempfile::tempdir().expect("temporary directory should be created");
+        let missing_path = tempdir.path().join("missing-repository");
+
+        let result = app.update(|ctx| Workspace::touch_repository_for_open(&missing_path, ctx));
+
+        assert!(matches!(
+            result,
+            Err(ProjectOrganizationError::InvalidPath { path, .. }) if path == missing_path
+        ));
+    });
+}
+
 fn restored_workspace(
     app: &mut App,
     window_snapshot: crate::app_state::WindowSnapshot,
