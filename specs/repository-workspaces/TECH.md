@@ -79,7 +79,7 @@ CREATE TABLE repository_workspace_window_states (
 
 `windows.active_tab_index` 继续保存当前活动集合的索引，并兼容未归类集合。`repository_workspace_window_states` 保存同一窗口中其他真实 workspace 的活动索引；未归类集合不创建关联行。
 
-迁移将旧 `projects` 路径规范化后复制到 `repositories`，默认显示名取目录名，`source = 'local'`。代码消费者全部切换到新模型后删除旧 `projects` 表；down migration 恢复旧表并从 repositories 回填路径与时间戳。
+迁移分两阶段执行，保证每个提交都能独立构建和回滚。第一条 migration 创建新表并把旧 `projects` 路径复制到 `repositories`，暂时保留旧表；默认显示名在 Rust 首次加载时规范化为目录名，`source = 'local'`。代码消费者全部切换到新模型后，第二条 migration 删除旧 `projects` 表；该 migration 的 down 方向从 repositories 回填旧路径与时间戳。
 
 ### 3. Repository 与 Git 服务
 
