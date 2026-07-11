@@ -380,6 +380,11 @@ impl ProjectOrganizationModel {
         })
     }
 
+    fn normalize_persisted_path(path: String) -> PathBuf {
+        let path = PathBuf::from(path);
+        dunce::canonicalize(&path).unwrap_or(path)
+    }
+
     fn validate_new_repository(
         &self,
         repository: &Repository,
@@ -474,7 +479,7 @@ impl ProjectOrganizationModel {
                 source,
             }
         })?;
-        let path = PathBuf::from(repository.path);
+        let path = Self::normalize_persisted_path(repository.path);
         Ok(Repository {
             id,
             display_name: repository.display_name,
@@ -502,7 +507,7 @@ impl ProjectOrganizationModel {
                     source,
                 }
             })?;
-        let worktree_path = PathBuf::from(workspace.worktree_path);
+        let worktree_path = Self::normalize_persisted_path(workspace.worktree_path);
         Ok(RepositoryWorkspace {
             id,
             repository_id,

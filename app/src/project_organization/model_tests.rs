@@ -379,6 +379,165 @@ fn touch_repository_path_updates_existing_timestamp_and_persistence_event() {
 }
 
 #[test]
+fn persisted_repository_alias_is_normalized_and_rejected_as_duplicate() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).expect("repository directory should be created");
+        let alias_path = repository_path.join("..").join("repository");
+        let canonical_path =
+            dunce::canonicalize(&repository_path).expect("repository path should canonicalize");
+        let repository_id = RepositoryId::from(Uuid::new_v4());
+        let repository = persisted_repository(repository_id, &alias_path);
+
+        let (model, _events) = create_model(&mut app, vec![repository], vec![]);
+        let loaded_path = model.read(&app, |model, _| {
+            model
+                .repository(repository_id)
+                .expect("persisted repository should be retained")
+                .path
+                .clone()
+        });
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository(&canonical_path, ctx)
+            })
+            .expect_err("canonical duplicate should be rejected");
+
+        assert_eq!(loaded_path, canonical_path);
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::RepositoryAlreadyExists {
+                existing_repository_id,
+                canonical_path: existing_path,
+            } if existing_repository_id == repository_id && existing_path == canonical_path
+        ));
+    });
+}
+
+#[test]
+fn persisted_workspace_alias_is_normalized_and_rejected_as_duplicate() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let repository_path = tempdir.path().join("repository");
+        let worktree_path = tempdir.path().join("worktree");
+        for path in [&repository_path, &worktree_path] {
+            std::fs::create_dir(path).expect("test directory should be created");
+        }
+        let alias_path = worktree_path.join("..").join("worktree");
+        let canonical_path =
+            dunce::canonicalize(&worktree_path).expect("worktree path should canonicalize");
+        let repository_id = RepositoryId::from(Uuid::new_v4());
+        let workspace_id = RepositoryWorkspaceId::from(Uuid::new_v4());
+        let repository = persisted_repository(repository_id, &repository_path);
+        let workspace = persisted_workspace(workspace_id, repository_id, "main", &alias_path);
+
+        let (model, _events) = create_model(&mut app, vec![repository], vec![workspace]);
+        let loaded_path = model.read(&app, |model, _| {
+            model
+                .workspace(workspace_id)
+                .expect("persisted workspace should be retained")
+                .worktree_path
+                .clone()
+        });
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.insert_workspace(
+                    repository_workspace(
+                        RepositoryWorkspaceId::from(Uuid::new_v4()),
+                        repository_id,
+                        "feature/duplicate-path",
+                        &canonical_path,
+                    ),
+                    ctx,
+                )
+            })
+            .expect_err("canonical worktree duplicate should be rejected");
+
+        assert_eq!(loaded_path, canonical_path);
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::WorkspacePathAlreadyExists {
+                existing_workspace_id,
+                canonical_path: existing_path,
+            } if existing_workspace_id == workspace_id && existing_path == canonical_path
+        ));
+    });
+}
+
+#[test]
+fn persisted_repository_alias_duplicate_fails_initialization() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).expect("repository directory should be created");
+        let alias_path = repository_path.join("..").join("repository");
+        let canonical_path =
+            dunce::canonicalize(&repository_path).expect("repository path should canonicalize");
+        let first_id = RepositoryId::from(Uuid::new_v4());
+        let second_id = RepositoryId::from(Uuid::new_v4());
+
+        let error = initialization_error(
+            &mut app,
+            vec![
+                persisted_repository(first_id, &alias_path),
+                persisted_repository(second_id, &repository_path),
+            ],
+            vec![],
+        );
+
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::RepositoryAlreadyExists {
+                existing_repository_id,
+                canonical_path: existing_path,
+            } if existing_repository_id == first_id && existing_path == canonical_path
+        ));
+    });
+}
+
+#[test]
+fn persisted_workspace_alias_duplicate_fails_initialization() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let repository_path = tempdir.path().join("repository");
+        let worktree_path = tempdir.path().join("worktree");
+        for path in [&repository_path, &worktree_path] {
+            std::fs::create_dir(path).expect("test directory should be created");
+        }
+        let alias_path = worktree_path.join("..").join("worktree");
+        let canonical_path =
+            dunce::canonicalize(&worktree_path).expect("worktree path should canonicalize");
+        let repository_id = RepositoryId::from(Uuid::new_v4());
+        let first_id = RepositoryWorkspaceId::from(Uuid::new_v4());
+        let second_id = RepositoryWorkspaceId::from(Uuid::new_v4());
+        let repository = persisted_repository(repository_id, &repository_path);
+
+        let error = initialization_error(
+            &mut app,
+            vec![repository],
+            vec![
+                persisted_workspace(first_id, repository_id, "main", &alias_path),
+                persisted_workspace(
+                    second_id,
+                    repository_id,
+                    "feature/duplicate-path",
+                    &worktree_path,
+                ),
+            ],
+        );
+
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::WorkspacePathAlreadyExists {
+                existing_workspace_id,
+                canonical_path: existing_path,
+            } if existing_workspace_id == first_id && existing_path == canonical_path
+        ));
+    });
+}
+
+#[test]
 fn persisted_repository_with_missing_path_is_loaded_unchanged() {
     App::test((), |mut app| async move {
         let tempdir = TempDir::new().expect("temporary directory should be created");
