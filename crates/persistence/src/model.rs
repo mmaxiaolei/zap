@@ -14,9 +14,10 @@ use super::schema::{
     generic_string_objects, ignored_suggestions, mcp_environment_variables,
     mcp_server_installations, mcp_server_panes, notebook_panes, notebooks, object_actions,
     object_metadata, object_permissions, pane_branches, pane_leaves, pane_nodes, panels,
-    project_rules, projects, server_experiments, settings_panes, ssh_nodes, ssh_onekey_credentials,
-    ssh_servers, sync_meta, tabs, team_members, team_settings, teams, terminal_panes,
-    user_profiles, welcome_panes, windows, workflow_panes, workflows, workspace_teams, workspaces,
+    project_rules, projects, repositories, repository_workspaces, server_experiments,
+    settings_panes, ssh_nodes, ssh_onekey_credentials, ssh_servers, sync_meta, tabs, team_members,
+    team_settings, teams, terminal_panes, user_profiles, welcome_panes, windows, workflow_panes,
+    workflows, workspace_teams, workspaces,
 };
 
 #[derive(Insertable)]
@@ -43,6 +44,7 @@ pub struct Window {
     pub left_panel_open: Option<bool>,
     pub vertical_tabs_panel_open: Option<bool>,
     pub theme_override: Option<String>,
+    pub active_repository_workspace_id: Option<String>,
 }
 
 #[derive(Identifiable, Insertable, Queryable)]
@@ -191,6 +193,30 @@ pub struct Project {
     pub last_opened_ts: Option<NaiveDateTime>,
 }
 
+#[derive(Clone, Debug, Eq, Identifiable, Insertable, PartialEq, Queryable, AsChangeset)]
+#[diesel(table_name = repositories)]
+pub struct Repository {
+    pub id: String,
+    pub display_name: String,
+    pub path: String,
+    pub remote_url: Option<String>,
+    pub source: String,
+    pub created_at: NaiveDateTime,
+    pub last_opened_at: NaiveDateTime,
+}
+
+#[derive(Clone, Debug, Eq, Identifiable, Insertable, PartialEq, Queryable, AsChangeset)]
+#[diesel(table_name = repository_workspaces)]
+pub struct RepositoryWorkspace {
+    pub id: String,
+    pub repository_id: String,
+    pub display_name: String,
+    pub branch: String,
+    pub worktree_path: String,
+    pub created_at: NaiveDateTime,
+    pub last_opened_at: NaiveDateTime,
+}
+
 impl Project {
     pub fn last_used_at(&self) -> NaiveDateTime {
         self.last_opened_ts.unwrap_or(self.added_ts)
@@ -314,6 +340,7 @@ pub struct Tab {
     pub window_id: i32,
     pub custom_title: Option<String>,
     pub color: Option<String>,
+    pub repository_workspace_id: Option<String>,
 }
 
 #[derive(Insertable)]

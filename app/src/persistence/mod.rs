@@ -51,7 +51,9 @@ use crate::workflows::WorkflowObject;
 use crate::workspaces::user_profiles::UserProfileWithUID;
 use crate::workspaces::workspace::{Workspace as WorkspaceMetadata, WorkspaceUid};
 
-use self::model::{AgentConversation, AgentConversationData, Project};
+use self::model::{
+    AgentConversation, AgentConversationData, Project, Repository, RepositoryWorkspace,
+};
 
 #[cfg(any(feature = "local_fs", feature = "integration_tests"))]
 pub use sqlite::database_file_path;
@@ -198,6 +200,8 @@ pub struct PersistedData {
     pub ai_queries: Vec<PersistedAIInput>,
     pub multi_agent_conversations: Vec<AgentConversation>,
     pub projects: Vec<Project>,
+    pub repositories: Vec<Repository>,
+    pub repository_workspaces: Vec<RepositoryWorkspace>,
     pub project_rules: Vec<ProjectRulePath>,
     pub ignored_suggestions: Vec<(String, SuggestionType)>,
     pub mcp_server_installations: HashMap<Uuid, TemplatableMCPServerInstallation>,
@@ -327,6 +331,18 @@ pub enum ModelEvent {
     },
     DeleteProject {
         path: String,
+    },
+    UpsertRepository {
+        repository: Repository,
+    },
+    DeleteRepository {
+        repository_id: String,
+    },
+    UpsertRepositoryWorkspace {
+        workspace: RepositoryWorkspace,
+    },
+    DeleteRepositoryWorkspace {
+        workspace_id: String,
     },
     UpsertMCPServerEnvironmentVariables {
         mcp_server_uuid: Vec<u8>,

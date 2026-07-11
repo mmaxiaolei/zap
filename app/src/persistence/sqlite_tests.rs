@@ -2,6 +2,9 @@
 use std::fs;
 use std::{path::PathBuf, sync::Arc};
 
+use diesel::connection::SimpleConnection;
+use diesel::prelude::*;
+use diesel_migrations::MigrationHarness;
 use warp_core::features::FeatureFlag;
 
 use crate::{
@@ -12,7 +15,10 @@ use crate::{
     cloud_object::{Owner, StoredObjectPermissions},
     code::editor_management::CodeSource,
     notebooks::{NotebookObject, NotebookObjectModel},
-    persistence::{model::ObjectPermissions, BlockCompleted, ModelEvent},
+    persistence::{
+        model::{ObjectPermissions, Repository, RepositoryWorkspace},
+        BlockCompleted, ModelEvent,
+    },
     server::ids::ClientId,
     server_time::ServerTimestamp,
     tab::SelectedTabColor,
@@ -21,7 +27,9 @@ use crate::{
 };
 
 use super::{
-    decode_path, deduplicate_events, encode_path, read_sqlite_data, save_app_state, setup_database,
+    decode_path, deduplicate_events, delete_repository, delete_repository_workspace, encode_path,
+    get_all_repositories, get_all_repository_workspaces, read_sqlite_data, save_app_state,
+    save_repository, save_repository_workspace, setup_database,
 };
 
 #[test]
@@ -190,6 +198,174 @@ fn test_sqlite_round_trips_vertical_tabs_panel_open() {
             .collect::<Vec<_>>(),
         vec![false, true]
     );
+}
+
+#[test]
+fn repository_rows_round_trip() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let created_at = chrono::DateTime::from_timestamp(1_700_000_000, 0)
+        .expect("timestamp should be valid")
+        .naive_utc();
+    let last_opened_at = chrono::DateTime::from_timestamp(1_700_000_100, 0)
+        .expect("timestamp should be valid")
+        .naive_utc();
+    let repository = Repository {
+        id: "123e4567-e89b-12d3-a456-426614174000".to_string(),
+        display_name: "zap".to_string(),
+        path: "/tmp/zap".to_string(),
+        remote_url: None,
+        source: "local".to_string(),
+        created_at,
+        last_opened_at,
+    };
+
+    save_repository(&mut conn, repository.clone()).expect("repository should save");
+
+    assert_eq!(
+        get_all_repositories(&mut conn).expect("repositories should load"),
+        vec![repository]
+    );
+}
+
+#[test]
+fn legacy_project_migration_normalizes_repository_display_name() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let repository_path = tempdir.path().join("repository");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    conn.revert_last_migration(persistence::MIGRATIONS)
+        .expect("repository workspace migration should revert");
+    diesel::insert_into(crate::persistence::schema::projects::table)
+        .values((
+            crate::persistence::schema::projects::path.eq(repository_path
+                .to_str()
+                .expect("repository path should be valid UTF-8")),
+            crate::persistence::schema::projects::added_ts.eq(chrono::DateTime::from_timestamp(
+                1_700_000_000,
+                0,
+            )
+            .expect("timestamp should be valid")
+            .naive_utc()),
+            crate::persistence::schema::projects::last_opened_ts.eq(None::<chrono::NaiveDateTime>),
+        ))
+        .execute(&mut conn)
+        .expect("legacy project should insert");
+    conn.run_pending_migrations(persistence::MIGRATIONS)
+        .expect("repository workspace migration should run");
+
+    let persisted_data = read_sqlite_data(&mut conn, None).expect("database should load");
+
+    assert_eq!(persisted_data.repositories[0].display_name, "repository");
+    assert_eq!(
+        crate::persistence::schema::repositories::table
+            .select(crate::persistence::schema::repositories::display_name)
+            .first::<String>(&mut conn)
+            .expect("repository display name should load"),
+        "repository"
+    );
+}
+
+#[test]
+fn malformed_repository_row_returns_error() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    conn.batch_execute(
+        "INSERT INTO repositories (
+            id, display_name, path, remote_url, source, created_at, last_opened_at
+         ) VALUES (
+            '123e4567-e89b-12d3-a456-426614174001', 'malformed', '/tmp/malformed', NULL,
+            'local', 'not-a-timestamp', '2026-07-11 01:02:03'
+         );",
+    )
+    .expect("malformed repository row should insert");
+
+    assert!(get_all_repositories(&mut conn).is_err());
+}
+
+#[test]
+fn malformed_repository_workspace_row_returns_error() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let now = chrono::Utc::now().naive_utc();
+    let repository = Repository {
+        id: "123e4567-e89b-12d3-a456-426614174002".to_string(),
+        display_name: "zap".to_string(),
+        path: "/tmp/zap-malformed-workspace".to_string(),
+        remote_url: None,
+        source: "local".to_string(),
+        created_at: now,
+        last_opened_at: now,
+    };
+    save_repository(&mut conn, repository).expect("repository should save");
+    conn.batch_execute(
+        "INSERT INTO repository_workspaces (
+            id, repository_id, display_name, branch, worktree_path, created_at, last_opened_at
+         ) VALUES (
+            '123e4567-e89b-12d3-a456-426614174003',
+            '123e4567-e89b-12d3-a456-426614174002',
+            'main', 'main', '/tmp/zap-malformed-workspace-main',
+            'not-a-timestamp', '2026-07-11 01:02:03'
+         );",
+    )
+    .expect("malformed repository workspace row should insert");
+
+    assert!(get_all_repository_workspaces(&mut conn).is_err());
+}
+
+#[test]
+fn repository_workspace_rows_support_crud_and_repository_restrict() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let created_at = chrono::DateTime::from_timestamp(1_700_000_000, 0)
+        .expect("timestamp should be valid")
+        .naive_utc();
+    let repository = Repository {
+        id: "123e4567-e89b-12d3-a456-426614174004".to_string(),
+        display_name: "zap".to_string(),
+        path: "/tmp/zap-workspace-crud".to_string(),
+        remote_url: None,
+        source: "local".to_string(),
+        created_at,
+        last_opened_at: created_at,
+    };
+    save_repository(&mut conn, repository.clone()).expect("repository should save");
+    let mut workspace = RepositoryWorkspace {
+        id: "123e4567-e89b-12d3-a456-426614174005".to_string(),
+        repository_id: repository.id.clone(),
+        display_name: "main".to_string(),
+        branch: "main".to_string(),
+        worktree_path: "/tmp/zap-workspace-crud-main".to_string(),
+        created_at,
+        last_opened_at: created_at,
+    };
+
+    save_repository_workspace(&mut conn, workspace.clone()).expect("workspace should save");
+    assert_eq!(
+        get_all_repository_workspaces(&mut conn).expect("workspaces should load"),
+        vec![workspace.clone()]
+    );
+
+    workspace.display_name = "Main workspace".to_string();
+    workspace.last_opened_at = chrono::DateTime::from_timestamp(1_700_000_100, 0)
+        .expect("timestamp should be valid")
+        .naive_utc();
+    save_repository_workspace(&mut conn, workspace.clone()).expect("workspace should update");
+    assert_eq!(
+        get_all_repository_workspaces(&mut conn).expect("workspaces should load"),
+        vec![workspace.clone()]
+    );
+    assert!(delete_repository(&mut conn, &repository.id).is_err());
+
+    delete_repository_workspace(&mut conn, &workspace.id).expect("workspace should delete");
+    assert!(get_all_repository_workspaces(&mut conn)
+        .expect("workspaces should load")
+        .is_empty());
+    delete_repository(&mut conn, &repository.id).expect("repository should delete");
 }
 
 #[test]

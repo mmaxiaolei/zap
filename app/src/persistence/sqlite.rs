@@ -42,10 +42,11 @@ use super::block_list::{
 use super::model::{
     self, ActiveMCPServer, CurrentUserInformation, MCPEnvironmentVariables, NewActiveMCPServer,
     NewApp, NewCommand, NewFolder, NewNotebook, NewServerExperiment, NewTab, NewTeam, NewWindow,
-    NewWorkspace, NewWorkspaceTeam, ObjectMetadata, ObjectPermissions, Project, Tab, Window,
-    AI_DOCUMENT_PANE_KIND, AI_FACT_PANE_KIND, CODE_PANE_KIND, ENV_VAR_COLLECTION_PANE_KIND,
-    EXECUTION_PROFILE_EDITOR_PANE_KIND, MCP_SERVER_PANE_KIND, NOTEBOOK_PANE_KIND,
-    SETTINGS_PANE_KIND, TERMINAL_PANE_KIND, WELCOME_PANE_KIND, WORKFLOW_PANE_KIND,
+    NewWorkspace, NewWorkspaceTeam, ObjectMetadata, ObjectPermissions, Project, Repository,
+    RepositoryWorkspace, Tab, Window, AI_DOCUMENT_PANE_KIND, AI_FACT_PANE_KIND, CODE_PANE_KIND,
+    ENV_VAR_COLLECTION_PANE_KIND, EXECUTION_PROFILE_EDITOR_PANE_KIND, MCP_SERVER_PANE_KIND,
+    NOTEBOOK_PANE_KIND, SETTINGS_PANE_KIND, TERMINAL_PANE_KIND, WELCOME_PANE_KIND,
+    WORKFLOW_PANE_KIND,
 };
 use super::schema;
 use super::{
@@ -822,6 +823,20 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
         }
         ModelEvent::DeleteProject { path } => {
             delete_project(connection, &path).context("error deleting project")
+        }
+        ModelEvent::UpsertRepository { repository } => {
+            save_repository(connection, repository).context("error upserting repository")
+        }
+        ModelEvent::DeleteRepository { repository_id } => {
+            delete_repository(connection, &repository_id).context("error deleting repository")
+        }
+        ModelEvent::UpsertRepositoryWorkspace { workspace } => {
+            save_repository_workspace(connection, workspace)
+                .context("error upserting repository workspace")
+        }
+        ModelEvent::DeleteRepositoryWorkspace { workspace_id } => {
+            delete_repository_workspace(connection, &workspace_id)
+                .context("error deleting repository workspace")
         }
         ModelEvent::UpsertWorkspace { workspace } => {
             save_workspace(connection, *workspace).context("error upserting workspace")
@@ -1630,6 +1645,97 @@ fn delete_project(conn: &mut SqliteConnection, project_path: &str) -> Result<()>
     use schema::projects::dsl::*;
 
     diesel::delete(projects.filter(path.eq(project_path))).execute(conn)?;
+
+    Ok(())
+}
+
+fn save_repository(
+    conn: &mut SqliteConnection,
+    repository: Repository,
+) -> Result<(), diesel::result::Error> {
+    use schema::repositories::dsl::*;
+
+    diesel::insert_into(repositories)
+        .values(repository.clone())
+        .on_conflict(id)
+        .do_update()
+        .set(&repository)
+        .execute(conn)?;
+
+    Ok(())
+}
+
+fn get_all_repositories(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<Repository>, diesel::result::Error> {
+    use schema::repositories::dsl::*;
+
+    let mut repository_rows = repositories.load::<Repository>(conn)?;
+    for repository in &mut repository_rows {
+        if repository.display_name != repository.path {
+            continue;
+        }
+
+        let normalized_display_name = Path::new(&repository.path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| {
+                Error::DeserializationError(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "Failed to normalize migrated repository display name: path `{}` has no valid UTF-8 file name",
+                        repository.path
+                    ),
+                )))
+            })?
+            .to_string();
+        repository.display_name = normalized_display_name;
+        save_repository(conn, repository.clone())?;
+    }
+
+    Ok(repository_rows)
+}
+
+fn delete_repository(conn: &mut SqliteConnection, repository_id: &str) -> Result<()> {
+    use schema::repositories::dsl::*;
+
+    diesel::delete(repositories.filter(id.eq(repository_id))).execute(conn)?;
+
+    Ok(())
+}
+
+fn save_repository_workspace(
+    conn: &mut SqliteConnection,
+    repository_workspace: RepositoryWorkspace,
+) -> Result<()> {
+    use schema::repository_workspaces::dsl::*;
+
+    diesel::insert_into(repository_workspaces)
+        .values(repository_workspace.clone())
+        .on_conflict(id)
+        .do_update()
+        .set(&repository_workspace)
+        .execute(conn)?;
+
+    Ok(())
+}
+
+fn get_all_repository_workspaces(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<RepositoryWorkspace>, diesel::result::Error> {
+    use schema::repository_workspaces::dsl::*;
+
+    repository_workspaces.load::<RepositoryWorkspace>(conn)
+}
+
+fn delete_repository_workspace(
+    conn: &mut SqliteConnection,
+    repository_workspace_id: &str,
+) -> Result<()> {
+    use schema::repository_workspaces::dsl::*;
+
+    diesel::delete(repository_workspaces.filter(id.eq(repository_workspace_id))).execute(conn)?;
 
     Ok(())
 }
@@ -3254,6 +3360,8 @@ fn read_sqlite_data(
 
     let multi_agent_conversations = read_agent_conversations(conn)?;
     let projects = get_all_projects(conn)?;
+    let repositories = get_all_repositories(conn)?;
+    let repository_workspaces = get_all_repository_workspaces(conn)?;
     let project_rules = get_all_project_rules(conn)?;
     let ignored_suggestions = get_all_ignored_suggestions(conn)?;
     let mcp_server_installations = get_all_mcp_server_installations(conn)?;
@@ -3272,6 +3380,8 @@ fn read_sqlite_data(
         ai_queries,
         multi_agent_conversations,
         projects,
+        repositories,
+        repository_workspaces,
         project_rules,
         ignored_suggestions,
         mcp_server_installations,
