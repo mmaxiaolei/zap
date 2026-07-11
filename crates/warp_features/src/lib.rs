@@ -174,6 +174,9 @@ pub enum FeatureFlag {
     /// Enables multi-workspace selection.
     MultiWorkspace,
 
+    /// 启用仓库工作区。
+    RepositoryWorkspaces,
+
     /// Maximizes data in flat storage to reduce memory usage.
     MaximizeFlatStorage,
 
@@ -718,6 +721,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::LazySceneBuilding,
     FeatureFlag::SshDragAndDrop,
     FeatureFlag::MultiWorkspace,
+    FeatureFlag::RepositoryWorkspaces,
     FeatureFlag::ImeMarkedText,
     FeatureFlag::MSYS2Shells,
     FeatureFlag::RetryTruncatedCodeResponses,
@@ -1015,3 +1019,7 @@ impl From<TriState> for Option<bool> {
 #[cfg(test)]
 #[path = "features_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod lib_tests;

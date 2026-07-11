@@ -1,0 +1,8 @@
+use super::{DOGFOOD_FLAGS, FeatureFlag, PREVIEW_FLAGS, RELEASE_FLAGS};
+
+#[test]
+fn repository_workspaces_is_dogfood_only() {
+    assert!(DOGFOOD_FLAGS.contains(&FeatureFlag::RepositoryWorkspaces));
+    assert!(!PREVIEW_FLAGS.contains(&FeatureFlag::RepositoryWorkspaces));
+    assert!(!RELEASE_FLAGS.contains(&FeatureFlag::RepositoryWorkspaces));
+}
