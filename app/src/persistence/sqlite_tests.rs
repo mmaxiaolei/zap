@@ -3,7 +3,10 @@ use std::fs;
 use std::{path::PathBuf, sync::Arc};
 
 use diesel::connection::SimpleConnection;
+use diesel::migration::{MigrationSource, MigrationVersion};
 use diesel::prelude::*;
+use diesel::result::{DatabaseErrorKind, Error as DieselError};
+use diesel::sqlite::{Sqlite, SqliteConnection};
 use diesel_migrations::MigrationHarness;
 use warp_core::features::FeatureFlag;
 
@@ -31,6 +34,40 @@ use super::{
     get_all_repositories, get_all_repository_workspaces, read_sqlite_data, save_app_state,
     save_repository, save_repository_workspace, setup_database,
 };
+
+// Diesel canonicalizes the directory version `2026-07-11-000000` by removing hyphens.
+const REPOSITORY_WORKSPACES_MIGRATION_VERSION: &str = "20260711000000";
+
+fn revert_repository_workspaces_migration_and_later(conn: &mut SqliteConnection) {
+    let target_version = MigrationVersion::from(REPOSITORY_WORKSPACES_MIGRATION_VERSION);
+    let applied_versions = conn
+        .applied_migrations()
+        .expect("applied migrations should load");
+    let migrations =
+        <diesel_migrations::EmbeddedMigrations as MigrationSource<Sqlite>>::migrations(
+            &persistence::MIGRATIONS,
+        )
+        .expect("embedded migrations should load");
+    let versions_to_revert = applied_versions
+        .into_iter()
+        .take_while(|version| version >= &target_version)
+        .collect::<Vec<_>>();
+
+    assert!(
+        versions_to_revert
+            .iter()
+            .any(|version| version == &target_version),
+        "repository workspaces migration should be applied"
+    );
+    for version in versions_to_revert {
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name().version() == version)
+            .unwrap_or_else(|| panic!("migration {version} should be embedded"));
+        conn.revert_migration(migration.as_ref())
+            .unwrap_or_else(|error| panic!("migration {version} should revert: {error}"));
+    }
+}
 
 #[test]
 fn test_deduplicate_snapshots() {
@@ -235,8 +272,7 @@ fn legacy_project_migration_normalizes_repository_display_name() {
     let repository_path = tempdir.path().join("repository");
     let database_path = tempdir.path().join("warp.sqlite");
     let mut conn = setup_database(&database_path).expect("database should initialize");
-    conn.revert_last_migration(persistence::MIGRATIONS)
-        .expect("repository workspace migration should revert");
+    revert_repository_workspaces_migration_and_later(&mut conn);
     diesel::insert_into(crate::persistence::schema::projects::table)
         .values((
             crate::persistence::schema::projects::path.eq(repository_path
@@ -316,6 +352,88 @@ fn malformed_repository_workspace_row_returns_error() {
     assert!(get_all_repository_workspaces(&mut conn).is_err());
 }
 
+fn repository_row(id: &str, path: &str) -> Repository {
+    let now = chrono::DateTime::from_timestamp(1_700_000_000, 0)
+        .expect("timestamp should be valid")
+        .naive_utc();
+    Repository {
+        id: id.to_string(),
+        display_name: "zap".to_string(),
+        path: path.to_string(),
+        remote_url: None,
+        source: "local".to_string(),
+        created_at: now,
+        last_opened_at: now,
+    }
+}
+
+fn repository_workspace_row(
+    id: &str,
+    repository_id: &str,
+    branch: &str,
+    worktree_path: &str,
+) -> RepositoryWorkspace {
+    let now = chrono::DateTime::from_timestamp(1_700_000_000, 0)
+        .expect("timestamp should be valid")
+        .naive_utc();
+    RepositoryWorkspace {
+        id: id.to_string(),
+        repository_id: repository_id.to_string(),
+        display_name: branch.to_string(),
+        branch: branch.to_string(),
+        worktree_path: worktree_path.to_string(),
+        created_at: now,
+        last_opened_at: now,
+    }
+}
+
+fn save_test_window_and_tab(conn: &mut SqliteConnection) -> (i32, i32) {
+    let app_state = AppState {
+        windows: vec![test_terminal_window_snapshot(false)],
+        active_window_index: None,
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(conn, &app_state).expect("app state should save");
+
+    let window_id = crate::persistence::schema::windows::table
+        .select(crate::persistence::schema::windows::id)
+        .first(conn)
+        .expect("window should load");
+    let tab_id = crate::persistence::schema::tabs::table
+        .select(crate::persistence::schema::tabs::id)
+        .first(conn)
+        .expect("tab should load");
+    (window_id, tab_id)
+}
+
+fn insert_repository_workspace_window_state(
+    conn: &mut SqliteConnection,
+    window_id: i32,
+    repository_workspace_id: &str,
+) {
+    use crate::persistence::schema::repository_workspace_window_states::dsl;
+
+    diesel::insert_into(dsl::repository_workspace_window_states)
+        .values((
+            dsl::window_id.eq(window_id),
+            dsl::repository_workspace_id.eq(repository_workspace_id),
+            dsl::active_tab_index.eq(0),
+        ))
+        .execute(conn)
+        .expect("repository workspace window state should insert");
+}
+
+fn assert_unique_violation(error: &anyhow::Error) {
+    assert!(matches!(
+        error.downcast_ref::<DieselError>(),
+        Some(DieselError::DatabaseError(
+            DatabaseErrorKind::UniqueViolation,
+            _
+        ))
+    ));
+}
+
 #[test]
 fn repository_workspace_rows_support_crud_and_repository_restrict() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
@@ -366,6 +484,236 @@ fn repository_workspace_rows_support_crud_and_repository_restrict() {
         .expect("workspaces should load")
         .is_empty());
     delete_repository(&mut conn, &repository.id).expect("repository should delete");
+}
+
+#[test]
+fn repository_workspace_window_state_cascades_when_window_is_deleted() {
+    use crate::persistence::schema::repository_workspace_window_states::dsl as window_states;
+
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174010",
+        "/tmp/zap-window-cascade",
+    );
+    let workspace = repository_workspace_row(
+        "123e4567-e89b-12d3-a456-426614174011",
+        &repository.id,
+        "main",
+        "/tmp/zap-window-cascade-main",
+    );
+    save_repository(&mut conn, repository).expect("repository should save");
+    save_repository_workspace(&mut conn, workspace.clone()).expect("workspace should save");
+    let (window_id, _) = save_test_window_and_tab(&mut conn);
+    insert_repository_workspace_window_state(&mut conn, window_id, &workspace.id);
+
+    save_app_state(
+        &mut conn,
+        &AppState {
+            windows: vec![],
+            active_window_index: None,
+            block_lists: Default::default(),
+            running_mcp_servers: Default::default(),
+        },
+    )
+    .expect("empty app state should save");
+
+    assert_eq!(
+        window_states::repository_workspace_window_states
+            .count()
+            .get_result::<i64>(&mut conn)
+            .expect("window state count should load"),
+        0
+    );
+}
+
+#[test]
+fn repository_workspace_window_state_cascades_when_workspace_is_deleted() {
+    use crate::persistence::schema::repository_workspace_window_states::dsl as window_states;
+
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174012",
+        "/tmp/zap-workspace-cascade",
+    );
+    let workspace = repository_workspace_row(
+        "123e4567-e89b-12d3-a456-426614174013",
+        &repository.id,
+        "main",
+        "/tmp/zap-workspace-cascade-main",
+    );
+    save_repository(&mut conn, repository).expect("repository should save");
+    save_repository_workspace(&mut conn, workspace.clone()).expect("workspace should save");
+    let (window_id, _) = save_test_window_and_tab(&mut conn);
+    insert_repository_workspace_window_state(&mut conn, window_id, &workspace.id);
+
+    delete_repository_workspace(&mut conn, &workspace.id).expect("workspace should delete");
+
+    assert_eq!(
+        window_states::repository_workspace_window_states
+            .count()
+            .get_result::<i64>(&mut conn)
+            .expect("window state count should load"),
+        0
+    );
+}
+
+#[test]
+fn repository_workspace_delete_nulls_tab_and_window_workspace_ids() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let repository = repository_row("123e4567-e89b-12d3-a456-426614174014", "/tmp/zap-set-null");
+    let workspace = repository_workspace_row(
+        "123e4567-e89b-12d3-a456-426614174015",
+        &repository.id,
+        "main",
+        "/tmp/zap-set-null-main",
+    );
+    save_repository(&mut conn, repository).expect("repository should save");
+    save_repository_workspace(&mut conn, workspace.clone()).expect("workspace should save");
+    let (window_id, tab_id) = save_test_window_and_tab(&mut conn);
+    diesel::update(
+        crate::persistence::schema::tabs::table
+            .filter(crate::persistence::schema::tabs::id.eq(tab_id)),
+    )
+    .set(crate::persistence::schema::tabs::repository_workspace_id.eq(Some(workspace.id.clone())))
+    .execute(&mut conn)
+    .expect("tab workspace should update");
+    diesel::update(
+        crate::persistence::schema::windows::table
+            .filter(crate::persistence::schema::windows::id.eq(window_id)),
+    )
+    .set(
+        crate::persistence::schema::windows::active_repository_workspace_id
+            .eq(Some(workspace.id.clone())),
+    )
+    .execute(&mut conn)
+    .expect("window workspace should update");
+
+    delete_repository_workspace(&mut conn, &workspace.id).expect("workspace should delete");
+
+    assert_eq!(
+        crate::persistence::schema::tabs::table
+            .filter(crate::persistence::schema::tabs::id.eq(tab_id))
+            .select(crate::persistence::schema::tabs::repository_workspace_id)
+            .first::<Option<String>>(&mut conn)
+            .expect("tab workspace should load"),
+        None
+    );
+    assert_eq!(
+        crate::persistence::schema::windows::table
+            .filter(crate::persistence::schema::windows::id.eq(window_id))
+            .select(crate::persistence::schema::windows::active_repository_workspace_id)
+            .first::<Option<String>>(&mut conn)
+            .expect("window workspace should load"),
+        None
+    );
+}
+
+#[test]
+fn repository_source_check_rejects_invalid_source() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let mut repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174016",
+        "/tmp/zap-invalid-source",
+    );
+    repository.source = "remote".to_string();
+
+    let error = save_repository(&mut conn, repository).expect_err("invalid source should fail");
+
+    assert!(matches!(
+        error,
+        DieselError::DatabaseError(DatabaseErrorKind::CheckViolation, _)
+    ));
+}
+
+#[test]
+fn repository_path_must_be_unique() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let first = repository_row(
+        "123e4567-e89b-12d3-a456-426614174017",
+        "/tmp/zap-unique-path",
+    );
+    let second = repository_row(
+        "123e4567-e89b-12d3-a456-426614174018",
+        "/tmp/zap-unique-path",
+    );
+    save_repository(&mut conn, first).expect("first repository should save");
+
+    let error = save_repository(&mut conn, second).expect_err("duplicate path should fail");
+
+    assert!(matches!(
+        error,
+        DieselError::DatabaseError(DatabaseErrorKind::UniqueViolation, _)
+    ));
+}
+
+#[test]
+fn repository_workspace_worktree_path_must_be_unique() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174019",
+        "/tmp/zap-unique-worktree",
+    );
+    let first = repository_workspace_row(
+        "123e4567-e89b-12d3-a456-426614174020",
+        &repository.id,
+        "main",
+        "/tmp/zap-shared-worktree-path",
+    );
+    let second = repository_workspace_row(
+        "123e4567-e89b-12d3-a456-426614174021",
+        &repository.id,
+        "preview",
+        "/tmp/zap-shared-worktree-path",
+    );
+    save_repository(&mut conn, repository).expect("repository should save");
+    save_repository_workspace(&mut conn, first).expect("first workspace should save");
+
+    let error =
+        save_repository_workspace(&mut conn, second).expect_err("duplicate path should fail");
+
+    assert_unique_violation(&error);
+}
+
+#[test]
+fn repository_workspace_branch_must_be_unique_within_repository() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174022",
+        "/tmp/zap-unique-branch",
+    );
+    let first = repository_workspace_row(
+        "123e4567-e89b-12d3-a456-426614174023",
+        &repository.id,
+        "main",
+        "/tmp/zap-unique-branch-main",
+    );
+    let second = repository_workspace_row(
+        "123e4567-e89b-12d3-a456-426614174024",
+        &repository.id,
+        "main",
+        "/tmp/zap-unique-branch-main-copy",
+    );
+    save_repository(&mut conn, repository).expect("repository should save");
+    save_repository_workspace(&mut conn, first).expect("first workspace should save");
+
+    let error =
+        save_repository_workspace(&mut conn, second).expect_err("duplicate branch should fail");
+
+    assert_unique_violation(&error);
 }
 
 #[test]
