@@ -1,7 +1,7 @@
 use std::{
     ffi::{OsStr, OsString},
     io,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::Output,
 };
 
@@ -87,6 +87,11 @@ pub enum GitWorkspaceError {
     InvalidUtf8 { operation: &'static str },
     #[error("git returned invalid branch ref `{full_ref}`")]
     InvalidBranchRef { full_ref: String },
+    #[error("remote ref `{full_ref}` matches multiple remotes: {remotes:?}")]
+    AmbiguousRemoteRef {
+        full_ref: String,
+        remotes: Vec<String>,
+    },
     #[error("git returned invalid worktree record: {record}")]
     InvalidWorktreeRecord { record: String },
     #[error("clone target `{path}` already exists")]
@@ -108,6 +113,8 @@ pub enum GitWorkspaceError {
     },
     #[error("Git URL `{url}` does not contain a repository name")]
     RepositoryNameMissing { url: String },
+    #[error("clone directory name `{name}` must be a single normal path component")]
+    InvalidCloneDirectoryName { name: String },
     #[error("background Git operation `{operation}` failed: {message}")]
     BackgroundTaskFailed {
         operation: &'static str,
@@ -196,6 +203,7 @@ pub fn clone_repository_into(
         Some(directory_name) => directory_name.to_string(),
         None => repository_name_from_url(url)?,
     };
+    validate_clone_directory_name(&directory_name)?;
     clone_to_target(url, &parent.join(directory_name))
 }
 
@@ -212,10 +220,11 @@ pub async fn clone_repository_async(
 
 /// 执行 fetch 后列出本地与远端完整分支引用。
 pub fn fetch_and_list_refs(repo: &Path) -> Result<Vec<BranchRef>, GitWorkspaceError> {
+    let remote = primary_remote(repo)?;
     git_output_for_operation(
         repo,
         "fetch repository refs",
-        &["fetch", "--prune", "--quiet", "--no-tags"],
+        &["fetch", "--prune", "--quiet", "--no-tags", &remote],
     )?;
     list_branch_refs(repo)
 }
@@ -228,8 +237,6 @@ pub async fn fetch_and_list_refs_async(repo: PathBuf) -> Result<Vec<BranchRef>, 
 /// 使用完整 refname 列出本地与远端分支。
 pub fn list_branch_refs(repo: &Path) -> Result<Vec<BranchRef>, GitWorkspaceError> {
     let remotes = list_remotes(repo)?;
-    let mut remotes_for_matching = remotes.clone();
-    remotes_for_matching.sort_by_key(|remote| std::cmp::Reverse(remote.len()));
     let stdout = output_string(
         repo,
         "list repository refs",
@@ -245,7 +252,7 @@ pub fn list_branch_refs(repo: &Path) -> Result<Vec<BranchRef>, GitWorkspaceError
         .lines()
         .filter(|line| !line.is_empty())
         .filter(|full_ref| !is_remote_head_ref(full_ref, &remotes))
-        .map(|full_ref| parse_branch_ref(full_ref, &remotes_for_matching))
+        .map(|full_ref| parse_branch_ref(full_ref, &remotes))
         .collect()
 }
 
@@ -348,6 +355,21 @@ fn repository_name_from_local_path(path: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+fn validate_clone_directory_name(name: &str) -> Result<(), GitWorkspaceError> {
+    let mut components = Path::new(name).components();
+    let valid = matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(component)), None) if component == OsStr::new(name)
+    );
+    if valid {
+        Ok(())
+    } else {
+        Err(GitWorkspaceError::InvalidCloneDirectoryName {
+            name: name.to_string(),
+        })
+    }
+}
+
 /// 将分支名转换为安全目录 slug，并追加 workspace ID 的前 8 位。
 pub fn workspace_dir_name(branch: &str, workspace_id: &str) -> String {
     let mut slug = String::new();
@@ -422,7 +444,10 @@ fn list_remotes(repo: &Path) -> Result<Vec<String>, GitWorkspaceError> {
         .collect())
 }
 
-fn parse_branch_ref(full_ref: &str, remotes: &[String]) -> Result<BranchRef, GitWorkspaceError> {
+pub(crate) fn parse_branch_ref(
+    full_ref: &str,
+    remotes: &[String],
+) -> Result<BranchRef, GitWorkspaceError> {
     if let Some(name) = full_ref.strip_prefix("refs/heads/") {
         if !name.is_empty() {
             return Ok(BranchRef::Local {
@@ -433,18 +458,29 @@ fn parse_branch_ref(full_ref: &str, remotes: &[String]) -> Result<BranchRef, Git
     }
 
     if let Some(remote_ref) = full_ref.strip_prefix("refs/remotes/") {
+        let mut matches = Vec::new();
         for remote in remotes {
             let prefix = format!("{remote}/");
             if let Some(name) = remote_ref.strip_prefix(&prefix) {
                 if !name.is_empty() {
-                    return Ok(BranchRef::Remote {
-                        remote: remote.clone(),
-                        name: name.to_string(),
-                        full_ref: full_ref.to_string(),
-                    });
+                    matches.push((remote.clone(), name.to_string()));
                 }
             }
         }
+        return match matches.as_slice() {
+            [(remote, name)] => Ok(BranchRef::Remote {
+                remote: remote.clone(),
+                name: name.clone(),
+                full_ref: full_ref.to_string(),
+            }),
+            [] => Err(GitWorkspaceError::InvalidBranchRef {
+                full_ref: full_ref.to_string(),
+            }),
+            matches => Err(GitWorkspaceError::AmbiguousRemoteRef {
+                full_ref: full_ref.to_string(),
+                remotes: matches.iter().map(|(remote, _)| remote.clone()).collect(),
+            }),
+        };
     }
 
     Err(GitWorkspaceError::InvalidBranchRef {
@@ -604,7 +640,26 @@ fn output_path(
     operation: &'static str,
     args: &[&str],
 ) -> Result<PathBuf, GitWorkspaceError> {
-    output_string(repo, operation, args).map(PathBuf::from)
+    let mut path_args = vec!["-c", "core.quotePath=false"];
+    path_args.extend_from_slice(args);
+    let output = git_output_for_operation(repo, operation, &path_args)?;
+    decode_git_path_output(&output.stdout, operation)
+}
+
+pub(crate) fn decode_git_path_output(
+    stdout: &[u8],
+    operation: &'static str,
+) -> Result<PathBuf, GitWorkspaceError> {
+    let path = stdout
+        .strip_suffix(b"\r\n")
+        .or_else(|| stdout.strip_suffix(b"\n"))
+        .unwrap_or(stdout);
+    path_from_git_bytes(path).map_err(|error| match error {
+        GitWorkspaceError::InvalidWorktreeRecord { .. } => {
+            GitWorkspaceError::InvalidUtf8 { operation }
+        }
+        error => error,
+    })
 }
 
 fn output_string(

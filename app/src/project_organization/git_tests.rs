@@ -121,6 +121,25 @@ fn validates_repository_and_reads_remote_metadata() {
     ));
 }
 
+#[cfg(unix)]
+#[test]
+fn decodes_non_utf8_git_path_output_without_loss() {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    let expected = PathBuf::from(std::ffi::OsString::from_vec(
+        b"/tmp/repository-\xff ".to_vec(),
+    ));
+    let mut output = expected.as_os_str().as_bytes().to_vec();
+    output.extend_from_slice(b"\r\n");
+
+    let decoded = decode_git_path_output(&output, "decode test path").unwrap();
+
+    assert_eq!(
+        decoded.as_os_str().as_bytes(),
+        expected.as_os_str().as_bytes()
+    );
+}
+
 #[test]
 fn rejects_repository_without_remote() {
     let fixture = GitFixture::new();
@@ -199,6 +218,21 @@ fn classifies_local_and_remote_refs_without_prefix_guessing() {
 }
 
 #[test]
+fn rejects_ambiguous_overlapping_remote_ref() {
+    let remotes = vec!["foo".to_string(), "foo/bar".to_string()];
+
+    let error = parse_branch_ref("refs/remotes/foo/bar/main", &remotes).unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::AmbiguousRemoteRef {
+            full_ref,
+            remotes: candidates,
+        } if full_ref == "refs/remotes/foo/bar/main" && candidates == remotes
+    ));
+}
+
+#[test]
 fn fetches_remote_refs_before_listing_them() {
     let fixture = GitFixture::new();
     run_git(
@@ -220,6 +254,54 @@ fn fetches_remote_refs_before_listing_them() {
         branch_ref,
         BranchRef::Remote { remote, name, .. }
             if remote == "origin" && name == "created-after-clone"
+    )));
+}
+
+#[test]
+fn fetches_primary_remote_when_branch_has_no_upstream() {
+    let fixture = GitFixture::new();
+    run_git(
+        &fixture.root,
+        &["push", "origin", "main:refs/heads/primary-only"],
+    );
+
+    let secondary = fixture.tempdir.path().join("secondary.git");
+    run_git(
+        fixture.tempdir.path(),
+        &["init", "--bare", "-b", "main", secondary.to_str().unwrap()],
+    );
+    run_git(
+        &fixture.root,
+        &["remote", "add", "zz-secondary", secondary.to_str().unwrap()],
+    );
+    run_git(&fixture.root, &["push", "zz-secondary", "main"]);
+    run_git(&fixture.root, &["remote", "remove", "origin"]);
+    run_git(
+        &fixture.root,
+        &[
+            "remote",
+            "add",
+            "a-primary",
+            fixture.remote.to_str().unwrap(),
+        ],
+    );
+    run_git(
+        &fixture.root,
+        &["config", "branch.main.remote", "zz-secondary"],
+    );
+    let _ = command::blocking::Command::new("git")
+        .arg("-C")
+        .arg(&fixture.root)
+        .args(["config", "--unset-all", "branch.main.merge"])
+        .status()
+        .unwrap();
+
+    let refs = fetch_and_list_refs(&fixture.root).unwrap();
+
+    assert!(refs.iter().any(|branch_ref| matches!(
+        branch_ref,
+        BranchRef::Remote { remote, name, .. }
+            if remote == "a-primary" && name == "primary-only"
     )));
 }
 
@@ -342,6 +424,59 @@ fn clone_uses_repository_name_when_target_is_not_provided() {
     assert_eq!(
         repository.root,
         parent.join("remote repository").canonicalize().unwrap()
+    );
+}
+
+#[test]
+fn clone_into_rejects_invalid_directory_names_without_escaping_parent() {
+    let fixture = GitFixture::new();
+    let parent = fixture.tempdir.path().join("clone parent");
+    std::fs::create_dir(&parent).unwrap();
+    let escaped = fixture.tempdir.path().join("escaped");
+    let absolute = fixture.tempdir.path().join("absolute-target");
+    let invalid_names = [
+        "../escaped".to_string(),
+        absolute.to_string_lossy().into_owned(),
+        "nested/name".to_string(),
+        ".".to_string(),
+        "".to_string(),
+    ];
+
+    for directory_name in invalid_names {
+        let error = clone_repository_into(
+            fixture.remote.to_str().unwrap(),
+            &parent,
+            Some(&directory_name),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            GitWorkspaceError::InvalidCloneDirectoryName { name }
+                if name == directory_name
+        ));
+    }
+
+    assert!(!escaped.exists());
+    assert!(!absolute.exists());
+    assert!(!parent.join("nested").exists());
+}
+
+#[test]
+fn clone_into_accepts_single_normal_directory_name() {
+    let fixture = GitFixture::new();
+    let parent = fixture.tempdir.path().join("custom clone parent");
+    std::fs::create_dir(&parent).unwrap();
+
+    let repository = clone_repository_into(
+        fixture.remote.to_str().unwrap(),
+        &parent,
+        Some("custom clone"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        repository.root,
+        parent.join("custom clone").canonicalize().unwrap()
     );
 }
 
