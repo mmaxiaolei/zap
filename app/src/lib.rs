@@ -1438,11 +1438,13 @@ fn initialize_app(
         ctx.add_singleton_model(|_| GitStatusUpdateModel::new());
     }
 
-    ctx.add_singleton_model(|ctx| {
+    let project_organization_persistence =
+        persistence::RepositoryPersistence::new(persistence_writer.sender());
+    ctx.add_singleton_model(move |ctx| {
         ProjectOrganizationModel::try_new(
             persisted_repositories,
             persisted_repository_workspaces,
-            persistence_writer.sender(),
+            project_organization_persistence,
             ctx,
         )
         .unwrap_or_else(|error| panic!("Failed to initialize project organization: {error:#}"))

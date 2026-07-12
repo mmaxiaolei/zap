@@ -854,20 +854,6 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
         ModelEvent::DeleteObjects { ids } => {
             delete_objects(connection, ids).context("error deleting objects")
         }
-        ModelEvent::UpsertRepository { repository } => {
-            save_repository(connection, repository).context("error upserting repository")
-        }
-        ModelEvent::DeleteRepository { repository_id } => {
-            delete_repository(connection, &repository_id).context("error deleting repository")
-        }
-        ModelEvent::UpsertRepositoryWorkspace { workspace } => {
-            save_repository_workspace(connection, workspace)
-                .context("error upserting repository workspace")
-        }
-        ModelEvent::DeleteRepositoryWorkspace { workspace_id } => {
-            delete_repository_workspace(connection, &workspace_id)
-                .context("error deleting repository workspace")
-        }
         ModelEvent::UpsertWorkspace { workspace } => {
             save_workspace(connection, *workspace).context("error upserting workspace")
         }

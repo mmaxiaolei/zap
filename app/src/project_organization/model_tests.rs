@@ -1,38 +1,105 @@
 use std::{
     path::Path,
-    sync::mpsc::{self, Receiver},
+    sync::{
+        mpsc::{self, Receiver},
+        Arc, Mutex,
+    },
 };
 
 use chrono::{Duration, Utc};
 use tempfile::TempDir;
 use uuid::Uuid;
-use warpui::{App, ModelHandle};
+use warpui::{App, Entity, ModelHandle};
 
 use crate::{
     persistence::{
         model::{Repository as PersistedRepository, RepositoryWorkspace as PersistedWorkspace},
-        ModelEvent,
+        ModelEvent, RepositoryPersistence, RepositoryPersistenceError,
+        RepositoryPersistenceOperation,
     },
     project_organization::{
         domain::{
-            ProjectOrganizationError, Repository, RepositoryId, RepositorySource,
-            RepositoryWorkspace, RepositoryWorkspaceId,
+            ProjectOrganizationError, ProjectOrganizationEvent, Repository, RepositoryId,
+            RepositorySource, RepositoryWorkspace, RepositoryWorkspaceId,
         },
         model::ProjectOrganizationModel,
     },
 };
 
+struct PersistenceHarness {
+    operations: Receiver<RepositoryPersistenceOperation>,
+}
+
+fn acknowledged_persistence(
+    result: Result<(), RepositoryPersistenceError>,
+) -> (RepositoryPersistence, PersistenceHarness) {
+    let (event_sender, event_receiver) = mpsc::sync_channel(20);
+    let (operation_sender, operation_receiver) = mpsc::sync_channel(20);
+    std::thread::spawn(move || {
+        while let Ok(ModelEvent::RepositoryPersistence(request)) = event_receiver.recv() {
+            if operation_sender.send(request.operation).is_err() {
+                return;
+            }
+            if request.response.send(result.clone()).is_err() {
+                return;
+            }
+        }
+    });
+    (
+        RepositoryPersistence::new(Some(event_sender)),
+        PersistenceHarness {
+            operations: operation_receiver,
+        },
+    )
+}
+
 fn create_model(
     app: &mut App,
     repositories: Vec<PersistedRepository>,
     workspaces: Vec<PersistedWorkspace>,
-) -> (ModelHandle<ProjectOrganizationModel>, Receiver<ModelEvent>) {
-    let (sender, receiver) = mpsc::sync_channel(20);
-    let model = app.add_model(|ctx| {
-        ProjectOrganizationModel::try_new(repositories, workspaces, Some(sender), ctx)
+    persistence: RepositoryPersistence,
+) -> ModelHandle<ProjectOrganizationModel> {
+    app.add_model(|ctx| {
+        ProjectOrganizationModel::try_new(repositories, workspaces, persistence, ctx)
             .expect("project organization model should initialize")
+    })
+}
+
+fn create_acknowledged_model(
+    app: &mut App,
+    repositories: Vec<PersistedRepository>,
+    workspaces: Vec<PersistedWorkspace>,
+) -> (ModelHandle<ProjectOrganizationModel>, PersistenceHarness) {
+    let (persistence, harness) = acknowledged_persistence(Ok(()));
+    (
+        create_model(app, repositories, workspaces, persistence),
+        harness,
+    )
+}
+
+struct ProjectOrganizationEventProbe;
+
+impl Entity for ProjectOrganizationEventProbe {
+    type Event = ();
+}
+
+fn capture_project_organization_events(
+    app: &mut App,
+    model: &ModelHandle<ProjectOrganizationModel>,
+) -> (
+    Arc<Mutex<Vec<ProjectOrganizationEvent>>>,
+    ModelHandle<ProjectOrganizationEventProbe>,
+) {
+    let emitted_events = Arc::new(Mutex::new(Vec::new()));
+    let captured_events = emitted_events.clone();
+    let subscribed_model = model.clone();
+    let probe = app.add_model(move |ctx| {
+        ctx.subscribe_to_model(&subscribed_model, move |_, event, _| {
+            captured_events.lock().unwrap().push(event.clone());
+        });
+        ProjectOrganizationEventProbe
     });
-    (model, receiver)
+    (emitted_events, probe)
 }
 
 fn persisted_repository(id: RepositoryId, path: &Path) -> PersistedRepository {
@@ -79,14 +146,24 @@ fn initialization_error(
 ) -> ProjectOrganizationError {
     let (sender, receiver) = mpsc::sync_channel(1);
     app.add_model(move |ctx| {
-        match ProjectOrganizationModel::try_new(repositories, workspaces, None, ctx) {
+        match ProjectOrganizationModel::try_new(
+            repositories,
+            workspaces,
+            RepositoryPersistence::new(None),
+            ctx,
+        ) {
             Ok(_) => panic!("project organization initialization should fail"),
             Err(error) => {
                 sender
                     .send(error)
                     .expect("initialization error should be captured");
-                ProjectOrganizationModel::try_new(vec![], vec![], None, ctx)
-                    .expect("empty project organization model should initialize")
+                ProjectOrganizationModel::try_new(
+                    vec![],
+                    vec![],
+                    RepositoryPersistence::new(None),
+                    ctx,
+                )
+                .expect("empty project organization model should initialize")
             }
         }
     });
@@ -126,6 +203,19 @@ fn repository(id: RepositoryId, path: &Path) -> Repository {
     }
 }
 
+fn assert_persistence_failure(error: ProjectOrganizationError, operation: &'static str) {
+    match error {
+        ProjectOrganizationError::Persistence {
+            operation: actual_operation,
+            details,
+        } => {
+            assert_eq!(actual_operation, operation);
+            assert!(details.contains("injected failure"));
+        }
+        error => panic!("expected persistence error, got {error:?}"),
+    }
+}
+
 #[test]
 fn add_local_repository_rejects_duplicate_canonical_path() {
     App::test((), |mut app| async move {
@@ -135,7 +225,7 @@ fn add_local_repository_rejects_duplicate_canonical_path() {
         let alias_path = repository_path.join("..").join("repository");
         let canonical_path =
             dunce::canonicalize(&repository_path).expect("repository path should canonicalize");
-        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let (model, _events) = create_acknowledged_model(&mut app, vec![], vec![]);
 
         let repository_id = model
             .update(&mut app, |model, ctx| {
@@ -167,7 +257,7 @@ fn add_repository_rejects_ambiguous_recovered_aliases() {
         let second_alias = tempdir.path().join("second").join("..").join("repository");
         let first_id = RepositoryId::from(Uuid::from_u128(1));
         let second_id = RepositoryId::from(Uuid::from_u128(2));
-        let (model, _operations) = create_model(
+        let (model, _operations) = create_acknowledged_model(
             &mut app,
             vec![
                 persisted_repository(first_id, &first_alias),
@@ -205,7 +295,7 @@ fn insert_repository_rejects_ambiguous_recovered_aliases() {
         let second_alias = tempdir.path().join("second").join("..").join("repository");
         let first_id = RepositoryId::from(Uuid::from_u128(1));
         let second_id = RepositoryId::from(Uuid::from_u128(2));
-        let (model, _operations) = create_model(
+        let (model, _operations) = create_acknowledged_model(
             &mut app,
             vec![
                 persisted_repository(first_id, &first_alias),
@@ -248,7 +338,7 @@ fn update_repository_rejects_ambiguous_recovered_aliases_excluding_itself() {
         let first_id = RepositoryId::from(Uuid::from_u128(1));
         let second_id = RepositoryId::from(Uuid::from_u128(2));
         let updated_id = RepositoryId::from(Uuid::from_u128(3));
-        let (model, _operations) = create_model(
+        let (model, _operations) = create_acknowledged_model(
             &mut app,
             vec![
                 persisted_repository(first_id, &first_alias),
@@ -292,7 +382,8 @@ fn add_local_repository_commits_memory_after_persistence_succeeds() {
         std::fs::create_dir(&repository_path).unwrap();
         let canonical_path = dunce::canonicalize(&repository_path).unwrap();
         let phantom_id = RepositoryId::from(Uuid::from_u128(1));
-        let (model, operations) = create_model(&mut app, vec![], vec![]);
+        let (model, operations) = create_acknowledged_model(&mut app, vec![], vec![]);
+        let (emitted_events, _event_probe) = capture_project_organization_events(&mut app, &model);
         model.update(&mut app, |model, _| {
             model
                 .repository_ids_by_path
@@ -302,16 +393,20 @@ fn add_local_repository_commits_memory_after_persistence_succeeds() {
         let result = model.update(&mut app, |model, ctx| {
             model.add_local_repository(&repository_path, ctx)
         });
-        let operations = operations.try_iter().collect::<Vec<_>>();
+        let operations = operations.operations.try_iter().collect::<Vec<_>>();
 
         assert_eq!(operations.len(), 1);
         let repository_id = result.expect("memory commit should be infallible after persistence");
         assert!(matches!(
             &operations[0],
-            ModelEvent::UpsertRepository { repository }
+            RepositoryPersistenceOperation::UpsertRepository { repository }
                 if repository.id == repository_id.to_string()
         ));
         assert!(model.read(&app, |model, _| model.repository(repository_id).is_some()));
+        assert_eq!(
+            *emitted_events.lock().unwrap(),
+            vec![ProjectOrganizationEvent::RepositoryAdded { repository_id }]
+        );
     });
 }
 
@@ -324,7 +419,7 @@ fn insert_repository_commits_memory_after_persistence_succeeds() {
         let canonical_path = dunce::canonicalize(&repository_path).unwrap();
         let repository_id = RepositoryId::from(Uuid::from_u128(1));
         let phantom_id = RepositoryId::from(Uuid::from_u128(2));
-        let (model, operations) = create_model(&mut app, vec![], vec![]);
+        let (model, operations) = create_acknowledged_model(&mut app, vec![], vec![]);
         model.update(&mut app, |model, _| {
             model
                 .repository_ids_by_path
@@ -334,16 +429,377 @@ fn insert_repository_commits_memory_after_persistence_succeeds() {
         let result = model.update(&mut app, |model, ctx| {
             model.insert_repository(repository(repository_id, &repository_path), ctx)
         });
-        let operations = operations.try_iter().collect::<Vec<_>>();
+        let operations = operations.operations.try_iter().collect::<Vec<_>>();
 
         assert_eq!(operations.len(), 1);
         result.expect("memory commit should be infallible after persistence");
         assert!(matches!(
             &operations[0],
-            ModelEvent::UpsertRepository { repository }
+            RepositoryPersistenceOperation::UpsertRepository { repository }
                 if repository.id == repository_id.to_string()
         ));
         assert!(model.read(&app, |model, _| model.repository(repository_id).is_some()));
+    });
+}
+
+#[test]
+fn repository_add_does_not_change_memory_when_persistence_fails() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).unwrap();
+        let canonical_path = dunce::canonicalize(&repository_path).unwrap();
+        let (persistence, harness) =
+            acknowledged_persistence(Err(RepositoryPersistenceError::Database {
+                details: "injected failure".to_string(),
+            }));
+        let model = create_model(&mut app, vec![], vec![], persistence);
+        let (emitted_events, _event_probe) = capture_project_organization_events(&mut app, &model);
+
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository(&repository_path, ctx)
+            })
+            .unwrap_err();
+
+        assert_persistence_failure(error, "repository addition");
+        model.read(&app, |model, _| {
+            assert_eq!(model.repositories().count(), 0);
+            assert!(!model.repository_ids_by_path.contains_key(&canonical_path));
+        });
+        assert!(emitted_events.lock().unwrap().is_empty());
+        let operations = harness.operations.try_iter().collect::<Vec<_>>();
+        assert_eq!(operations.len(), 1);
+        assert!(matches!(
+            &operations[0],
+            RepositoryPersistenceOperation::UpsertRepository { repository }
+                if repository.path == canonical_path.to_string_lossy()
+        ));
+    });
+}
+
+#[test]
+fn repository_update_does_not_change_indexes_when_persistence_fails() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let old_path = tempdir.path().join("old-repository");
+        let new_path = tempdir.path().join("new-repository");
+        std::fs::create_dir(&old_path).unwrap();
+        std::fs::create_dir(&new_path).unwrap();
+        let canonical_old_path = dunce::canonicalize(&old_path).unwrap();
+        let canonical_new_path = dunce::canonicalize(&new_path).unwrap();
+        let repository_id = RepositoryId::from(Uuid::new_v4());
+        let persisted_repository = persisted_repository(repository_id, &old_path);
+        let (persistence, harness) =
+            acknowledged_persistence(Err(RepositoryPersistenceError::Database {
+                details: "injected failure".to_string(),
+            }));
+        let model = create_model(&mut app, vec![persisted_repository], vec![], persistence);
+        let (emitted_events, _event_probe) = capture_project_organization_events(&mut app, &model);
+        let mut updated_repository = model.read(&app, |model, _| {
+            model.repository(repository_id).unwrap().clone()
+        });
+        updated_repository.display_name = "updated".to_string();
+        updated_repository.path = new_path;
+
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.update_repository(updated_repository, ctx)
+            })
+            .unwrap_err();
+
+        assert_persistence_failure(error, "repository update");
+        model.read(&app, |model, _| {
+            let repository = model.repository(repository_id).unwrap();
+            assert_eq!(repository.display_name, "repository");
+            assert_eq!(repository.path, canonical_old_path);
+            assert_eq!(
+                model.repository_ids_by_path.get(&canonical_old_path),
+                Some(&repository_id)
+            );
+            assert!(!model
+                .repository_ids_by_path
+                .contains_key(&canonical_new_path));
+        });
+        assert!(emitted_events.lock().unwrap().is_empty());
+        let operations = harness.operations.try_iter().collect::<Vec<_>>();
+        assert_eq!(operations.len(), 1);
+        assert!(matches!(
+            &operations[0],
+            RepositoryPersistenceOperation::UpsertRepository { repository }
+                if repository.path == canonical_new_path.to_string_lossy()
+        ));
+    });
+}
+
+#[test]
+fn repository_delete_does_not_change_indexes_when_persistence_fails() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).unwrap();
+        let canonical_path = dunce::canonicalize(&repository_path).unwrap();
+        let repository_id = RepositoryId::from(Uuid::new_v4());
+        let (persistence, harness) =
+            acknowledged_persistence(Err(RepositoryPersistenceError::Database {
+                details: "injected failure".to_string(),
+            }));
+        let model = create_model(
+            &mut app,
+            vec![persisted_repository(repository_id, &repository_path)],
+            vec![],
+            persistence,
+        );
+        let (emitted_events, _event_probe) = capture_project_organization_events(&mut app, &model);
+
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.remove_repository(repository_id, ctx)
+            })
+            .unwrap_err();
+
+        assert_persistence_failure(error, "repository removal");
+        model.read(&app, |model, _| {
+            assert!(model.repository(repository_id).is_some());
+            assert_eq!(
+                model.repository_ids_by_path.get(&canonical_path),
+                Some(&repository_id)
+            );
+        });
+        assert!(emitted_events.lock().unwrap().is_empty());
+        let operations = harness.operations.try_iter().collect::<Vec<_>>();
+        assert_eq!(operations.len(), 1);
+        assert!(matches!(
+            &operations[0],
+            RepositoryPersistenceOperation::DeleteRepository { repository_id: id }
+                if id == &repository_id.to_string()
+        ));
+    });
+}
+
+#[test]
+fn workspace_insert_does_not_change_memory_when_persistence_fails() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let repository_path = tempdir.path().join("repository");
+        let worktree_path = tempdir.path().join("worktree");
+        std::fs::create_dir(&repository_path).unwrap();
+        std::fs::create_dir(&worktree_path).unwrap();
+        let canonical_worktree_path = dunce::canonicalize(&worktree_path).unwrap();
+        let repository_id = RepositoryId::from(Uuid::new_v4());
+        let workspace_id = RepositoryWorkspaceId::from(Uuid::new_v4());
+        let (persistence, harness) =
+            acknowledged_persistence(Err(RepositoryPersistenceError::Database {
+                details: "injected failure".to_string(),
+            }));
+        let model = create_model(
+            &mut app,
+            vec![persisted_repository(repository_id, &repository_path)],
+            vec![],
+            persistence,
+        );
+        let (emitted_events, _event_probe) = capture_project_organization_events(&mut app, &model);
+
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.insert_workspace(
+                    repository_workspace(
+                        workspace_id,
+                        repository_id,
+                        "feature/test",
+                        &worktree_path,
+                    ),
+                    ctx,
+                )
+            })
+            .unwrap_err();
+
+        assert_persistence_failure(error, "repository workspace insertion");
+        model.read(&app, |model, _| {
+            assert!(model.workspace(workspace_id).is_none());
+            assert!(!model
+                .workspace_ids_by_repository_branch
+                .contains_key(&(repository_id, "feature/test".to_string())));
+            assert!(!model
+                .workspace_ids_by_path
+                .contains_key(&canonical_worktree_path));
+        });
+        assert!(emitted_events.lock().unwrap().is_empty());
+        let operations = harness.operations.try_iter().collect::<Vec<_>>();
+        assert_eq!(operations.len(), 1);
+        assert!(matches!(
+            &operations[0],
+            RepositoryPersistenceOperation::UpsertRepositoryWorkspace { workspace }
+                if workspace.id == workspace_id.to_string()
+        ));
+    });
+}
+
+#[test]
+fn workspace_update_does_not_change_indexes_when_persistence_fails() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let repository_path = tempdir.path().join("repository");
+        let old_path = tempdir.path().join("old-worktree");
+        let new_path = tempdir.path().join("new-worktree");
+        for path in [&repository_path, &old_path, &new_path] {
+            std::fs::create_dir(path).unwrap();
+        }
+        let canonical_old_path = dunce::canonicalize(&old_path).unwrap();
+        let canonical_new_path = dunce::canonicalize(&new_path).unwrap();
+        let repository_id = RepositoryId::from(Uuid::new_v4());
+        let workspace_id = RepositoryWorkspaceId::from(Uuid::new_v4());
+        let (persistence, harness) =
+            acknowledged_persistence(Err(RepositoryPersistenceError::Database {
+                details: "injected failure".to_string(),
+            }));
+        let model = create_model(
+            &mut app,
+            vec![persisted_repository(repository_id, &repository_path)],
+            vec![persisted_workspace(
+                workspace_id,
+                repository_id,
+                "feature/old",
+                &old_path,
+            )],
+            persistence,
+        );
+        let (emitted_events, _event_probe) = capture_project_organization_events(&mut app, &model);
+        let mut updated_workspace = model.read(&app, |model, _| {
+            model.workspace(workspace_id).unwrap().clone()
+        });
+        updated_workspace.display_name = "updated".to_string();
+        updated_workspace.branch = "feature/new".to_string();
+        updated_workspace.worktree_path = new_path;
+
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.update_workspace(updated_workspace, ctx)
+            })
+            .unwrap_err();
+
+        assert_persistence_failure(error, "repository workspace update");
+        model.read(&app, |model, _| {
+            let workspace = model.workspace(workspace_id).unwrap();
+            assert_eq!(workspace.display_name, "feature/old");
+            assert_eq!(workspace.branch, "feature/old");
+            assert_eq!(workspace.worktree_path, canonical_old_path);
+            assert_eq!(
+                model
+                    .workspace_ids_by_repository_branch
+                    .get(&(repository_id, "feature/old".to_string())),
+                Some(&workspace_id)
+            );
+            assert!(!model
+                .workspace_ids_by_repository_branch
+                .contains_key(&(repository_id, "feature/new".to_string())));
+            assert_eq!(
+                model.workspace_ids_by_path.get(&canonical_old_path),
+                Some(&workspace_id)
+            );
+            assert!(!model
+                .workspace_ids_by_path
+                .contains_key(&canonical_new_path));
+        });
+        assert!(emitted_events.lock().unwrap().is_empty());
+        let operations = harness.operations.try_iter().collect::<Vec<_>>();
+        assert_eq!(operations.len(), 1);
+        assert!(matches!(
+            &operations[0],
+            RepositoryPersistenceOperation::UpsertRepositoryWorkspace { workspace }
+                if workspace.branch == "feature/new"
+                    && workspace.worktree_path == canonical_new_path.to_string_lossy()
+        ));
+    });
+}
+
+#[test]
+fn workspace_delete_does_not_change_indexes_when_persistence_fails() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let repository_path = tempdir.path().join("repository");
+        let worktree_path = tempdir.path().join("worktree");
+        std::fs::create_dir(&repository_path).unwrap();
+        std::fs::create_dir(&worktree_path).unwrap();
+        let canonical_worktree_path = dunce::canonicalize(&worktree_path).unwrap();
+        let repository_id = RepositoryId::from(Uuid::new_v4());
+        let workspace_id = RepositoryWorkspaceId::from(Uuid::new_v4());
+        let (persistence, harness) =
+            acknowledged_persistence(Err(RepositoryPersistenceError::Database {
+                details: "injected failure".to_string(),
+            }));
+        let model = create_model(
+            &mut app,
+            vec![persisted_repository(repository_id, &repository_path)],
+            vec![persisted_workspace(
+                workspace_id,
+                repository_id,
+                "feature/test",
+                &worktree_path,
+            )],
+            persistence,
+        );
+        let (emitted_events, _event_probe) = capture_project_organization_events(&mut app, &model);
+
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.remove_workspace(workspace_id, ctx)
+            })
+            .unwrap_err();
+
+        assert_persistence_failure(error, "repository workspace removal");
+        model.read(&app, |model, _| {
+            assert!(model.workspace(workspace_id).is_some());
+            assert_eq!(
+                model
+                    .workspace_ids_by_repository_branch
+                    .get(&(repository_id, "feature/test".to_string())),
+                Some(&workspace_id)
+            );
+            assert_eq!(
+                model.workspace_ids_by_path.get(&canonical_worktree_path),
+                Some(&workspace_id)
+            );
+        });
+        assert!(emitted_events.lock().unwrap().is_empty());
+        let operations = harness.operations.try_iter().collect::<Vec<_>>();
+        assert_eq!(operations.len(), 1);
+        assert!(matches!(
+            &operations[0],
+            RepositoryPersistenceOperation::DeleteRepositoryWorkspace { workspace_id: id }
+                if id == &workspace_id.to_string()
+        ));
+    });
+}
+
+#[test]
+fn unavailable_persistence_does_not_change_memory() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).unwrap();
+        let canonical_path = dunce::canonicalize(&repository_path).unwrap();
+        let model = create_model(&mut app, vec![], vec![], RepositoryPersistence::new(None));
+        let (emitted_events, _event_probe) = capture_project_organization_events(&mut app, &model);
+
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository(&repository_path, ctx)
+            })
+            .unwrap_err();
+
+        match error {
+            ProjectOrganizationError::Persistence { operation, details } => {
+                assert_eq!(operation, "repository addition");
+                assert!(details.contains("unavailable"));
+            }
+            error => panic!("expected persistence error, got {error:?}"),
+        }
+        model.read(&app, |model, _| {
+            assert_eq!(model.repositories().count(), 0);
+            assert!(!model.repository_ids_by_path.contains_key(&canonical_path));
+        });
+        assert!(emitted_events.lock().unwrap().is_empty());
     });
 }
 
@@ -357,7 +813,7 @@ fn insert_workspace_rejects_duplicate_repository_branch() {
         for path in [&repository_path, &first_worktree, &second_worktree] {
             std::fs::create_dir(path).expect("test directory should be created");
         }
-        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let (model, _events) = create_acknowledged_model(&mut app, vec![], vec![]);
         let repository_id = model
             .update(&mut app, |model, ctx| {
                 model.add_local_repository(&repository_path, ctx)
@@ -413,7 +869,7 @@ fn remove_repository_is_blocked_while_workspace_exists() {
         let worktree_path = tempdir.path().join("worktree");
         std::fs::create_dir(&repository_path).expect("repository directory should be created");
         std::fs::create_dir(&worktree_path).expect("worktree directory should be created");
-        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let (model, _events) = create_acknowledged_model(&mut app, vec![], vec![]);
         let repository_id = model
             .update(&mut app, |model, ctx| {
                 model.add_local_repository(&repository_path, ctx)
@@ -453,7 +909,7 @@ fn remove_workspace_allows_reusing_branch_and_worktree_path() {
         for path in [&repository_path, &worktree_path] {
             std::fs::create_dir(path).expect("test directory should be created");
         }
-        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let (model, _events) = create_acknowledged_model(&mut app, vec![], vec![]);
         let repository_id = model
             .update(&mut app, |model, ctx| {
                 model.add_local_repository(&repository_path, ctx)
@@ -504,7 +960,7 @@ fn remove_repository_allows_reusing_path() {
         let tempdir = TempDir::new().expect("temporary directory should be created");
         let repository_path = tempdir.path().join("repository");
         std::fs::create_dir(&repository_path).expect("repository directory should be created");
-        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let (model, _events) = create_acknowledged_model(&mut app, vec![], vec![]);
         let first_repository_id = model
             .update(&mut app, |model, ctx| {
                 model.add_local_repository(&repository_path, ctx)
@@ -537,7 +993,7 @@ fn update_repository_replaces_path_index_and_rejects_new_duplicate() {
         }
         let canonical_new_path =
             dunce::canonicalize(&new_path).expect("new repository path should canonicalize");
-        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let (model, _events) = create_acknowledged_model(&mut app, vec![], vec![]);
         let repository_id = model
             .update(&mut app, |model, ctx| {
                 model.add_local_repository(&old_path, ctx)
@@ -595,7 +1051,7 @@ fn update_workspace_replaces_branch_and_path_indexes_and_rejects_new_duplicates(
         }
         let canonical_new_path =
             dunce::canonicalize(&new_path).expect("new worktree path should canonicalize");
-        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let (model, _events) = create_acknowledged_model(&mut app, vec![], vec![]);
         let repository_id = model
             .update(&mut app, |model, ctx| {
                 model.add_local_repository(&repository_path, ctx)
@@ -693,7 +1149,7 @@ fn insert_repository_rejects_duplicate_id() {
         for path in [&first_path, &second_path] {
             std::fs::create_dir(path).expect("repository directory should be created");
         }
-        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let (model, _events) = create_acknowledged_model(&mut app, vec![], vec![]);
         let repository_id = model
             .update(&mut app, |model, ctx| {
                 model.add_local_repository(&first_path, ctx)
@@ -732,7 +1188,7 @@ fn insert_workspace_rejects_duplicate_id() {
         for path in [&repository_path, &first_path, &second_path] {
             std::fs::create_dir(path).expect("test directory should be created");
         }
-        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let (model, _events) = create_acknowledged_model(&mut app, vec![], vec![]);
         let repository_id = model
             .update(&mut app, |model, ctx| {
                 model.add_local_repository(&repository_path, ctx)
@@ -778,7 +1234,7 @@ fn insert_workspace_rejects_orphan_repository() {
         let worktree_path = tempdir.path().join("worktree");
         std::fs::create_dir(&worktree_path).expect("worktree directory should be created");
         let repository_id = RepositoryId::from(Uuid::new_v4());
-        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let (model, _events) = create_acknowledged_model(&mut app, vec![], vec![]);
 
         let error = model
             .update(&mut app, |model, ctx| {
@@ -814,13 +1270,13 @@ fn insert_workspace_commits_memory_after_persistence_succeeds() {
         let canonical_worktree_path = dunce::canonicalize(&worktree_path).unwrap();
         let workspace_id = RepositoryWorkspaceId::from(Uuid::from_u128(1));
         let phantom_id = RepositoryWorkspaceId::from(Uuid::from_u128(2));
-        let (model, operations) = create_model(&mut app, vec![], vec![]);
+        let (model, operations) = create_acknowledged_model(&mut app, vec![], vec![]);
         let repository_id = model
             .update(&mut app, |model, ctx| {
                 model.add_local_repository(&repository_path, ctx)
             })
             .unwrap();
-        operations.recv().unwrap();
+        operations.operations.recv().unwrap();
         model.update(&mut app, |model, _| {
             model
                 .workspace_ids_by_path
@@ -833,13 +1289,13 @@ fn insert_workspace_commits_memory_after_persistence_succeeds() {
                 ctx,
             )
         });
-        let operations = operations.try_iter().collect::<Vec<_>>();
+        let operations = operations.operations.try_iter().collect::<Vec<_>>();
 
         assert_eq!(operations.len(), 1);
         result.expect("memory commit should be infallible after persistence");
         assert!(matches!(
             &operations[0],
-            ModelEvent::UpsertRepositoryWorkspace { workspace }
+            RepositoryPersistenceOperation::UpsertRepositoryWorkspace { workspace }
                 if workspace.id == workspace_id.to_string()
         ));
         assert!(model.read(&app, |model, _| model.workspace(workspace_id).is_some()));
@@ -854,7 +1310,7 @@ fn rename_repository_changes_only_display_name() {
         std::fs::create_dir(&repository_path).expect("repository directory should be created");
         let canonical_path =
             dunce::canonicalize(&repository_path).expect("repository path should canonicalize");
-        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let (model, _events) = create_acknowledged_model(&mut app, vec![], vec![]);
         let repository_id = model
             .update(&mut app, |model, ctx| {
                 model.add_local_repository(&repository_path, ctx)
@@ -889,7 +1345,7 @@ fn rename_workspace_changes_only_display_name() {
         std::fs::create_dir(&worktree_path).expect("worktree directory should be created");
         let canonical_worktree_path =
             dunce::canonicalize(&worktree_path).expect("worktree path should canonicalize");
-        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let (model, _events) = create_acknowledged_model(&mut app, vec![], vec![]);
         let repository_id = model
             .update(&mut app, |model, ctx| {
                 model.add_local_repository(&repository_path, ctx)
@@ -936,18 +1392,21 @@ fn touch_repository_path_adds_repository_and_persistence_event() {
         std::fs::create_dir(&repository_path).expect("repository directory should be created");
         let canonical_path =
             dunce::canonicalize(&repository_path).expect("repository path should canonicalize");
-        let (model, events) = create_model(&mut app, vec![], vec![]);
+        let (model, operations) = create_acknowledged_model(&mut app, vec![], vec![]);
 
         let repository_id = model
             .update(&mut app, |model, ctx| {
                 model.touch_repository_path(&repository_path, ctx)
             })
             .expect("repository path should be touched");
-        let event = events.recv().expect("persistence event should be sent");
+        let operation = operations
+            .operations
+            .recv()
+            .expect("persistence operation should be sent");
 
         assert!(matches!(
-            event,
-            ModelEvent::UpsertRepository { repository }
+            operation,
+            RepositoryPersistenceOperation::UpsertRepository { repository }
                 if repository.id == repository_id.to_string()
                     && repository.path == canonical_path.to_string_lossy()
         ));
@@ -963,19 +1422,23 @@ fn touch_repository_path_updates_existing_timestamp_and_persistence_event() {
         let repository_id = RepositoryId::from(Uuid::new_v4());
         let persisted_repository = persisted_repository(repository_id, &repository_path);
         let previous_last_opened_at = persisted_repository.last_opened_at;
-        let (model, events) = create_model(&mut app, vec![persisted_repository], vec![]);
+        let (model, operations) =
+            create_acknowledged_model(&mut app, vec![persisted_repository], vec![]);
 
         let touched_id = model
             .update(&mut app, |model, ctx| {
                 model.touch_repository_path(&repository_path, ctx)
             })
             .expect("repository path should be touched");
-        let event = events.recv().expect("persistence event should be sent");
+        let operation = operations
+            .operations
+            .recv()
+            .expect("persistence operation should be sent");
 
         assert_eq!(touched_id, repository_id);
         assert!(matches!(
-            event,
-            ModelEvent::UpsertRepository { repository }
+            operation,
+            RepositoryPersistenceOperation::UpsertRepository { repository }
                 if repository.id == repository_id.to_string()
                     && repository.last_opened_at > previous_last_opened_at
         ));
@@ -991,7 +1454,7 @@ fn touch_repository_rejects_ambiguous_recovered_aliases() {
         let second_alias = tempdir.path().join("second").join("..").join("repository");
         let first_id = RepositoryId::from(Uuid::from_u128(1));
         let second_id = RepositoryId::from(Uuid::from_u128(2));
-        let (model, _operations) = create_model(
+        let (model, _operations) = create_acknowledged_model(
             &mut app,
             vec![
                 persisted_repository(first_id, &first_alias),
@@ -1027,7 +1490,7 @@ fn touch_repository_migrates_unique_recovered_alias_to_canonical_path() {
         let target = tempdir.path().join("repository");
         let alias = tempdir.path().join("alias").join("..").join("repository");
         let repository_id = RepositoryId::from(Uuid::from_u128(1));
-        let (model, operations) = create_model(
+        let (model, operations) = create_acknowledged_model(
             &mut app,
             vec![persisted_repository(repository_id, &alias)],
             vec![],
@@ -1057,7 +1520,7 @@ fn touch_repository_migrates_unique_recovered_alias_to_canonical_path() {
         assert_eq!(touched_id, repository_id);
         assert_eq!(stored_path, canonical_path);
         assert_eq!(model.read(&app, |model, _| model.repositories().count()), 1);
-        assert_eq!(operations.try_iter().count(), 1);
+        assert_eq!(operations.operations.try_iter().count(), 1);
         assert!(matches!(
             duplicate_error,
             ProjectOrganizationError::RepositoryAlreadyExists {
@@ -1080,7 +1543,7 @@ fn insert_workspace_rejects_ambiguous_recovered_aliases() {
         let repository_id = RepositoryId::from(Uuid::from_u128(1));
         let first_id = RepositoryWorkspaceId::from(Uuid::from_u128(2));
         let second_id = RepositoryWorkspaceId::from(Uuid::from_u128(3));
-        let (model, _operations) = create_model(
+        let (model, _operations) = create_acknowledged_model(
             &mut app,
             vec![persisted_repository(repository_id, &repository_path)],
             vec![
@@ -1131,7 +1594,7 @@ fn update_workspace_rejects_ambiguous_recovered_aliases_excluding_itself() {
         let first_id = RepositoryWorkspaceId::from(Uuid::from_u128(2));
         let second_id = RepositoryWorkspaceId::from(Uuid::from_u128(3));
         let updated_id = RepositoryWorkspaceId::from(Uuid::from_u128(4));
-        let (model, _operations) = create_model(
+        let (model, _operations) = create_acknowledged_model(
             &mut app,
             vec![persisted_repository(repository_id, &repository_path)],
             vec![
@@ -1181,7 +1644,7 @@ fn persisted_repository_alias_is_normalized_and_rejected_as_duplicate() {
         let repository_id = RepositoryId::from(Uuid::new_v4());
         let repository = persisted_repository(repository_id, &alias_path);
 
-        let (model, _events) = create_model(&mut app, vec![repository], vec![]);
+        let (model, _events) = create_acknowledged_model(&mut app, vec![repository], vec![]);
         let loaded_path = model.read(&app, |model, _| {
             model
                 .repository(repository_id)
@@ -1223,7 +1686,8 @@ fn persisted_workspace_alias_is_normalized_and_rejected_as_duplicate() {
         let repository = persisted_repository(repository_id, &repository_path);
         let workspace = persisted_workspace(workspace_id, repository_id, "main", &alias_path);
 
-        let (model, _events) = create_model(&mut app, vec![repository], vec![workspace]);
+        let (model, _events) =
+            create_acknowledged_model(&mut app, vec![repository], vec![workspace]);
         let loaded_path = model.read(&app, |model, _| {
             model
                 .workspace(workspace_id)
@@ -1336,7 +1800,7 @@ fn persisted_repository_with_missing_path_is_loaded_unchanged() {
         let repository_id = RepositoryId::from(Uuid::new_v4());
         let repository = persisted_repository(repository_id, &missing_path);
 
-        let (model, _events) = create_model(&mut app, vec![repository], vec![]);
+        let (model, _events) = create_acknowledged_model(&mut app, vec![repository], vec![]);
         let loaded = model.read(&app, |model, _| {
             model
                 .repository(repository_id)
@@ -1367,7 +1831,8 @@ fn persisted_workspace_with_missing_path_is_loaded_unchanged() {
             &missing_worktree_path,
         );
 
-        let (model, _events) = create_model(&mut app, vec![repository], vec![workspace]);
+        let (model, _events) =
+            create_acknowledged_model(&mut app, vec![repository], vec![workspace]);
         let loaded = model.read(&app, |model, _| {
             model
                 .workspace(workspace_id)

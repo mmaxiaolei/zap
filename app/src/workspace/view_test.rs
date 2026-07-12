@@ -18,6 +18,7 @@ use crate::network::NetworkStatus;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::notebook::NotebookView;
 use crate::pane_group::{Direction, PaneGroupAction, PaneId};
+use crate::persistence::RepositoryPersistence;
 use crate::pricing::PricingInfoModel;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
 use crate::terminal::shared_session::protocol::SessionSourceType;
@@ -207,7 +208,7 @@ fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
 fn repository_open_preflight_rejects_missing_path() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|ctx| {
-            ProjectOrganizationModel::try_new(vec![], vec![], None, ctx)
+            ProjectOrganizationModel::try_new(vec![], vec![], RepositoryPersistence::new(None), ctx)
                 .expect("empty project organization model should initialize")
         });
         let tempdir = tempfile::tempdir().expect("temporary directory should be created");

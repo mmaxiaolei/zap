@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::mpsc::SyncSender,
 };
 
 use chrono::Utc;
@@ -10,7 +9,7 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::persistence::{
     model::{Repository as PersistedRepository, RepositoryWorkspace as PersistedWorkspace},
-    ModelEvent,
+    RepositoryPersistence, RepositoryPersistenceOperation,
 };
 
 use super::domain::{
@@ -24,7 +23,7 @@ pub struct ProjectOrganizationModel {
     workspaces: HashMap<RepositoryWorkspaceId, RepositoryWorkspace>,
     workspace_ids_by_repository_branch: HashMap<(RepositoryId, String), RepositoryWorkspaceId>,
     workspace_ids_by_path: HashMap<PathBuf, RepositoryWorkspaceId>,
-    model_event_sender: Option<SyncSender<ModelEvent>>,
+    persistence: RepositoryPersistence,
 }
 
 enum CanonicalPathMatch<Id> {
@@ -43,7 +42,7 @@ impl ProjectOrganizationModel {
     pub fn try_new(
         persisted_repositories: Vec<PersistedRepository>,
         persisted_workspaces: Vec<PersistedWorkspace>,
-        model_event_sender: Option<SyncSender<ModelEvent>>,
+        persistence: RepositoryPersistence,
         _ctx: &mut ModelContext<Self>,
     ) -> Result<Self, ProjectOrganizationError> {
         let mut model = Self {
@@ -52,7 +51,7 @@ impl ProjectOrganizationModel {
             workspaces: HashMap::new(),
             workspace_ids_by_repository_branch: HashMap::new(),
             workspace_ids_by_path: HashMap::new(),
-            model_event_sender,
+            persistence,
         };
 
         for repository in persisted_repositories {
@@ -252,8 +251,8 @@ impl ProjectOrganizationModel {
             .cloned()
             .ok_or(ProjectOrganizationError::RepositoryNotFound { repository_id })?;
 
-        self.send_model_event(
-            ModelEvent::DeleteRepository {
+        self.persist(
+            RepositoryPersistenceOperation::DeleteRepository {
                 repository_id: repository_id.to_string(),
             },
             "repository removal",
@@ -396,8 +395,8 @@ impl ProjectOrganizationModel {
             .get(&workspace_id)
             .cloned()
             .ok_or(ProjectOrganizationError::WorkspaceNotFound { workspace_id })?;
-        self.send_model_event(
-            ModelEvent::DeleteRepositoryWorkspace {
+        self.persist(
+            RepositoryPersistenceOperation::DeleteRepositoryWorkspace {
                 workspace_id: workspace_id.to_string(),
             },
             "repository workspace removal",
@@ -682,8 +681,8 @@ impl ProjectOrganizationModel {
         repository: &Repository,
         operation: &'static str,
     ) -> Result<(), ProjectOrganizationError> {
-        self.send_model_event(
-            ModelEvent::UpsertRepository {
+        self.persist(
+            RepositoryPersistenceOperation::UpsertRepository {
                 repository: Self::persisted_repository(repository)?,
             },
             operation,
@@ -695,26 +694,23 @@ impl ProjectOrganizationModel {
         workspace: &RepositoryWorkspace,
         operation: &'static str,
     ) -> Result<(), ProjectOrganizationError> {
-        self.send_model_event(
-            ModelEvent::UpsertRepositoryWorkspace {
+        self.persist(
+            RepositoryPersistenceOperation::UpsertRepositoryWorkspace {
                 workspace: Self::persisted_workspace(workspace)?,
             },
             operation,
         )
     }
 
-    fn send_model_event(
+    fn persist(
         &self,
-        event: ModelEvent,
-        operation: &'static str,
+        operation: RepositoryPersistenceOperation,
+        operation_name: &'static str,
     ) -> Result<(), ProjectOrganizationError> {
-        let Some(sender) = &self.model_event_sender else {
-            return Ok(());
-        };
-        sender
-            .send(event)
+        self.persistence
+            .execute(operation)
             .map_err(|error| ProjectOrganizationError::Persistence {
-                operation,
+                operation: operation_name,
                 details: error.to_string(),
             })
     }

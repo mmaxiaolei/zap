@@ -399,18 +399,6 @@ pub enum ModelEvent {
         user_information: PersistedCurrentUserInformation,
     },
     RepositoryPersistence(RepositoryPersistenceRequest),
-    UpsertRepository {
-        repository: Repository,
-    },
-    DeleteRepository {
-        repository_id: String,
-    },
-    UpsertRepositoryWorkspace {
-        workspace: RepositoryWorkspace,
-    },
-    DeleteRepositoryWorkspace {
-        workspace_id: String,
-    },
     UpsertMCPServerEnvironmentVariables {
         mcp_server_uuid: Vec<u8>,
         environment_variables: String,
