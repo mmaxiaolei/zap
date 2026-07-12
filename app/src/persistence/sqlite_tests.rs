@@ -21,7 +21,8 @@ use crate::{
     notebooks::{NotebookObject, NotebookObjectModel},
     persistence::{
         model::{ObjectPermissions, Repository, RepositoryWorkspace},
-        BlockCompleted, ModelEvent,
+        BlockCompleted, ModelEvent, RepositoryPersistence, RepositoryPersistenceError,
+        RepositoryPersistenceOperation,
     },
     server::ids::ClientId,
     server_time::ServerTimestamp,
@@ -33,7 +34,7 @@ use crate::{
 use super::{
     decode_path, deduplicate_events, delete_repository, delete_repository_workspace, encode_path,
     get_all_repositories, get_all_repository_workspaces, read_sqlite_data, save_app_state,
-    save_repository, save_repository_workspace, setup_database,
+    save_repository, save_repository_workspace, setup_database, start_writer,
 };
 
 // Diesel canonicalizes the directory version `2026-07-11-000000` by removing hyphens.
@@ -442,6 +443,166 @@ fn repository_row(id: &str, path: &str) -> Repository {
         created_at: now,
         last_opened_at: now,
     }
+}
+
+#[test]
+fn repository_persistence_acknowledges_committed_upsert() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let conn = setup_database(&database_path).expect("database should initialize");
+    let handles = start_writer(conn, database_path.clone()).expect("writer should start");
+    let persistence = RepositoryPersistence::new(Some(handles.sender.clone()));
+    let repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174100",
+        "/tmp/ack-repository",
+    );
+
+    persistence
+        .execute(RepositoryPersistenceOperation::UpsertRepository {
+            repository: repository.clone(),
+        })
+        .expect("repository upsert should be acknowledged");
+
+    let mut read_conn = setup_database(&database_path).expect("read connection should initialize");
+    assert_eq!(
+        get_all_repositories(&mut read_conn).expect("repositories should load"),
+        vec![repository]
+    );
+    handles
+        .sender
+        .send(ModelEvent::Terminate)
+        .expect("writer should receive termination");
+    handles.handle.join().expect("writer should terminate");
+}
+
+#[test]
+fn repository_persistence_returns_database_error() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let conn = setup_database(&database_path).expect("database should initialize");
+    let handles = start_writer(conn, database_path.clone()).expect("writer should start");
+    let persistence = RepositoryPersistence::new(Some(handles.sender.clone()));
+    let first = repository_row(
+        "123e4567-e89b-12d3-a456-426614174101",
+        "/tmp/ack-duplicate-path",
+    );
+    let second = repository_row(
+        "123e4567-e89b-12d3-a456-426614174102",
+        "/tmp/ack-duplicate-path",
+    );
+    persistence
+        .execute(RepositoryPersistenceOperation::UpsertRepository { repository: first })
+        .expect("first repository should persist");
+
+    let error = persistence
+        .execute(RepositoryPersistenceOperation::UpsertRepository { repository: second })
+        .expect_err("duplicate path should fail");
+
+    match error {
+        RepositoryPersistenceError::Database { details } => {
+            assert!(details.contains("error upserting repository"));
+            assert!(details.contains("UNIQUE constraint failed: repositories.path"));
+        }
+        other => panic!("expected database error, got {other:?}"),
+    }
+    handles
+        .sender
+        .send(ModelEvent::Terminate)
+        .expect("writer should receive termination");
+    handles.handle.join().expect("writer should terminate");
+}
+
+#[test]
+fn repository_persistence_fails_while_writer_is_paused() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let conn = setup_database(&database_path).expect("database should initialize");
+    let handles = start_writer(conn, database_path.clone()).expect("writer should start");
+    let persistence = RepositoryPersistence::new(Some(handles.sender.clone()));
+    let repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174103",
+        "/tmp/ack-paused-repository",
+    );
+    handles
+        .sender
+        .send(ModelEvent::PauseAndRemoveDatabase)
+        .expect("writer should receive pause");
+
+    assert_eq!(
+        persistence.execute(RepositoryPersistenceOperation::UpsertRepository { repository }),
+        Err(RepositoryPersistenceError::Paused)
+    );
+
+    let mut read_conn = setup_database(&database_path).expect("read connection should initialize");
+    assert!(get_all_repositories(&mut read_conn)
+        .expect("repositories should load")
+        .is_empty());
+    handles
+        .sender
+        .send(ModelEvent::Terminate)
+        .expect("writer should receive termination");
+    handles.handle.join().expect("writer should terminate");
+}
+
+#[test]
+fn repository_persistence_returns_unavailable_without_sender() {
+    let persistence = RepositoryPersistence::new(None);
+    let repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174104",
+        "/tmp/ack-unavailable-repository",
+    );
+
+    assert_eq!(
+        persistence.execute(RepositoryPersistenceOperation::UpsertRepository { repository }),
+        Err(RepositoryPersistenceError::Unavailable)
+    );
+}
+
+#[test]
+fn repository_persistence_returns_request_disconnected() {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    drop(receiver);
+    let persistence = RepositoryPersistence::new(Some(sender));
+    let repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174105",
+        "/tmp/ack-request-disconnected",
+    );
+
+    let error = persistence
+        .execute(RepositoryPersistenceOperation::UpsertRepository { repository })
+        .expect_err("disconnected request channel should fail");
+
+    assert!(matches!(
+        error,
+        RepositoryPersistenceError::RequestDisconnected { .. }
+    ));
+}
+
+#[test]
+fn repository_persistence_returns_response_disconnected() {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let receiver_thread = std::thread::spawn(move || {
+        let event = receiver.recv().expect("request should be received");
+        let ModelEvent::RepositoryPersistence(request) = event else {
+            panic!("expected repository persistence request, got {event:?}");
+        };
+        drop(request.response);
+    });
+    let persistence = RepositoryPersistence::new(Some(sender));
+    let repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174106",
+        "/tmp/ack-response-disconnected",
+    );
+
+    let error = persistence
+        .execute(RepositoryPersistenceOperation::UpsertRepository { repository })
+        .expect_err("disconnected response channel should fail");
+
+    assert!(matches!(
+        error,
+        RepositoryPersistenceError::ResponseDisconnected { .. }
+    ));
+    receiver_thread.join().expect("receiver should terminate");
 }
 
 fn repository_workspace_row(

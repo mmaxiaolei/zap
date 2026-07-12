@@ -50,8 +50,8 @@ use super::model::{
 };
 use super::schema;
 use super::{
-    BlockCompleted, FinishedCommandMetadata, ModelEvent, PersistedData, StartedCommandMetadata,
-    WriterHandles,
+    BlockCompleted, FinishedCommandMetadata, ModelEvent, PersistedData, RepositoryPersistenceError,
+    RepositoryPersistenceOperation, StartedCommandMetadata, WriterHandles,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -745,6 +745,24 @@ fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<Writer
                             log::info!("Shutting down SQLite writer thread");
                             return;
                         }
+                        ModelEvent::RepositoryPersistence(request) => {
+                            let result = if paused {
+                                Err(RepositoryPersistenceError::Paused)
+                            } else {
+                                handle_repository_persistence_operation(
+                                    request.operation,
+                                    &mut current_conn,
+                                )
+                                .map_err(|error| RepositoryPersistenceError::Database {
+                                    details: format!("{error:#}"),
+                                })
+                            };
+                            if request.response.send(result).is_err() {
+                                log::error!(
+                                    "Repository persistence requester disconnected before acknowledgement"
+                                );
+                            }
+                        }
                         event => {
                             if paused {
                                 log::info!("Ignoring event as SQLite Writer is on pause");
@@ -765,11 +783,13 @@ fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<Writer
 /// Events which affect the SQLite writer event loop _must_ instead be handled by the event loop itself:
 /// * [`ModelEvent::PauseAndRemoveDatabase`]
 /// * [`ModelEvent::ReconstructAndResume`]
+/// * [`ModelEvent::RepositoryPersistence`]
 /// * [`ModelEvent::Terminate`]
 fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> anyhow::Result<()> {
     match event {
         ModelEvent::PauseAndRemoveDatabase
         | ModelEvent::ReconstructAndResume
+        | ModelEvent::RepositoryPersistence(_)
         | ModelEvent::Terminate => {
             panic!("Unhandled control-flow event {event:?}");
         }
@@ -951,6 +971,28 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
             title,
         } => save_ai_document_content(connection, &document_id, &content, version, &title)
             .context("error saving AI document content"),
+    }
+}
+
+fn handle_repository_persistence_operation(
+    operation: RepositoryPersistenceOperation,
+    connection: &mut SqliteConnection,
+) -> anyhow::Result<()> {
+    match operation {
+        RepositoryPersistenceOperation::UpsertRepository { repository } => {
+            save_repository(connection, repository).context("error upserting repository")
+        }
+        RepositoryPersistenceOperation::DeleteRepository { repository_id } => {
+            delete_repository(connection, &repository_id).context("error deleting repository")
+        }
+        RepositoryPersistenceOperation::UpsertRepositoryWorkspace { workspace } => {
+            save_repository_workspace(connection, workspace)
+                .context("error upserting repository workspace")
+        }
+        RepositoryPersistenceOperation::DeleteRepositoryWorkspace { workspace_id } => {
+            delete_repository_workspace(connection, &workspace_id)
+                .context("error deleting repository workspace")
+        }
     }
 }
 
