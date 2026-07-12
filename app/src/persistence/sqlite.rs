@@ -761,13 +761,12 @@ fn start_writer_with_state(
                         }
                         ModelEvent::RepositoryPersistence(request) => {
                             let result = match state {
-                                WriterState::Running => handle_repository_persistence_operation(
+                                WriterState::Running => execute_repository_persistence_operation(
                                     request.operation,
                                     &mut current_conn,
-                                )
-                                .map_err(|error| RepositoryPersistenceError::Database {
-                                    details: format!("{error:#}"),
-                                }),
+                                    &database_path,
+                                    report_db_error,
+                                ),
                                 WriterState::Paused => Err(RepositoryPersistenceError::Paused),
                             };
                             if request.response.send(result).is_err() {
@@ -994,6 +993,22 @@ fn handle_repository_persistence_operation(
         RepositoryPersistenceOperation::DeleteRepositoryWorkspace { workspace_id } => {
             delete_repository_workspace(connection, &workspace_id)
                 .context("error deleting repository workspace")
+        }
+    }
+}
+
+fn execute_repository_persistence_operation(
+    operation: RepositoryPersistenceOperation,
+    connection: &mut SqliteConnection,
+    database_path: &Path,
+    report_error: impl FnOnce(&str, anyhow::Error, &Path),
+) -> Result<(), RepositoryPersistenceError> {
+    match handle_repository_persistence_operation(operation, connection) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let details = format!("{error:#}");
+            report_error("Repository persistence", error, database_path);
+            Err(RepositoryPersistenceError::Database { details })
         }
     }
 }

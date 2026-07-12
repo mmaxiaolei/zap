@@ -124,4 +124,3 @@ repository 和 workspace 分别提供统一 resolver。输入路径先严格 can
 - 其他 `ModelEvent` 保持现有 fire-and-forget 行为。
 - Task 4 创建 workspace 时可使用 acknowledged workspace upsert 作为数据库提交边界；后续步骤失败时使用 acknowledged delete 做补偿。
 - Task 8 负责把 missing/ambiguous external state 转换为 health 状态和用户可操作 UI。
-

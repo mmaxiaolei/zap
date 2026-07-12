@@ -33,9 +33,9 @@ use crate::{
 
 use super::{
     decode_path, deduplicate_events, delete_repository, delete_repository_workspace, encode_path,
-    get_all_repositories, get_all_repository_workspaces, read_sqlite_data, save_app_state,
-    save_repository, save_repository_workspace, setup_database, start_writer,
-    start_writer_with_state, WriterState,
+    execute_repository_persistence_operation, get_all_repositories, get_all_repository_workspaces,
+    read_sqlite_data, save_app_state, save_repository, save_repository_workspace, setup_database,
+    start_writer, start_writer_with_state, WriterState,
 };
 
 // Diesel canonicalizes the directory version `2026-07-11-000000` by removing hyphens.
@@ -514,6 +514,48 @@ fn repository_persistence_returns_database_error() {
 }
 
 #[test]
+fn repository_persistence_reports_database_error() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let first = repository_row(
+        "123e4567-e89b-12d3-a456-426614174111",
+        "/tmp/ack-reported-error",
+    );
+    let second = repository_row(
+        "123e4567-e89b-12d3-a456-426614174112",
+        "/tmp/ack-reported-error",
+    );
+    save_repository(&mut conn, first).expect("first repository should persist");
+    let mut reported_error = None;
+
+    let error = execute_repository_persistence_operation(
+        RepositoryPersistenceOperation::UpsertRepository { repository: second },
+        &mut conn,
+        &database_path,
+        |error_kind, error, reported_path| {
+            reported_error = Some((
+                error_kind.to_string(),
+                format!("{error:#}"),
+                reported_path.to_path_buf(),
+            ));
+        },
+    )
+    .expect_err("duplicate path should fail");
+
+    let RepositoryPersistenceError::Database { details } = error else {
+        panic!("expected database error, got {error:?}");
+    };
+    assert!(details.contains("error upserting repository"));
+    assert!(details.contains("UNIQUE constraint failed: repositories.path"));
+    let (error_kind, reported_details, reported_path) =
+        reported_error.expect("database error should be reported");
+    assert_eq!(error_kind, "Repository persistence");
+    assert_eq!(reported_details, details);
+    assert_eq!(reported_path, database_path);
+}
+
+#[test]
 fn repository_persistence_fails_while_writer_is_paused() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
     let database_path = tempdir.path().join("warp.sqlite");
@@ -642,6 +684,69 @@ fn repository_persistence_writer_continues_after_response_disconnect() {
     let mut repositories = get_all_repositories(&mut read_conn).expect("repositories should load");
     repositories.sort_by(|left, right| left.id.cmp(&right.id));
     assert_eq!(repositories, vec![first, second]);
+    handles
+        .sender
+        .send(ModelEvent::Terminate)
+        .expect("writer should receive termination");
+    handles.handle.join().expect("writer should terminate");
+}
+
+#[test]
+fn repository_persistence_operation_matrix_commits_before_acknowledgement() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let conn = setup_database(&database_path).expect("database should initialize");
+    let handles = start_writer(conn, database_path.clone()).expect("writer should start");
+    let persistence = RepositoryPersistence::new(Some(handles.sender.clone()));
+    let repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174109",
+        "/tmp/ack-operation-matrix",
+    );
+    let workspace = repository_workspace_row(
+        "123e4567-e89b-12d3-a456-426614174110",
+        &repository.id,
+        "main",
+        "/tmp/ack-operation-matrix-main",
+    );
+    let mut read_conn = setup_database(&database_path).expect("read connection should initialize");
+
+    persistence
+        .execute(RepositoryPersistenceOperation::UpsertRepository {
+            repository: repository.clone(),
+        })
+        .expect("repository upsert should be acknowledged");
+    assert_eq!(
+        get_all_repositories(&mut read_conn).expect("repositories should load"),
+        vec![repository.clone()]
+    );
+
+    persistence
+        .execute(RepositoryPersistenceOperation::UpsertRepositoryWorkspace {
+            workspace: workspace.clone(),
+        })
+        .expect("workspace upsert should be acknowledged");
+    assert_eq!(
+        get_all_repository_workspaces(&mut read_conn).expect("workspaces should load"),
+        vec![workspace.clone()]
+    );
+
+    persistence
+        .execute(RepositoryPersistenceOperation::DeleteRepositoryWorkspace {
+            workspace_id: workspace.id,
+        })
+        .expect("workspace delete should be acknowledged");
+    assert!(get_all_repository_workspaces(&mut read_conn)
+        .expect("workspaces should load")
+        .is_empty());
+
+    persistence
+        .execute(RepositoryPersistenceOperation::DeleteRepository {
+            repository_id: repository.id,
+        })
+        .expect("repository delete should be acknowledged");
+    assert!(get_all_repositories(&mut read_conn)
+        .expect("repositories should load")
+        .is_empty());
     handles
         .sender
         .send(ModelEvent::Terminate)
