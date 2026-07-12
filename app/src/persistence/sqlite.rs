@@ -684,13 +684,27 @@ fn reconstruct_database(path: &Path) -> Result<SqliteConnection> {
     setup_database(path)
 }
 
+#[derive(Clone, Copy)]
+enum WriterState {
+    Running,
+    Paused,
+}
+
 fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<WriterHandles> {
+    start_writer_with_state(conn, database_path, WriterState::Running)
+}
+
+fn start_writer_with_state(
+    conn: SqliteConnection,
+    database_path: PathBuf,
+    initial_state: WriterState,
+) -> Result<WriterHandles> {
     let (tx, rx) = std::sync::mpsc::sync_channel(CHANNEL_SIZE);
     let mut current_conn = conn;
     let handle = thread::Builder::new()
         .name("SQLite Writer".into())
         .spawn(move || {
-            let mut paused = false;
+            let mut state = initial_state;
             loop {
                 let events = match rx.recv() {
                     Ok(event) => {
@@ -715,7 +729,7 @@ fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<Writer
                             match reconstruct_database(&database_path) {
                                 Ok(conn) => {
                                     current_conn = conn;
-                                    paused = false;
+                                    state = WriterState::Running;
                                     log::info!("SQLite Writer is resumed");
                                 }
                                 Err(err) => {
@@ -724,7 +738,7 @@ fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<Writer
                             }
                         }
                         ModelEvent::PauseAndRemoveDatabase => {
-                            paused = true;
+                            state = WriterState::Paused;
                             log::info!("SQLite Writer is paused");
 
                             if let Err(err) = std::fs::remove_file(&database_path) {
@@ -746,16 +760,15 @@ fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<Writer
                             return;
                         }
                         ModelEvent::RepositoryPersistence(request) => {
-                            let result = if paused {
-                                Err(RepositoryPersistenceError::Paused)
-                            } else {
-                                handle_repository_persistence_operation(
+                            let result = match state {
+                                WriterState::Running => handle_repository_persistence_operation(
                                     request.operation,
                                     &mut current_conn,
                                 )
                                 .map_err(|error| RepositoryPersistenceError::Database {
                                     details: format!("{error:#}"),
-                                })
+                                }),
+                                WriterState::Paused => Err(RepositoryPersistenceError::Paused),
                             };
                             if request.response.send(result).is_err() {
                                 log::error!(
@@ -764,9 +777,12 @@ fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<Writer
                             }
                         }
                         event => {
-                            if paused {
-                                log::info!("Ignoring event as SQLite Writer is on pause");
-                                continue;
+                            match state {
+                                WriterState::Running => {}
+                                WriterState::Paused => {
+                                    log::info!("Ignoring event as SQLite Writer is on pause");
+                                    continue;
+                                }
                             }
                             if let Err(err) = handle_model_event(event, &mut current_conn) {
                                 report_db_error("Model", err, &database_path);

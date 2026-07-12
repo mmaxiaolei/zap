@@ -22,7 +22,7 @@ use crate::{
     persistence::{
         model::{ObjectPermissions, Repository, RepositoryWorkspace},
         BlockCompleted, ModelEvent, RepositoryPersistence, RepositoryPersistenceError,
-        RepositoryPersistenceOperation,
+        RepositoryPersistenceOperation, RepositoryPersistenceRequest,
     },
     server::ids::ClientId,
     server_time::ServerTimestamp,
@@ -35,6 +35,7 @@ use super::{
     decode_path, deduplicate_events, delete_repository, delete_repository_workspace, encode_path,
     get_all_repositories, get_all_repository_workspaces, read_sqlite_data, save_app_state,
     save_repository, save_repository_workspace, setup_database, start_writer,
+    start_writer_with_state, WriterState,
 };
 
 // Diesel canonicalizes the directory version `2026-07-11-000000` by removing hyphens.
@@ -517,16 +518,13 @@ fn repository_persistence_fails_while_writer_is_paused() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
     let database_path = tempdir.path().join("warp.sqlite");
     let conn = setup_database(&database_path).expect("database should initialize");
-    let handles = start_writer(conn, database_path.clone()).expect("writer should start");
+    let handles = start_writer_with_state(conn, database_path.clone(), WriterState::Paused)
+        .expect("paused writer should start");
     let persistence = RepositoryPersistence::new(Some(handles.sender.clone()));
     let repository = repository_row(
         "123e4567-e89b-12d3-a456-426614174103",
         "/tmp/ack-paused-repository",
     );
-    handles
-        .sender
-        .send(ModelEvent::PauseAndRemoveDatabase)
-        .expect("writer should receive pause");
 
     assert_eq!(
         persistence.execute(RepositoryPersistenceOperation::UpsertRepository { repository }),
@@ -603,6 +601,52 @@ fn repository_persistence_returns_response_disconnected() {
         RepositoryPersistenceError::ResponseDisconnected { .. }
     ));
     receiver_thread.join().expect("receiver should terminate");
+}
+
+#[test]
+fn repository_persistence_writer_continues_after_response_disconnect() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let conn = setup_database(&database_path).expect("database should initialize");
+    let handles = start_writer(conn, database_path.clone()).expect("writer should start");
+    let persistence = RepositoryPersistence::new(Some(handles.sender.clone()));
+    let first = repository_row(
+        "123e4567-e89b-12d3-a456-426614174107",
+        "/tmp/ack-dropped-response",
+    );
+    let second = repository_row(
+        "123e4567-e89b-12d3-a456-426614174108",
+        "/tmp/ack-after-dropped-response",
+    );
+    let (response, receiver) = std::sync::mpsc::sync_channel(1);
+    drop(receiver);
+    handles
+        .sender
+        .send(ModelEvent::RepositoryPersistence(
+            RepositoryPersistenceRequest {
+                operation: RepositoryPersistenceOperation::UpsertRepository {
+                    repository: first.clone(),
+                },
+                response,
+            },
+        ))
+        .expect("writer should receive request with disconnected response");
+
+    persistence
+        .execute(RepositoryPersistenceOperation::UpsertRepository {
+            repository: second.clone(),
+        })
+        .expect("writer should continue serving requests");
+
+    let mut read_conn = setup_database(&database_path).expect("read connection should initialize");
+    let mut repositories = get_all_repositories(&mut read_conn).expect("repositories should load");
+    repositories.sort_by(|left, right| left.id.cmp(&right.id));
+    assert_eq!(repositories, vec![first, second]);
+    handles
+        .sender
+        .send(ModelEvent::Terminate)
+        .expect("writer should receive termination");
+    handles.handle.join().expect("writer should terminate");
 }
 
 fn repository_workspace_row(
