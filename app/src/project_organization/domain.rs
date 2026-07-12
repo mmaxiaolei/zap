@@ -203,6 +203,13 @@ pub enum ProjectOrganizationError {
         canonical_path: PathBuf,
     },
     #[error(
+        "canonical repository path `{canonical_path}` matches multiple repositories: {repository_ids:?}"
+    )]
+    AmbiguousRepositoryPath {
+        canonical_path: PathBuf,
+        repository_ids: Vec<RepositoryId>,
+    },
+    #[error(
         "branch `{branch}` already belongs to workspace {existing_workspace_id} in repository {repository_id}"
     )]
     WorkspaceBranchAlreadyExists {
@@ -216,6 +223,13 @@ pub enum ProjectOrganizationError {
     WorkspacePathAlreadyExists {
         existing_workspace_id: RepositoryWorkspaceId,
         canonical_path: PathBuf,
+    },
+    #[error(
+        "canonical worktree path `{canonical_path}` matches multiple workspaces: {workspace_ids:?}"
+    )]
+    AmbiguousWorkspacePath {
+        canonical_path: PathBuf,
+        workspace_ids: Vec<RepositoryWorkspaceId>,
     },
     #[error("repository {repository_id} still has workspaces")]
     RepositoryHasWorkspaces { repository_id: RepositoryId },

@@ -146,6 +146,44 @@ fn add_local_repository_rejects_duplicate_canonical_path() {
 }
 
 #[test]
+fn add_repository_rejects_ambiguous_recovered_aliases() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let target = tempdir.path().join("repository");
+        let first_alias = tempdir.path().join("first").join("..").join("repository");
+        let second_alias = tempdir.path().join("second").join("..").join("repository");
+        let first_id = RepositoryId::from(Uuid::from_u128(1));
+        let second_id = RepositoryId::from(Uuid::from_u128(2));
+        let (model, _operations) = create_model(
+            &mut app,
+            vec![
+                persisted_repository(first_id, &first_alias),
+                persisted_repository(second_id, &second_alias),
+            ],
+            vec![],
+        );
+        std::fs::create_dir(tempdir.path().join("first")).unwrap();
+        std::fs::create_dir(tempdir.path().join("second")).unwrap();
+        std::fs::create_dir(&target).unwrap();
+
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository(&target, ctx)
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::AmbiguousRepositoryPath {
+                canonical_path,
+                repository_ids,
+            } if canonical_path == dunce::canonicalize(&target).unwrap()
+                && repository_ids == vec![first_id, second_id]
+        ));
+    });
+}
+
+#[test]
 fn insert_workspace_rejects_duplicate_repository_branch() {
     App::test((), |mut app| async move {
         let tempdir = TempDir::new().expect("temporary directory should be created");
@@ -238,6 +276,365 @@ fn remove_repository_is_blocked_while_workspace_exists() {
             ProjectOrganizationError::RepositoryHasWorkspaces {
                 repository_id: blocked_repository_id,
             } if blocked_repository_id == repository_id
+        ));
+    });
+}
+
+#[test]
+fn remove_workspace_allows_reusing_branch_and_worktree_path() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let repository_path = tempdir.path().join("repository");
+        let worktree_path = tempdir.path().join("worktree");
+        for path in [&repository_path, &worktree_path] {
+            std::fs::create_dir(path).expect("test directory should be created");
+        }
+        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let repository_id = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository(&repository_path, ctx)
+            })
+            .expect("repository should be added");
+        let first_workspace_id = RepositoryWorkspaceId::from(Uuid::new_v4());
+        model
+            .update(&mut app, |model, ctx| {
+                model.insert_workspace(
+                    repository_workspace(
+                        first_workspace_id,
+                        repository_id,
+                        "feature/reusable",
+                        &worktree_path,
+                    ),
+                    ctx,
+                )
+            })
+            .expect("workspace should be inserted");
+
+        model
+            .update(&mut app, |model, ctx| {
+                model.remove_workspace(first_workspace_id, ctx)
+            })
+            .expect("workspace should be removed");
+        let replacement_id = RepositoryWorkspaceId::from(Uuid::new_v4());
+        model
+            .update(&mut app, |model, ctx| {
+                model.insert_workspace(
+                    repository_workspace(
+                        replacement_id,
+                        repository_id,
+                        "feature/reusable",
+                        &worktree_path,
+                    ),
+                    ctx,
+                )
+            })
+            .expect("removed workspace indexes should be reusable");
+
+        assert!(model.read(&app, |model, _| model.workspace(replacement_id).is_some()));
+    });
+}
+
+#[test]
+fn remove_repository_allows_reusing_path() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).expect("repository directory should be created");
+        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let first_repository_id = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository(&repository_path, ctx)
+            })
+            .expect("repository should be added");
+
+        model
+            .update(&mut app, |model, ctx| {
+                model.remove_repository(first_repository_id, ctx)
+            })
+            .expect("repository should be removed");
+        let replacement_id = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository(&repository_path, ctx)
+            })
+            .expect("removed repository path should be reusable");
+
+        assert_ne!(replacement_id, first_repository_id);
+    });
+}
+
+#[test]
+fn update_repository_replaces_path_index_and_rejects_new_duplicate() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let old_path = tempdir.path().join("old-repository");
+        let new_path = tempdir.path().join("new-repository");
+        for path in [&old_path, &new_path] {
+            std::fs::create_dir(path).expect("repository directory should be created");
+        }
+        let canonical_new_path =
+            dunce::canonicalize(&new_path).expect("new repository path should canonicalize");
+        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let repository_id = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository(&old_path, ctx)
+            })
+            .expect("repository should be added");
+        let mut repository = model.read(&app, |model, _| {
+            model
+                .repository(repository_id)
+                .expect("repository should exist")
+                .clone()
+        });
+        repository.path = new_path.clone();
+
+        model
+            .update(&mut app, |model, ctx| {
+                model.update_repository(repository, ctx)
+            })
+            .expect("repository path should be updated");
+        model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository(&old_path, ctx)
+            })
+            .expect("old repository path index should be removed");
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository(&new_path, ctx)
+            })
+            .expect_err("new repository path should remain indexed");
+
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::RepositoryAlreadyExists {
+                existing_repository_id,
+                canonical_path,
+            } if existing_repository_id == repository_id && canonical_path == canonical_new_path
+        ));
+    });
+}
+
+#[test]
+fn update_workspace_replaces_branch_and_path_indexes_and_rejects_new_duplicates() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let repository_path = tempdir.path().join("repository");
+        let old_path = tempdir.path().join("old-worktree");
+        let new_path = tempdir.path().join("new-worktree");
+        let branch_conflict_path = tempdir.path().join("branch-conflict-worktree");
+        for path in [
+            &repository_path,
+            &old_path,
+            &new_path,
+            &branch_conflict_path,
+        ] {
+            std::fs::create_dir(path).expect("test directory should be created");
+        }
+        let canonical_new_path =
+            dunce::canonicalize(&new_path).expect("new worktree path should canonicalize");
+        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let repository_id = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository(&repository_path, ctx)
+            })
+            .expect("repository should be added");
+        let workspace_id = RepositoryWorkspaceId::from(Uuid::new_v4());
+        model
+            .update(&mut app, |model, ctx| {
+                model.insert_workspace(
+                    repository_workspace(workspace_id, repository_id, "feature/old", &old_path),
+                    ctx,
+                )
+            })
+            .expect("workspace should be inserted");
+        let mut workspace = model.read(&app, |model, _| {
+            model
+                .workspace(workspace_id)
+                .expect("workspace should exist")
+                .clone()
+        });
+        workspace.branch = "feature/new".to_string();
+        workspace.worktree_path = new_path.clone();
+
+        model
+            .update(&mut app, |model, ctx| {
+                model.update_workspace(workspace, ctx)
+            })
+            .expect("workspace branch and path should be updated");
+        model
+            .update(&mut app, |model, ctx| {
+                model.insert_workspace(
+                    repository_workspace(
+                        RepositoryWorkspaceId::from(Uuid::new_v4()),
+                        repository_id,
+                        "feature/old",
+                        &old_path,
+                    ),
+                    ctx,
+                )
+            })
+            .expect("old workspace indexes should be removed");
+        let branch_error = model
+            .update(&mut app, |model, ctx| {
+                model.insert_workspace(
+                    repository_workspace(
+                        RepositoryWorkspaceId::from(Uuid::new_v4()),
+                        repository_id,
+                        "feature/new",
+                        &branch_conflict_path,
+                    ),
+                    ctx,
+                )
+            })
+            .expect_err("new branch should remain indexed");
+        let path_error = model
+            .update(&mut app, |model, ctx| {
+                model.insert_workspace(
+                    repository_workspace(
+                        RepositoryWorkspaceId::from(Uuid::new_v4()),
+                        repository_id,
+                        "feature/path-conflict",
+                        &new_path,
+                    ),
+                    ctx,
+                )
+            })
+            .expect_err("new worktree path should remain indexed");
+
+        assert!(matches!(
+            branch_error,
+            ProjectOrganizationError::WorkspaceBranchAlreadyExists {
+                repository_id: duplicate_repository_id,
+                branch,
+                existing_workspace_id,
+            } if duplicate_repository_id == repository_id
+                && branch == "feature/new"
+                && existing_workspace_id == workspace_id
+        ));
+        assert!(matches!(
+            path_error,
+            ProjectOrganizationError::WorkspacePathAlreadyExists {
+                existing_workspace_id,
+                canonical_path,
+            } if existing_workspace_id == workspace_id && canonical_path == canonical_new_path
+        ));
+    });
+}
+
+#[test]
+fn insert_repository_rejects_duplicate_id() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let first_path = tempdir.path().join("first-repository");
+        let second_path = tempdir.path().join("second-repository");
+        for path in [&first_path, &second_path] {
+            std::fs::create_dir(path).expect("repository directory should be created");
+        }
+        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let repository_id = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository(&first_path, ctx)
+            })
+            .expect("repository should be added");
+        let mut duplicate = model.read(&app, |model, _| {
+            model
+                .repository(repository_id)
+                .expect("repository should exist")
+                .clone()
+        });
+        duplicate.path = second_path;
+
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.insert_repository(duplicate, ctx)
+            })
+            .expect_err("duplicate repository ID should be rejected");
+
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::RepositoryIdAlreadyExists {
+                repository_id: duplicate_id,
+            } if duplicate_id == repository_id
+        ));
+    });
+}
+
+#[test]
+fn insert_workspace_rejects_duplicate_id() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let repository_path = tempdir.path().join("repository");
+        let first_path = tempdir.path().join("first-worktree");
+        let second_path = tempdir.path().join("second-worktree");
+        for path in [&repository_path, &first_path, &second_path] {
+            std::fs::create_dir(path).expect("test directory should be created");
+        }
+        let (model, _events) = create_model(&mut app, vec![], vec![]);
+        let repository_id = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository(&repository_path, ctx)
+            })
+            .expect("repository should be added");
+        let workspace_id = RepositoryWorkspaceId::from(Uuid::new_v4());
+        model
+            .update(&mut app, |model, ctx| {
+                model.insert_workspace(
+                    repository_workspace(workspace_id, repository_id, "feature/first", &first_path),
+                    ctx,
+                )
+            })
+            .expect("workspace should be inserted");
+
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.insert_workspace(
+                    repository_workspace(
+                        workspace_id,
+                        repository_id,
+                        "feature/second",
+                        &second_path,
+                    ),
+                    ctx,
+                )
+            })
+            .expect_err("duplicate workspace ID should be rejected");
+
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::WorkspaceIdAlreadyExists {
+                workspace_id: duplicate_id,
+            } if duplicate_id == workspace_id
+        ));
+    });
+}
+
+#[test]
+fn insert_workspace_rejects_orphan_repository() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let worktree_path = tempdir.path().join("worktree");
+        std::fs::create_dir(&worktree_path).expect("worktree directory should be created");
+        let repository_id = RepositoryId::from(Uuid::new_v4());
+        let (model, _events) = create_model(&mut app, vec![], vec![]);
+
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.insert_workspace(
+                    repository_workspace(
+                        RepositoryWorkspaceId::from(Uuid::new_v4()),
+                        repository_id,
+                        "feature/orphan",
+                        &worktree_path,
+                    ),
+                    ctx,
+                )
+            })
+            .expect_err("orphan workspace should be rejected");
+
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::RepositoryNotFound {
+                repository_id: missing_repository_id,
+            } if missing_repository_id == repository_id
         ));
     });
 }
@@ -374,6 +771,145 @@ fn touch_repository_path_updates_existing_timestamp_and_persistence_event() {
             ModelEvent::UpsertRepository { repository }
                 if repository.id == repository_id.to_string()
                     && repository.last_opened_at > previous_last_opened_at
+        ));
+    });
+}
+
+#[test]
+fn touch_repository_rejects_ambiguous_recovered_aliases() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let target = tempdir.path().join("repository");
+        let first_alias = tempdir.path().join("first").join("..").join("repository");
+        let second_alias = tempdir.path().join("second").join("..").join("repository");
+        let first_id = RepositoryId::from(Uuid::from_u128(1));
+        let second_id = RepositoryId::from(Uuid::from_u128(2));
+        let (model, _operations) = create_model(
+            &mut app,
+            vec![
+                persisted_repository(first_id, &first_alias),
+                persisted_repository(second_id, &second_alias),
+            ],
+            vec![],
+        );
+        std::fs::create_dir(tempdir.path().join("first")).unwrap();
+        std::fs::create_dir(tempdir.path().join("second")).unwrap();
+        std::fs::create_dir(&target).unwrap();
+
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.touch_repository_path(&target, ctx)
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::AmbiguousRepositoryPath {
+                canonical_path,
+                repository_ids,
+            } if canonical_path == dunce::canonicalize(&target).unwrap()
+                && repository_ids == vec![first_id, second_id]
+        ));
+    });
+}
+
+#[test]
+fn insert_workspace_rejects_ambiguous_recovered_aliases() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).unwrap();
+        let target = tempdir.path().join("worktree");
+        let first_alias = tempdir.path().join("first").join("..").join("worktree");
+        let second_alias = tempdir.path().join("second").join("..").join("worktree");
+        let repository_id = RepositoryId::from(Uuid::from_u128(1));
+        let first_id = RepositoryWorkspaceId::from(Uuid::from_u128(2));
+        let second_id = RepositoryWorkspaceId::from(Uuid::from_u128(3));
+        let (model, _operations) = create_model(
+            &mut app,
+            vec![persisted_repository(repository_id, &repository_path)],
+            vec![
+                persisted_workspace(first_id, repository_id, "main", &first_alias),
+                persisted_workspace(second_id, repository_id, "feature/second", &second_alias),
+            ],
+        );
+        std::fs::create_dir(tempdir.path().join("first")).unwrap();
+        std::fs::create_dir(tempdir.path().join("second")).unwrap();
+        std::fs::create_dir(&target).unwrap();
+
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.insert_workspace(
+                    repository_workspace(
+                        RepositoryWorkspaceId::from(Uuid::from_u128(4)),
+                        repository_id,
+                        "feature/new",
+                        &target,
+                    ),
+                    ctx,
+                )
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::AmbiguousWorkspacePath {
+                canonical_path,
+                workspace_ids,
+            } if canonical_path == dunce::canonicalize(&target).unwrap()
+                && workspace_ids == vec![first_id, second_id]
+        ));
+    });
+}
+
+#[test]
+fn update_workspace_rejects_ambiguous_recovered_aliases_excluding_itself() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).unwrap();
+        let target = tempdir.path().join("worktree");
+        let first_alias = tempdir.path().join("first").join("..").join("worktree");
+        let second_alias = tempdir.path().join("second").join("..").join("worktree");
+        let updated_alias = tempdir.path().join("updated").join("..").join("worktree");
+        let repository_id = RepositoryId::from(Uuid::from_u128(1));
+        let first_id = RepositoryWorkspaceId::from(Uuid::from_u128(2));
+        let second_id = RepositoryWorkspaceId::from(Uuid::from_u128(3));
+        let updated_id = RepositoryWorkspaceId::from(Uuid::from_u128(4));
+        let (model, _operations) = create_model(
+            &mut app,
+            vec![persisted_repository(repository_id, &repository_path)],
+            vec![
+                persisted_workspace(first_id, repository_id, "main", &first_alias),
+                persisted_workspace(second_id, repository_id, "feature/second", &second_alias),
+                persisted_workspace(updated_id, repository_id, "feature/updated", &updated_alias),
+            ],
+        );
+        std::fs::create_dir(tempdir.path().join("first")).unwrap();
+        std::fs::create_dir(tempdir.path().join("second")).unwrap();
+        std::fs::create_dir(tempdir.path().join("updated")).unwrap();
+        std::fs::create_dir(&target).unwrap();
+        let mut workspace = model.read(&app, |model, _| {
+            model
+                .workspace(updated_id)
+                .expect("updated workspace should exist")
+                .clone()
+        });
+        workspace.worktree_path = target.clone();
+
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.update_workspace(workspace, ctx)
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::AmbiguousWorkspacePath {
+                canonical_path,
+                workspace_ids,
+            } if canonical_path == dunce::canonicalize(&target).unwrap()
+                && workspace_ids == vec![first_id, second_id]
         ));
     });
 }

@@ -27,6 +27,12 @@ pub struct ProjectOrganizationModel {
     model_event_sender: Option<SyncSender<ModelEvent>>,
 }
 
+enum CanonicalPathMatch<Id> {
+    None,
+    Unique(Id),
+    Ambiguous(Vec<Id>),
+}
+
 impl Entity for ProjectOrganizationModel {
     type Event = ProjectOrganizationEvent;
 }
@@ -67,11 +73,20 @@ impl ProjectOrganizationModel {
         ctx: &mut ModelContext<Self>,
     ) -> Result<RepositoryId, ProjectOrganizationError> {
         let canonical_path = Self::canonicalize(path.as_ref())?;
-        if let Some(existing_repository_id) = self.repository_ids_by_path.get(&canonical_path) {
-            return Err(ProjectOrganizationError::RepositoryAlreadyExists {
-                existing_repository_id: *existing_repository_id,
-                canonical_path,
-            });
+        match self.repository_match_for_canonical_path(&canonical_path, None) {
+            CanonicalPathMatch::None => {}
+            CanonicalPathMatch::Unique(existing_repository_id) => {
+                return Err(ProjectOrganizationError::RepositoryAlreadyExists {
+                    existing_repository_id,
+                    canonical_path,
+                });
+            }
+            CanonicalPathMatch::Ambiguous(repository_ids) => {
+                return Err(ProjectOrganizationError::AmbiguousRepositoryPath {
+                    canonical_path,
+                    repository_ids,
+                });
+            }
         }
         let display_name = canonical_path
             .file_name()
@@ -104,35 +119,16 @@ impl ProjectOrganizationModel {
         path: impl AsRef<Path>,
         ctx: &mut ModelContext<Self>,
     ) -> Result<RepositoryId, ProjectOrganizationError> {
-        let original_path = path.as_ref();
-        let repository_id_for_original_path =
-            self.repository_ids_by_path.get(original_path).copied();
-        let canonical_path = Self::canonicalize(original_path)?;
-        let repository_id_for_canonical_path =
-            self.repository_ids_by_path.get(&canonical_path).copied();
-        if let (Some(original_id), Some(canonical_id)) = (
-            repository_id_for_original_path,
-            repository_id_for_canonical_path,
-        ) {
-            if original_id != canonical_id {
-                return Err(ProjectOrganizationError::RepositoryAlreadyExists {
-                    existing_repository_id: canonical_id,
+        let canonical_path = Self::canonicalize(path.as_ref())?;
+        let repository_id = match self.repository_match_for_canonical_path(&canonical_path, None) {
+            CanonicalPathMatch::None => return self.add_local_repository(canonical_path, ctx),
+            CanonicalPathMatch::Unique(repository_id) => repository_id,
+            CanonicalPathMatch::Ambiguous(repository_ids) => {
+                return Err(ProjectOrganizationError::AmbiguousRepositoryPath {
                     canonical_path,
+                    repository_ids,
                 });
             }
-        }
-        let repository_id = repository_id_for_original_path
-            .or(repository_id_for_canonical_path)
-            .or_else(|| {
-                self.repositories.iter().find_map(|(repository_id, repository)| {
-                    dunce::canonicalize(&repository.path)
-                        .ok()
-                        .filter(|persisted_path| persisted_path == &canonical_path)
-                        .map(|_| *repository_id)
-                })
-            });
-        let Some(repository_id) = repository_id else {
-            return self.add_local_repository(canonical_path, ctx);
         };
         let mut repository = self
             .repositories
@@ -158,7 +154,26 @@ impl ProjectOrganizationModel {
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), ProjectOrganizationError> {
         repository.path = Self::canonicalize(&repository.path)?;
-        self.validate_new_repository(&repository)?;
+        if self.repositories.contains_key(&repository.id) {
+            return Err(ProjectOrganizationError::RepositoryIdAlreadyExists {
+                repository_id: repository.id,
+            });
+        }
+        match self.repository_match_for_canonical_path(&repository.path, None) {
+            CanonicalPathMatch::None => {}
+            CanonicalPathMatch::Unique(existing_repository_id) => {
+                return Err(ProjectOrganizationError::RepositoryAlreadyExists {
+                    existing_repository_id,
+                    canonical_path: repository.path,
+                });
+            }
+            CanonicalPathMatch::Ambiguous(repository_ids) => {
+                return Err(ProjectOrganizationError::AmbiguousRepositoryPath {
+                    canonical_path: repository.path,
+                    repository_ids,
+                });
+            }
+        }
         self.persist_repository(&repository, "repository insertion")?;
         let repository_id = repository.id;
         self.insert_repository_in_memory(repository)?;
@@ -172,20 +187,27 @@ impl ProjectOrganizationModel {
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), ProjectOrganizationError> {
         repository.path = Self::canonicalize(&repository.path)?;
-        let previous = self.repositories.get(&repository.id).ok_or(
+        let previous = self.repositories.get(&repository.id).cloned().ok_or(
             ProjectOrganizationError::RepositoryNotFound {
                 repository_id: repository.id,
             },
         )?;
-        if let Some(existing_repository_id) = self.repository_ids_by_path.get(&repository.path) {
-            if *existing_repository_id != repository.id {
+        match self.repository_match_for_canonical_path(&repository.path, Some(repository.id)) {
+            CanonicalPathMatch::None => {}
+            CanonicalPathMatch::Unique(existing_repository_id) => {
                 return Err(ProjectOrganizationError::RepositoryAlreadyExists {
-                    existing_repository_id: *existing_repository_id,
+                    existing_repository_id,
                     canonical_path: repository.path,
                 });
             }
+            CanonicalPathMatch::Ambiguous(repository_ids) => {
+                return Err(ProjectOrganizationError::AmbiguousRepositoryPath {
+                    canonical_path: repository.path,
+                    repository_ids,
+                });
+            }
         }
-        let previous_path = previous.path.clone();
+        let previous_path = previous.path;
         let repository_id = repository.id;
 
         self.persist_repository(&repository, "repository update")?;
@@ -248,7 +270,41 @@ impl ProjectOrganizationModel {
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), ProjectOrganizationError> {
         workspace.worktree_path = Self::canonicalize(&workspace.worktree_path)?;
-        self.validate_new_workspace(&workspace)?;
+        if self.workspaces.contains_key(&workspace.id) {
+            return Err(ProjectOrganizationError::WorkspaceIdAlreadyExists {
+                workspace_id: workspace.id,
+            });
+        }
+        if !self.repositories.contains_key(&workspace.repository_id) {
+            return Err(ProjectOrganizationError::RepositoryNotFound {
+                repository_id: workspace.repository_id,
+            });
+        }
+        let branch_key = (workspace.repository_id, workspace.branch.clone());
+        if let Some(existing_workspace_id) =
+            self.workspace_ids_by_repository_branch.get(&branch_key)
+        {
+            return Err(ProjectOrganizationError::WorkspaceBranchAlreadyExists {
+                repository_id: workspace.repository_id,
+                branch: workspace.branch,
+                existing_workspace_id: *existing_workspace_id,
+            });
+        }
+        match self.workspace_match_for_canonical_path(&workspace.worktree_path, None) {
+            CanonicalPathMatch::None => {}
+            CanonicalPathMatch::Unique(existing_workspace_id) => {
+                return Err(ProjectOrganizationError::WorkspacePathAlreadyExists {
+                    existing_workspace_id,
+                    canonical_path: workspace.worktree_path,
+                });
+            }
+            CanonicalPathMatch::Ambiguous(workspace_ids) => {
+                return Err(ProjectOrganizationError::AmbiguousWorkspacePath {
+                    canonical_path: workspace.worktree_path,
+                    workspace_ids,
+                });
+            }
+        }
         self.persist_workspace(&workspace, "repository workspace insertion")?;
         let workspace_id = workspace.id;
         self.insert_workspace_in_memory(workspace)?;
@@ -284,13 +340,19 @@ impl ProjectOrganizationModel {
                 });
             }
         }
-        if let Some(existing_workspace_id) =
-            self.workspace_ids_by_path.get(&workspace.worktree_path)
+        match self.workspace_match_for_canonical_path(&workspace.worktree_path, Some(workspace.id))
         {
-            if *existing_workspace_id != workspace.id {
+            CanonicalPathMatch::None => {}
+            CanonicalPathMatch::Unique(existing_workspace_id) => {
                 return Err(ProjectOrganizationError::WorkspacePathAlreadyExists {
-                    existing_workspace_id: *existing_workspace_id,
+                    existing_workspace_id,
                     canonical_path: workspace.worktree_path,
+                });
+            }
+            CanonicalPathMatch::Ambiguous(workspace_ids) => {
+                return Err(ProjectOrganizationError::AmbiguousWorkspacePath {
+                    canonical_path: workspace.worktree_path,
+                    workspace_ids,
                 });
             }
         }
@@ -383,6 +445,54 @@ impl ProjectOrganizationModel {
     fn normalize_persisted_path(path: String) -> PathBuf {
         let path = PathBuf::from(path);
         dunce::canonicalize(&path).unwrap_or(path)
+    }
+
+    fn repository_match_for_canonical_path(
+        &self,
+        canonical_path: &Path,
+        excluded_id: Option<RepositoryId>,
+    ) -> CanonicalPathMatch<RepositoryId> {
+        let mut matches = self
+            .repositories
+            .iter()
+            .filter_map(|(repository_id, repository)| {
+                if Some(*repository_id) == excluded_id {
+                    return None;
+                }
+                let candidate = dunce::canonicalize(&repository.path).ok()?;
+                (candidate == canonical_path).then_some(*repository_id)
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by_key(|id| id.0);
+        match matches.as_slice() {
+            [] => CanonicalPathMatch::None,
+            [repository_id] => CanonicalPathMatch::Unique(*repository_id),
+            _ => CanonicalPathMatch::Ambiguous(matches),
+        }
+    }
+
+    fn workspace_match_for_canonical_path(
+        &self,
+        canonical_path: &Path,
+        excluded_id: Option<RepositoryWorkspaceId>,
+    ) -> CanonicalPathMatch<RepositoryWorkspaceId> {
+        let mut matches = self
+            .workspaces
+            .iter()
+            .filter_map(|(workspace_id, workspace)| {
+                if Some(*workspace_id) == excluded_id {
+                    return None;
+                }
+                let candidate = dunce::canonicalize(&workspace.worktree_path).ok()?;
+                (candidate == canonical_path).then_some(*workspace_id)
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by_key(|id| id.0);
+        match matches.as_slice() {
+            [] => CanonicalPathMatch::None,
+            [workspace_id] => CanonicalPathMatch::Unique(*workspace_id),
+            _ => CanonicalPathMatch::Ambiguous(matches),
+        }
     }
 
     fn validate_new_repository(
