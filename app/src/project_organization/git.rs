@@ -87,6 +87,8 @@ pub enum GitWorkspaceError {
     InvalidUtf8 { operation: &'static str },
     #[error("git returned invalid branch ref `{full_ref}`")]
     InvalidBranchRef { full_ref: String },
+    #[error("git returned invalid branch ref record `{record}`")]
+    InvalidBranchRefRecord { record: String },
     #[error("remote ref `{full_ref}` matches multiple remotes: {remotes:?}")]
     AmbiguousRemoteRef {
         full_ref: String,
@@ -237,23 +239,46 @@ pub async fn fetch_and_list_refs_async(repo: PathBuf) -> Result<Vec<BranchRef>, 
 /// 使用完整 refname 列出本地与远端分支。
 pub fn list_branch_refs(repo: &Path) -> Result<Vec<BranchRef>, GitWorkspaceError> {
     let remotes = list_remotes(repo)?;
-    let stdout = output_string(
+    let output = git_output_for_operation(
         repo,
         "list repository refs",
         &[
             "for-each-ref",
-            "--format=%(refname)",
+            "--format=%(refname)%09%(symref)",
             "refs/heads",
             "refs/remotes",
         ],
     )?;
+    let stdout = String::from_utf8(output.stdout).map_err(|_| GitWorkspaceError::InvalidUtf8 {
+        operation: "list repository refs",
+    })?;
 
-    stdout
-        .lines()
-        .filter(|line| !line.is_empty())
-        .filter(|full_ref| !is_remote_head_ref(full_ref, &remotes))
-        .map(|full_ref| parse_branch_ref(full_ref, &remotes))
-        .collect()
+    parse_branch_ref_records(&stdout, &remotes)
+}
+
+pub(crate) fn parse_branch_ref_records(
+    stdout: &str,
+    remotes: &[String],
+) -> Result<Vec<BranchRef>, GitWorkspaceError> {
+    let mut refs = Vec::new();
+    for record in stdout.lines() {
+        let Some((full_ref, symref)) = record.split_once('\t') else {
+            return Err(GitWorkspaceError::InvalidBranchRefRecord {
+                record: record.to_string(),
+            });
+        };
+        if full_ref.is_empty() || symref.contains('\t') {
+            return Err(GitWorkspaceError::InvalidBranchRefRecord {
+                record: record.to_string(),
+            });
+        }
+        if !symref.is_empty() {
+            continue;
+        }
+        refs.push(parse_branch_ref(full_ref, remotes)?);
+    }
+
+    Ok(refs)
 }
 
 /// 在后台线程列出分支引用，避免在 UI 调用线程运行 blocking Git。
@@ -488,12 +513,6 @@ pub(crate) fn parse_branch_ref(
     })
 }
 
-fn is_remote_head_ref(full_ref: &str, remotes: &[String]) -> bool {
-    remotes
-        .iter()
-        .any(|remote| full_ref == format!("refs/remotes/{remote}/HEAD"))
-}
-
 #[derive(Default)]
 struct WorktreeBuilder {
     path: Option<PathBuf>,
@@ -650,6 +669,9 @@ pub(crate) fn decode_git_path_output(
     stdout: &[u8],
     operation: &'static str,
 ) -> Result<PathBuf, GitWorkspaceError> {
+    #[cfg(unix)]
+    let path = stdout.strip_suffix(b"\n").unwrap_or(stdout);
+    #[cfg(not(unix))]
     let path = stdout
         .strip_suffix(b"\r\n")
         .or_else(|| stdout.strip_suffix(b"\n"))

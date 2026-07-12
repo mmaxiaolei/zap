@@ -130,7 +130,26 @@ fn decodes_non_utf8_git_path_output_without_loss() {
         b"/tmp/repository-\xff ".to_vec(),
     ));
     let mut output = expected.as_os_str().as_bytes().to_vec();
-    output.extend_from_slice(b"\r\n");
+    output.push(b'\n');
+
+    let decoded = decode_git_path_output(&output, "decode test path").unwrap();
+
+    assert_eq!(
+        decoded.as_os_str().as_bytes(),
+        expected.as_os_str().as_bytes()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn preserves_trailing_carriage_return_in_git_path_output() {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    let expected = PathBuf::from(std::ffi::OsString::from_vec(
+        b"/tmp/repository-with-trailing-cr\r".to_vec(),
+    ));
+    let mut output = expected.as_os_str().as_bytes().to_vec();
+    output.push(b'\n');
 
     let decoded = decode_git_path_output(&output, "decode test path").unwrap();
 
@@ -229,6 +248,40 @@ fn rejects_ambiguous_overlapping_remote_ref() {
             full_ref,
             remotes: candidates,
         } if full_ref == "refs/remotes/foo/bar/main" && candidates == remotes
+    ));
+}
+
+#[test]
+fn rejects_direct_head_ref_ambiguous_between_overlapping_remotes() {
+    let fixture = GitFixture::new();
+    let remote_url = fixture.remote.to_str().unwrap();
+    run_git(&fixture.root, &["remote", "add", "foo", remote_url]);
+    run_git(&fixture.root, &["remote", "add", "foo/bar", remote_url]);
+    run_git(
+        &fixture.root,
+        &["update-ref", "refs/remotes/foo/bar/HEAD", "HEAD"],
+    );
+
+    let error = list_branch_refs(&fixture.root).unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::AmbiguousRemoteRef {
+            full_ref,
+            remotes,
+        } if full_ref == "refs/remotes/foo/bar/HEAD"
+            && remotes == ["foo".to_string(), "foo/bar".to_string()]
+    ));
+}
+
+#[test]
+fn rejects_malformed_branch_ref_record() {
+    let error = parse_branch_ref_records("refs/heads/main\n", &[]).unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::InvalidBranchRefRecord { record }
+            if record == "refs/heads/main"
     ));
 }
 
