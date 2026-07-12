@@ -15,8 +15,8 @@ use crate::{
     },
     project_organization::{
         domain::{
-            ProjectOrganizationError, RepositoryId, RepositorySource, RepositoryWorkspace,
-            RepositoryWorkspaceId,
+            ProjectOrganizationError, Repository, RepositoryId, RepositorySource,
+            RepositoryWorkspace, RepositoryWorkspaceId,
         },
         model::ProjectOrganizationModel,
     },
@@ -113,6 +113,19 @@ fn repository_workspace(
     }
 }
 
+fn repository(id: RepositoryId, path: &Path) -> Repository {
+    let created_at = Utc::now().naive_utc() - Duration::hours(1);
+    Repository {
+        id,
+        display_name: "repository".to_string(),
+        path: path.to_path_buf(),
+        remote_url: None,
+        source: RepositorySource::Local,
+        created_at,
+        last_opened_at: created_at,
+    }
+}
+
 #[test]
 fn add_local_repository_rejects_duplicate_canonical_path() {
     App::test((), |mut app| async move {
@@ -180,6 +193,157 @@ fn add_repository_rejects_ambiguous_recovered_aliases() {
             } if canonical_path == dunce::canonicalize(&target).unwrap()
                 && repository_ids == vec![first_id, second_id]
         ));
+    });
+}
+
+#[test]
+fn insert_repository_rejects_ambiguous_recovered_aliases() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let target = tempdir.path().join("repository");
+        let first_alias = tempdir.path().join("first").join("..").join("repository");
+        let second_alias = tempdir.path().join("second").join("..").join("repository");
+        let first_id = RepositoryId::from(Uuid::from_u128(1));
+        let second_id = RepositoryId::from(Uuid::from_u128(2));
+        let (model, _operations) = create_model(
+            &mut app,
+            vec![
+                persisted_repository(first_id, &first_alias),
+                persisted_repository(second_id, &second_alias),
+            ],
+            vec![],
+        );
+        std::fs::create_dir(tempdir.path().join("first")).unwrap();
+        std::fs::create_dir(tempdir.path().join("second")).unwrap();
+        std::fs::create_dir(&target).unwrap();
+
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.insert_repository(
+                    repository(RepositoryId::from(Uuid::from_u128(3)), &target),
+                    ctx,
+                )
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::AmbiguousRepositoryPath {
+                canonical_path,
+                repository_ids,
+            } if canonical_path == dunce::canonicalize(&target).unwrap()
+                && repository_ids == vec![first_id, second_id]
+        ));
+    });
+}
+
+#[test]
+fn update_repository_rejects_ambiguous_recovered_aliases_excluding_itself() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let target = tempdir.path().join("repository");
+        let first_alias = tempdir.path().join("first").join("..").join("repository");
+        let second_alias = tempdir.path().join("second").join("..").join("repository");
+        let updated_alias = tempdir.path().join("updated").join("..").join("repository");
+        let first_id = RepositoryId::from(Uuid::from_u128(1));
+        let second_id = RepositoryId::from(Uuid::from_u128(2));
+        let updated_id = RepositoryId::from(Uuid::from_u128(3));
+        let (model, _operations) = create_model(
+            &mut app,
+            vec![
+                persisted_repository(first_id, &first_alias),
+                persisted_repository(second_id, &second_alias),
+                persisted_repository(updated_id, &updated_alias),
+            ],
+            vec![],
+        );
+        std::fs::create_dir(tempdir.path().join("first")).unwrap();
+        std::fs::create_dir(tempdir.path().join("second")).unwrap();
+        std::fs::create_dir(tempdir.path().join("updated")).unwrap();
+        std::fs::create_dir(&target).unwrap();
+        let mut updated = model.read(&app, |model, _| {
+            model
+                .repository(updated_id)
+                .expect("updated repository should exist")
+                .clone()
+        });
+        updated.path = target.clone();
+
+        let error = model
+            .update(&mut app, |model, ctx| model.update_repository(updated, ctx))
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ProjectOrganizationError::AmbiguousRepositoryPath {
+                canonical_path,
+                repository_ids,
+            } if canonical_path == dunce::canonicalize(&target).unwrap()
+                && repository_ids == vec![first_id, second_id]
+        ));
+    });
+}
+
+#[test]
+fn add_local_repository_commits_memory_after_persistence_succeeds() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).unwrap();
+        let canonical_path = dunce::canonicalize(&repository_path).unwrap();
+        let phantom_id = RepositoryId::from(Uuid::from_u128(1));
+        let (model, operations) = create_model(&mut app, vec![], vec![]);
+        model.update(&mut app, |model, _| {
+            model
+                .repository_ids_by_path
+                .insert(canonical_path.clone(), phantom_id);
+        });
+
+        let result = model.update(&mut app, |model, ctx| {
+            model.add_local_repository(&repository_path, ctx)
+        });
+        let operations = operations.try_iter().collect::<Vec<_>>();
+
+        assert_eq!(operations.len(), 1);
+        let repository_id = result.expect("memory commit should be infallible after persistence");
+        assert!(matches!(
+            &operations[0],
+            ModelEvent::UpsertRepository { repository }
+                if repository.id == repository_id.to_string()
+        ));
+        assert!(model.read(&app, |model, _| model.repository(repository_id).is_some()));
+    });
+}
+
+#[test]
+fn insert_repository_commits_memory_after_persistence_succeeds() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).unwrap();
+        let canonical_path = dunce::canonicalize(&repository_path).unwrap();
+        let repository_id = RepositoryId::from(Uuid::from_u128(1));
+        let phantom_id = RepositoryId::from(Uuid::from_u128(2));
+        let (model, operations) = create_model(&mut app, vec![], vec![]);
+        model.update(&mut app, |model, _| {
+            model
+                .repository_ids_by_path
+                .insert(canonical_path, phantom_id);
+        });
+
+        let result = model.update(&mut app, |model, ctx| {
+            model.insert_repository(repository(repository_id, &repository_path), ctx)
+        });
+        let operations = operations.try_iter().collect::<Vec<_>>();
+
+        assert_eq!(operations.len(), 1);
+        result.expect("memory commit should be infallible after persistence");
+        assert!(matches!(
+            &operations[0],
+            ModelEvent::UpsertRepository { repository }
+                if repository.id == repository_id.to_string()
+        ));
+        assert!(model.read(&app, |model, _| model.repository(repository_id).is_some()));
     });
 }
 
@@ -640,6 +804,49 @@ fn insert_workspace_rejects_orphan_repository() {
 }
 
 #[test]
+fn insert_workspace_commits_memory_after_persistence_succeeds() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let repository_path = tempdir.path().join("repository");
+        let worktree_path = tempdir.path().join("worktree");
+        std::fs::create_dir(&repository_path).unwrap();
+        std::fs::create_dir(&worktree_path).unwrap();
+        let canonical_worktree_path = dunce::canonicalize(&worktree_path).unwrap();
+        let workspace_id = RepositoryWorkspaceId::from(Uuid::from_u128(1));
+        let phantom_id = RepositoryWorkspaceId::from(Uuid::from_u128(2));
+        let (model, operations) = create_model(&mut app, vec![], vec![]);
+        let repository_id = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository(&repository_path, ctx)
+            })
+            .unwrap();
+        operations.recv().unwrap();
+        model.update(&mut app, |model, _| {
+            model
+                .workspace_ids_by_path
+                .insert(canonical_worktree_path, phantom_id);
+        });
+
+        let result = model.update(&mut app, |model, ctx| {
+            model.insert_workspace(
+                repository_workspace(workspace_id, repository_id, "feature/test", &worktree_path),
+                ctx,
+            )
+        });
+        let operations = operations.try_iter().collect::<Vec<_>>();
+
+        assert_eq!(operations.len(), 1);
+        result.expect("memory commit should be infallible after persistence");
+        assert!(matches!(
+            &operations[0],
+            ModelEvent::UpsertRepositoryWorkspace { workspace }
+                if workspace.id == workspace_id.to_string()
+        ));
+        assert!(model.read(&app, |model, _| model.workspace(workspace_id).is_some()));
+    });
+}
+
+#[test]
 fn rename_repository_changes_only_display_name() {
     App::test((), |mut app| async move {
         let tempdir = TempDir::new().expect("temporary directory should be created");
@@ -809,6 +1016,54 @@ fn touch_repository_rejects_ambiguous_recovered_aliases() {
                 repository_ids,
             } if canonical_path == dunce::canonicalize(&target).unwrap()
                 && repository_ids == vec![first_id, second_id]
+        ));
+    });
+}
+
+#[test]
+fn touch_repository_migrates_unique_recovered_alias_to_canonical_path() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let target = tempdir.path().join("repository");
+        let alias = tempdir.path().join("alias").join("..").join("repository");
+        let repository_id = RepositoryId::from(Uuid::from_u128(1));
+        let (model, operations) = create_model(
+            &mut app,
+            vec![persisted_repository(repository_id, &alias)],
+            vec![],
+        );
+        std::fs::create_dir(tempdir.path().join("alias")).unwrap();
+        std::fs::create_dir(&target).unwrap();
+        let canonical_path = dunce::canonicalize(&target).unwrap();
+
+        let touched_id = model
+            .update(&mut app, |model, ctx| {
+                model.touch_repository_path(&target, ctx)
+            })
+            .unwrap();
+        let duplicate_error = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository(&canonical_path, ctx)
+            })
+            .unwrap_err();
+        let stored_path = model.read(&app, |model, _| {
+            model
+                .repository(repository_id)
+                .expect("repository should exist")
+                .path
+                .clone()
+        });
+
+        assert_eq!(touched_id, repository_id);
+        assert_eq!(stored_path, canonical_path);
+        assert_eq!(model.read(&app, |model, _| model.repositories().count()), 1);
+        assert_eq!(operations.try_iter().count(), 1);
+        assert!(matches!(
+            duplicate_error,
+            ProjectOrganizationError::RepositoryAlreadyExists {
+                existing_repository_id,
+                canonical_path: duplicate_path,
+            } if existing_repository_id == repository_id && duplicate_path == canonical_path
         ));
     });
 }

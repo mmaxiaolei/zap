@@ -57,11 +57,11 @@ impl ProjectOrganizationModel {
 
         for repository in persisted_repositories {
             let repository = Self::repository_from_persisted(repository)?;
-            model.insert_repository_in_memory(repository)?;
+            model.insert_repository_checked(repository)?;
         }
         for workspace in persisted_workspaces {
             let workspace = Self::workspace_from_persisted(workspace)?;
-            model.insert_workspace_in_memory(workspace)?;
+            model.insert_workspace_checked(workspace)?;
         }
 
         Ok(model)
@@ -109,7 +109,7 @@ impl ProjectOrganizationModel {
         let repository_id = repository.id;
 
         self.persist_repository(&repository, "repository addition")?;
-        self.insert_repository_in_memory(repository)?;
+        self.commit_repository(repository);
         ctx.emit(ProjectOrganizationEvent::RepositoryAdded { repository_id });
         Ok(repository_id)
     }
@@ -176,7 +176,7 @@ impl ProjectOrganizationModel {
         }
         self.persist_repository(&repository, "repository insertion")?;
         let repository_id = repository.id;
-        self.insert_repository_in_memory(repository)?;
+        self.commit_repository(repository);
         ctx.emit(ProjectOrganizationEvent::RepositoryAdded { repository_id });
         Ok(())
     }
@@ -307,7 +307,7 @@ impl ProjectOrganizationModel {
         }
         self.persist_workspace(&workspace, "repository workspace insertion")?;
         let workspace_id = workspace.id;
-        self.insert_workspace_in_memory(workspace)?;
+        self.commit_workspace(workspace);
         ctx.emit(ProjectOrganizationEvent::WorkspaceAdded { workspace_id });
         Ok(())
     }
@@ -548,22 +548,33 @@ impl ProjectOrganizationModel {
         Ok(())
     }
 
-    fn insert_repository_in_memory(
+    fn insert_repository_checked(
         &mut self,
         repository: Repository,
     ) -> Result<(), ProjectOrganizationError> {
         self.validate_new_repository(&repository)?;
-        self.repository_ids_by_path
-            .insert(repository.path.clone(), repository.id);
-        self.repositories.insert(repository.id, repository);
+        self.commit_repository(repository);
         Ok(())
     }
 
-    fn insert_workspace_in_memory(
+    fn commit_repository(&mut self, repository: Repository) {
+        debug_assert!(!self.repositories.contains_key(&repository.id));
+        self.repository_ids_by_path
+            .insert(repository.path.clone(), repository.id);
+        self.repositories.insert(repository.id, repository);
+    }
+
+    fn insert_workspace_checked(
         &mut self,
         workspace: RepositoryWorkspace,
     ) -> Result<(), ProjectOrganizationError> {
         self.validate_new_workspace(&workspace)?;
+        self.commit_workspace(workspace);
+        Ok(())
+    }
+
+    fn commit_workspace(&mut self, workspace: RepositoryWorkspace) {
+        debug_assert!(!self.workspaces.contains_key(&workspace.id));
         self.workspace_ids_by_repository_branch.insert(
             (workspace.repository_id, workspace.branch.clone()),
             workspace.id,
@@ -571,7 +582,6 @@ impl ProjectOrganizationModel {
         self.workspace_ids_by_path
             .insert(workspace.worktree_path.clone(), workspace.id);
         self.workspaces.insert(workspace.id, workspace);
-        Ok(())
     }
 
     fn repository_from_persisted(
