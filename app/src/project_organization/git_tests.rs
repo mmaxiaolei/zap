@@ -81,6 +81,48 @@ fn run_git(cwd: &Path, args: &[&str]) {
     assert!(status.success(), "git {args:?} failed");
 }
 
+fn git_output(cwd: &Path, args: &[&str]) -> String {
+    let output = command::blocking::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+fn current_branch(worktree: &Path) -> String {
+    git_output(worktree, &["branch", "--show-current"])
+}
+
+fn branch_upstream(repository: &Path, branch: &str) -> Option<String> {
+    let full_ref = format!("refs/heads/{branch}");
+    let output = git_output(
+        repository,
+        &["for-each-ref", "--format=%(upstream)", &full_ref],
+    );
+    (!output.is_empty()).then_some(output)
+}
+
+fn ref_exists(repository: &Path, full_ref: &str) -> bool {
+    command::blocking::Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .args(["show-ref", "--verify", "--quiet", full_ref])
+        .status()
+        .unwrap()
+        .success()
+}
+
+fn ref_oid(repository: &Path, full_ref: &str) -> String {
+    git_output(repository, &["rev-parse", "--verify", full_ref])
+}
+
 #[test]
 fn rejects_linked_worktree_as_repository() {
     let fixture = GitFixture::new();
@@ -641,6 +683,1346 @@ fn creates_filesystem_safe_workspace_directory_names() {
         workspace_dir_name("///:::   ", "fedcba98"),
         "workspace-fedcba98"
     );
+}
+
+#[test]
+fn creates_new_branch_from_remote_ref_without_tracking() {
+    let fixture = GitFixture::new();
+    let path = fixture.tempdir.path().join("remote worktree");
+
+    create_from_remote(
+        &fixture.root,
+        "refs/remotes/origin/main",
+        "feature/remote",
+        &path,
+    )
+    .unwrap();
+
+    assert_eq!(current_branch(&path), "feature/remote");
+    assert_eq!(branch_upstream(&fixture.root, "feature/remote"), None);
+}
+
+#[test]
+fn successful_remote_creation_rejects_branch_change_before_verification() {
+    let fixture = GitFixture::new();
+    let path = fixture.tempdir.path().join("changed after success");
+    let expected_oid = ref_oid(&fixture.root, "refs/remotes/origin/main");
+    let changed_oid = git_output(
+        &fixture.root,
+        &[
+            "-c",
+            "user.name=Zap Tests",
+            "-c",
+            "user.email=zap@example.com",
+            "commit-tree",
+            "HEAD^{tree}",
+            "-p",
+            "HEAD",
+            "-m",
+            "post-success branch change",
+        ],
+    );
+
+    let error = create_from_remote_with_success_hook(
+        &fixture.root,
+        "refs/remotes/origin/main",
+        "feature/post-success-change",
+        &path,
+        || {
+            run_git(
+                &fixture.root,
+                &[
+                    "update-ref",
+                    "refs/heads/feature/post-success-change",
+                    &changed_oid,
+                    &expected_oid,
+                ],
+            );
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::WorktreeCreationVerificationFailed {
+            worktree_path,
+            branch,
+            expected_oid: expected,
+            verification_error,
+        } if worktree_path == path
+            && branch == "feature/post-success-change"
+            && expected == expected_oid
+            && matches!(verification_error.as_ref(), GitWorkspaceError::BranchChanged {
+                branch,
+                expected_oid: nested_expected,
+                actual_oid: Some(actual),
+                actual_symbolic_target: None,
+            } if branch == "feature/post-success-change"
+                && *nested_expected == expected_oid
+                && *actual == changed_oid)
+    ));
+    assert_eq!(
+        ref_oid(&fixture.root, "refs/heads/feature/post-success-change"),
+        changed_oid
+    );
+    assert!(path.exists());
+}
+
+#[test]
+fn rejects_invalid_or_symbolic_remote_refs_before_creation() {
+    let fixture = GitFixture::new();
+
+    for remote_ref in ["refs/heads/main", "refs/remotes/origin/HEAD"] {
+        let branch = format!("feature/{}", remote_ref.replace('/', "-"));
+        let path = fixture.tempdir.path().join(&branch);
+        let error = create_from_remote(&fixture.root, remote_ref, &branch, &path).unwrap_err();
+
+        assert!(matches!(
+            error,
+            GitWorkspaceError::InvalidRemoteRef { full_ref } if full_ref == remote_ref
+        ));
+        assert!(!ref_exists(&fixture.root, &format!("refs/heads/{branch}")));
+        assert!(!path.exists());
+    }
+}
+
+#[test]
+fn rejects_missing_remote_ref_before_creation() {
+    let fixture = GitFixture::new();
+    let path = fixture.tempdir.path().join("missing remote");
+
+    let error = create_from_remote(
+        &fixture.root,
+        "refs/remotes/origin/missing",
+        "feature/missing-remote",
+        &path,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::BranchNotFound { full_ref }
+            if full_ref == "refs/remotes/origin/missing"
+    ));
+    assert!(!ref_exists(
+        &fixture.root,
+        "refs/heads/feature/missing-remote"
+    ));
+    assert!(!path.exists());
+}
+
+#[test]
+fn rejects_invalid_new_branch_name_before_creation() {
+    let fixture = GitFixture::new();
+    let path = fixture.tempdir.path().join("invalid branch");
+
+    let error = create_from_remote(
+        &fixture.root,
+        "refs/remotes/origin/main",
+        "invalid branch",
+        &path,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::InvalidBranchName { branch } if branch == "invalid branch"
+    ));
+    assert!(!path.exists());
+}
+
+#[test]
+fn rejects_existing_new_branch_before_creation() {
+    let fixture = GitFixture::new();
+    run_git(&fixture.root, &["branch", "feature/existing"]);
+    let path = fixture.tempdir.path().join("existing branch");
+
+    let error = create_from_remote(
+        &fixture.root,
+        "refs/remotes/origin/main",
+        "feature/existing",
+        &path,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::BranchAlreadyExists { branch } if branch == "feature/existing"
+    ));
+    assert!(!path.exists());
+}
+
+#[test]
+fn rejects_existing_target_before_remote_creation() {
+    let fixture = GitFixture::new();
+    let path = fixture.tempdir.path().join("existing target");
+    std::fs::create_dir(&path).unwrap();
+
+    let error = create_from_remote(
+        &fixture.root,
+        "refs/remotes/origin/main",
+        "feature/target-exists",
+        &path,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::TargetExists { path: error_path } if error_path == path
+    ));
+    assert!(!ref_exists(
+        &fixture.root,
+        "refs/heads/feature/target-exists"
+    ));
+}
+
+#[test]
+fn atomic_claim_preserves_concurrent_same_oid_direct_branch() {
+    let fixture = GitFixture::new();
+    let path = fixture.tempdir.path().join("concurrent claim target");
+    let expected_oid = ref_oid(&fixture.root, "refs/remotes/origin/main");
+
+    let error = create_from_remote_with_hooks(
+        &fixture.root,
+        "refs/remotes/origin/main",
+        "feature/concurrent-claim",
+        &path,
+        || {
+            run_git(
+                &fixture.root,
+                &[
+                    "update-ref",
+                    "refs/heads/feature/concurrent-claim",
+                    &expected_oid,
+                ],
+            );
+        },
+        || {},
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::BranchClaimFailed {
+            branch,
+            expected_oid: expected,
+            claim_error,
+        } if branch == "feature/concurrent-claim"
+            && expected == expected_oid
+            && matches!(*claim_error, GitWorkspaceError::CommandFailed { operation, ref stderr, .. }
+                if operation == "atomically claim local branch" && !stderr.is_empty())
+    ));
+    assert_eq!(
+        ref_oid(&fixture.root, "refs/heads/feature/concurrent-claim"),
+        expected_oid
+    );
+    assert!(!path.exists());
+}
+
+#[test]
+fn atomic_claim_preserves_concurrent_same_oid_symbolic_branch() {
+    let fixture = GitFixture::new();
+    run_git(
+        &fixture.root,
+        &["branch", "feature/concurrent-claim-target"],
+    );
+    let path = fixture
+        .tempdir
+        .path()
+        .join("concurrent symbolic claim target");
+    let expected_oid = ref_oid(&fixture.root, "refs/remotes/origin/main");
+
+    let error = create_from_remote_with_hooks(
+        &fixture.root,
+        "refs/remotes/origin/main",
+        "feature/concurrent-symbolic-claim",
+        &path,
+        || {
+            run_git(
+                &fixture.root,
+                &[
+                    "symbolic-ref",
+                    "refs/heads/feature/concurrent-symbolic-claim",
+                    "refs/heads/feature/concurrent-claim-target",
+                ],
+            );
+        },
+        || {},
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::BranchClaimFailed {
+            branch,
+            expected_oid: expected,
+            claim_error,
+        } if branch == "feature/concurrent-symbolic-claim"
+            && expected == expected_oid
+            && matches!(*claim_error, GitWorkspaceError::CommandFailed { operation, ref stderr, .. }
+                if operation == "atomically claim local branch" && !stderr.is_empty())
+    ));
+    assert_eq!(
+        git_output(
+            &fixture.root,
+            &[
+                "symbolic-ref",
+                "refs/heads/feature/concurrent-symbolic-claim"
+            ]
+        ),
+        "refs/heads/feature/concurrent-claim-target"
+    );
+    assert!(ref_exists(
+        &fixture.root,
+        "refs/heads/feature/concurrent-claim-target"
+    ));
+    assert!(!path.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_dangling_symlink_target_without_creating_branch() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = GitFixture::new();
+    let path = fixture.tempdir.path().join("dangling target");
+    symlink(fixture.tempdir.path().join("missing target"), &path).unwrap();
+
+    let error = create_from_remote(
+        &fixture.root,
+        "refs/remotes/origin/main",
+        "feature/dangling-target",
+        &path,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::TargetExists { path: error_path } if error_path == path
+    ));
+    assert!(!ref_exists(
+        &fixture.root,
+        "refs/heads/feature/dangling-target"
+    ));
+    assert!(std::fs::symlink_metadata(path)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+}
+
+#[test]
+fn remote_creation_failure_cleans_branch_created_at_expected_oid() {
+    let fixture = GitFixture::new();
+    let path = fixture.tempdir.path().join("raced target");
+    let sentinel = path.join("keep.txt");
+
+    let error = create_from_remote_with_hooks(
+        &fixture.root,
+        "refs/remotes/origin/main",
+        "feature/raced-target",
+        &path,
+        || {
+            std::fs::create_dir(&path).unwrap();
+            std::fs::write(&sentinel, "keep").unwrap();
+        },
+        || {},
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::CommandFailed { operation, stderr, .. }
+            if operation == "create worktree from remote" && !stderr.is_empty()
+    ));
+    assert!(!ref_exists(
+        &fixture.root,
+        "refs/heads/feature/raced-target"
+    ));
+    assert_eq!(std::fs::read_to_string(sentinel).unwrap(), "keep");
+}
+
+#[test]
+fn remote_creation_cleanup_rejects_ref_recreated_after_compare_delete() {
+    let fixture = GitFixture::new();
+    let expected_oid = ref_oid(&fixture.root, "refs/remotes/origin/main");
+    run_git(
+        &fixture.root,
+        &[
+            "update-ref",
+            "refs/heads/feature/recreated-cleanup",
+            &expected_oid,
+        ],
+    );
+
+    let error = cleanup_failed_remote_creation_with_hook(
+        &fixture.root,
+        "feature/recreated-cleanup",
+        &expected_oid,
+        GitWorkspaceError::CommandFailed {
+            operation: "injected worktree creation",
+            args: vec!["worktree".to_string(), "add".to_string()],
+            stderr: "injected creation failure".to_string(),
+        },
+        || {
+            run_git(
+                &fixture.root,
+                &[
+                    "update-ref",
+                    "refs/heads/feature/recreated-cleanup",
+                    &expected_oid,
+                ],
+            );
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::WorktreeCreationCleanupFailed {
+            branch,
+            create_error,
+            cleanup_error,
+        } if branch == "feature/recreated-cleanup"
+            && matches!(*create_error, GitWorkspaceError::CommandFailed {
+                operation: "injected worktree creation",
+                ..
+            })
+            && matches!(cleanup_error.as_ref(), GitWorkspaceError::BranchCleanupFailed {
+                actual_oid: Some(actual),
+                actual_symbolic_target: None,
+                delete_error,
+                inspection_error: None,
+                ..
+            } if *actual == expected_oid
+                && matches!(delete_error.as_ref(), GitWorkspaceError::BranchDeleteNotCompleted { .. }))
+    ));
+    assert_eq!(
+        ref_oid(&fixture.root, "refs/heads/feature/recreated-cleanup"),
+        expected_oid
+    );
+}
+
+#[test]
+fn remote_creation_failure_preserves_concurrently_changed_branch() {
+    let fixture = GitFixture::new();
+    let path = fixture.tempdir.path().join("changed raced target");
+    let expected_oid = ref_oid(&fixture.root, "refs/remotes/origin/main");
+    let changed_oid = git_output(
+        &fixture.root,
+        &[
+            "-c",
+            "user.name=Zap Tests",
+            "-c",
+            "user.email=zap@example.com",
+            "commit-tree",
+            "HEAD^{tree}",
+            "-p",
+            "HEAD",
+            "-m",
+            "concurrent branch change",
+        ],
+    );
+
+    let error = create_from_remote_with_hooks(
+        &fixture.root,
+        "refs/remotes/origin/main",
+        "feature/changed-race",
+        &path,
+        || {
+            std::fs::create_dir(&path).unwrap();
+            std::fs::write(path.join("keep.txt"), "keep").unwrap();
+        },
+        || {
+            run_git(
+                &fixture.root,
+                &[
+                    "update-ref",
+                    "refs/heads/feature/changed-race",
+                    &changed_oid,
+                    &expected_oid,
+                ],
+            );
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::WorktreeCreationBranchChanged {
+            branch,
+            expected_oid: expected,
+            actual_oid: Some(actual),
+            actual_symbolic_target: None,
+            create_error,
+        } if branch == "feature/changed-race"
+            && expected == expected_oid
+            && actual == changed_oid
+            && matches!(*create_error, GitWorkspaceError::CommandFailed { .. })
+    ));
+    assert_eq!(
+        ref_oid(&fixture.root, "refs/heads/feature/changed-race"),
+        changed_oid
+    );
+}
+
+#[test]
+fn remote_creation_cleanup_preserves_same_oid_symbolic_branch() {
+    let fixture = GitFixture::new();
+    run_git(&fixture.root, &["branch", "feature/cleanup-target"]);
+    let path = fixture.tempdir.path().join("symbolic cleanup target");
+    let expected_oid = ref_oid(&fixture.root, "refs/remotes/origin/main");
+
+    let error = create_from_remote_with_hooks(
+        &fixture.root,
+        "refs/remotes/origin/main",
+        "feature/symbolic-cleanup",
+        &path,
+        || {
+            std::fs::create_dir(&path).unwrap();
+            std::fs::write(path.join("keep.txt"), "keep").unwrap();
+        },
+        || {
+            run_git(
+                &fixture.root,
+                &[
+                    "update-ref",
+                    "--no-deref",
+                    "-d",
+                    "refs/heads/feature/symbolic-cleanup",
+                    &expected_oid,
+                ],
+            );
+            run_git(
+                &fixture.root,
+                &[
+                    "symbolic-ref",
+                    "refs/heads/feature/symbolic-cleanup",
+                    "refs/heads/feature/cleanup-target",
+                ],
+            );
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::WorktreeCreationBranchChanged {
+            branch,
+            expected_oid: expected,
+            actual_oid: None,
+            actual_symbolic_target: Some(symbolic_target),
+            create_error,
+        } if branch == "feature/symbolic-cleanup"
+            && expected == expected_oid
+            && symbolic_target == "refs/heads/feature/cleanup-target"
+            && matches!(*create_error, GitWorkspaceError::CommandFailed { .. })
+    ));
+    assert_eq!(
+        git_output(
+            &fixture.root,
+            &["symbolic-ref", "refs/heads/feature/symbolic-cleanup"]
+        ),
+        "refs/heads/feature/cleanup-target"
+    );
+    assert!(ref_exists(
+        &fixture.root,
+        "refs/heads/feature/cleanup-target"
+    ));
+}
+
+#[test]
+fn rejects_missing_local_branch_before_creation() {
+    let fixture = GitFixture::new();
+    let path = fixture.tempdir.path().join("missing local");
+
+    let error = create_from_local(&fixture.root, "feature/missing", &path).unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::BranchNotFound { full_ref }
+            if full_ref == "refs/heads/feature/missing"
+    ));
+    assert!(!path.exists());
+}
+
+#[test]
+fn reports_main_repository_path_when_local_branch_is_checked_out() {
+    let fixture = GitFixture::new();
+    let path = fixture.tempdir.path().join("second main");
+
+    let error = create_from_local(&fixture.root, "main", &path).unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::BranchAlreadyCheckedOut { branch, path }
+            if branch == "main" && path == fixture.root.canonicalize().unwrap()
+    ));
+    assert!(!path.exists());
+}
+
+#[test]
+fn reports_the_path_that_already_checks_out_a_local_branch() {
+    let fixture = GitFixture::new();
+    let occupied = fixture.add_linked_worktree("feature/occupied");
+    let path = fixture.tempdir.path().join("second occupied");
+
+    let error = create_from_local(&fixture.root, "feature/occupied", &path).unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::BranchAlreadyCheckedOut { branch, path }
+            if branch == "feature/occupied" && path == occupied.canonicalize().unwrap()
+    ));
+    assert!(!path.exists());
+}
+
+#[test]
+fn creates_local_worktree_at_path_with_spaces_and_quotes() {
+    let fixture = GitFixture::new();
+    run_git(&fixture.root, &["branch", "feature/local"]);
+    let path = fixture.tempdir.path().join("local worktree with 'quote");
+
+    create_from_local(&fixture.root, "feature/local", &path).unwrap();
+
+    assert_eq!(current_branch(&path), "feature/local");
+}
+
+#[cfg(unix)]
+#[test]
+fn os_arg_command_helper_preserves_non_utf8_bytes() {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    let fixture = GitFixture::new();
+    let raw_arg = std::ffi::OsString::from_vec(b"raw-path-\xff".to_vec());
+    let args = [
+        std::ffi::OsStr::new("rev-parse"),
+        std::ffi::OsStr::new("--git-path"),
+        raw_arg.as_os_str(),
+    ];
+
+    let output =
+        git_output_with_os_args_for_operation(&fixture.root, "echo raw path", &args).unwrap();
+
+    assert!(output.stdout.ends_with(b"raw-path-\xff\n"));
+    assert_eq!(raw_arg.as_os_str().as_bytes(), b"raw-path-\xff");
+}
+
+#[test]
+fn dirty_worktree_blocks_deletion_before_mutation() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/dirty");
+
+    let untracked = worktree_path.join("untracked.txt");
+    std::fs::write(&untracked, "untracked").unwrap();
+    assert!(matches!(
+        deletion_preflight(&fixture.root, &worktree_path, true),
+        Err(GitWorkspaceError::DirtyWorktree { path }) if path == worktree_path.canonicalize().unwrap()
+    ));
+    assert_eq!(std::fs::read_to_string(&untracked).unwrap(), "untracked");
+    std::fs::remove_file(&untracked).unwrap();
+
+    let tracked = worktree_path.join("README.md");
+    std::fs::write(&tracked, "unstaged").unwrap();
+    assert!(matches!(
+        deletion_preflight(&fixture.root, &worktree_path, true),
+        Err(GitWorkspaceError::DirtyWorktree { .. })
+    ));
+    run_git(&worktree_path, &["restore", "README.md"]);
+
+    std::fs::write(&tracked, "staged").unwrap();
+    run_git(&worktree_path, &["add", "README.md"]);
+    assert!(matches!(
+        deletion_preflight(&fixture.root, &worktree_path, true),
+        Err(GitWorkspaceError::DirtyWorktree { .. })
+    ));
+    assert!(worktree_path.exists());
+    assert!(ref_exists(&fixture.root, "refs/heads/feature/dirty"));
+}
+
+#[test]
+fn worktree_branch_mismatch_blocks_removal_before_mutation() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/actual");
+
+    let error = remove_workspace(
+        &fixture.root,
+        &worktree_path,
+        "feature/expected",
+        true,
+        false,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::WorktreeBranchMismatch { expected, actual }
+            if expected == "feature/expected" && actual == "feature/actual"
+    ));
+    assert!(worktree_path.exists());
+    assert!(ref_exists(&fixture.root, "refs/heads/feature/actual"));
+}
+
+#[test]
+fn missing_branch_blocks_deletion_before_mutation() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/missing-ref");
+    run_git(
+        &fixture.root,
+        &["update-ref", "-d", "refs/heads/feature/missing-ref"],
+    );
+
+    let error = deletion_preflight(&fixture.root, &worktree_path, true).unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::BranchNotFound { full_ref }
+            if full_ref == "refs/heads/feature/missing-ref"
+    ));
+    assert!(worktree_path.exists());
+}
+
+#[test]
+fn detached_worktree_is_rejected_before_mutation() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.tempdir.path().join("detached worktree");
+    let output = command::blocking::Command::new("git")
+        .arg("-C")
+        .arg(&fixture.root)
+        .args(["worktree", "add", "--detach"])
+        .arg(&worktree_path)
+        .arg("HEAD")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let error = deletion_preflight(&fixture.root, &worktree_path, false).unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::WorktreeHasNoLocalBranch { path }
+            if path == worktree_path.canonicalize().unwrap()
+    ));
+    assert!(worktree_path.exists());
+}
+
+#[test]
+fn unmerged_branch_without_force_blocks_removal_before_mutation() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/unmerged");
+    std::fs::write(worktree_path.join("feature.txt"), "feature").unwrap();
+    run_git(&worktree_path, &["add", "feature.txt"]);
+    run_git(
+        &worktree_path,
+        &[
+            "-c",
+            "user.name=Zap Tests",
+            "-c",
+            "user.email=zap@example.com",
+            "commit",
+            "-m",
+            "feature commit",
+        ],
+    );
+
+    let preflight = deletion_preflight(&fixture.root, &worktree_path, true).unwrap();
+    assert!(!preflight.is_merged);
+    assert_eq!(preflight.merge_target, "refs/remotes/origin/main");
+
+    let error = remove_workspace(
+        &fixture.root,
+        &worktree_path,
+        "feature/unmerged",
+        true,
+        false,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::BranchNotMerged { branch, merge_target }
+            if branch == "feature/unmerged" && merge_target == "refs/remotes/origin/main"
+    ));
+    assert!(worktree_path.exists());
+    assert!(ref_exists(&fixture.root, "refs/heads/feature/unmerged"));
+}
+
+#[test]
+fn merged_branch_is_safely_removed() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/merged");
+    run_git(
+        &fixture.root,
+        &["push", "origin", "main:refs/heads/integration"],
+    );
+    run_git(&fixture.root, &["fetch", "origin"]);
+    run_git(
+        &fixture.root,
+        &[
+            "branch",
+            "--set-upstream-to=origin/integration",
+            "feature/merged",
+        ],
+    );
+
+    let preflight = deletion_preflight(&fixture.root, &worktree_path, true).unwrap();
+    assert_eq!(preflight.branch, "feature/merged");
+    assert!(preflight.is_merged);
+    assert_eq!(preflight.merge_target, "refs/remotes/origin/integration");
+
+    remove_workspace(&fixture.root, &worktree_path, "feature/merged", true, false).unwrap();
+
+    assert!(!worktree_path.exists());
+    assert!(!ref_exists(&fixture.root, "refs/heads/feature/merged"));
+}
+
+#[test]
+fn default_merge_target_deletion_does_not_depend_on_main_worktree_head() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/default-target");
+    std::fs::write(worktree_path.join("merged.txt"), "merged").unwrap();
+    run_git(&worktree_path, &["add", "merged.txt"]);
+    run_git(
+        &worktree_path,
+        &[
+            "-c",
+            "user.name=Zap Tests",
+            "-c",
+            "user.email=zap@example.com",
+            "commit",
+            "-m",
+            "merged feature",
+        ],
+    );
+    run_git(
+        &fixture.root,
+        &[
+            "-c",
+            "user.name=Zap Tests",
+            "-c",
+            "user.email=zap@example.com",
+            "merge",
+            "--no-ff",
+            "feature/default-target",
+            "-m",
+            "merge feature",
+        ],
+    );
+    run_git(&fixture.root, &["push", "origin", "main"]);
+    run_git(&fixture.root, &["branch", "other", "HEAD~1"]);
+    run_git(&fixture.root, &["switch", "other"]);
+
+    let preflight = deletion_preflight(&fixture.root, &worktree_path, true).unwrap();
+    assert!(preflight.is_merged);
+    assert_eq!(preflight.merge_target, "refs/remotes/origin/main");
+    assert_eq!(
+        preflight.worktree_path,
+        worktree_path.canonicalize().unwrap()
+    );
+    assert_eq!(
+        preflight.branch_oid,
+        ref_oid(&fixture.root, "refs/heads/feature/default-target")
+    );
+
+    remove_workspace(
+        &fixture.root,
+        &worktree_path,
+        "feature/default-target",
+        true,
+        false,
+    )
+    .unwrap();
+
+    assert!(!worktree_path.exists());
+    assert!(!ref_exists(
+        &fixture.root,
+        "refs/heads/feature/default-target"
+    ));
+}
+
+#[test]
+fn branch_oid_change_after_preflight_blocks_worktree_mutation() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/changed");
+    let expected_oid = ref_oid(&fixture.root, "refs/heads/feature/changed");
+    let changed_oid = git_output(
+        &fixture.root,
+        &[
+            "-c",
+            "user.name=Zap Tests",
+            "-c",
+            "user.email=zap@example.com",
+            "commit-tree",
+            "HEAD^{tree}",
+            "-p",
+            "HEAD",
+            "-m",
+            "changed ref",
+        ],
+    );
+
+    let error = remove_workspace_with_hook(
+        &fixture.root,
+        &worktree_path,
+        "feature/changed",
+        true,
+        false,
+        || {
+            run_git(
+                &fixture.root,
+                &[
+                    "update-ref",
+                    "refs/heads/feature/changed",
+                    &changed_oid,
+                    &expected_oid,
+                ],
+            );
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::BranchChanged {
+            branch,
+            expected_oid: expected,
+            actual_oid: Some(actual),
+            actual_symbolic_target: None,
+        } if branch == "feature/changed"
+            && expected == expected_oid
+            && actual == changed_oid
+    ));
+    assert!(worktree_path.exists());
+    assert_eq!(
+        ref_oid(&fixture.root, "refs/heads/feature/changed"),
+        changed_oid
+    );
+}
+
+#[test]
+fn symbolic_branch_change_after_preflight_blocks_worktree_mutation() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/symbolic-change");
+    run_git(&fixture.root, &["branch", "feature/symbolic-target"]);
+    let expected_oid = ref_oid(&fixture.root, "refs/heads/feature/symbolic-change");
+
+    let error = remove_workspace_with_hook(
+        &fixture.root,
+        &worktree_path,
+        "feature/symbolic-change",
+        true,
+        false,
+        || {
+            run_git(
+                &fixture.root,
+                &[
+                    "update-ref",
+                    "--no-deref",
+                    "-d",
+                    "refs/heads/feature/symbolic-change",
+                    &expected_oid,
+                ],
+            );
+            run_git(
+                &fixture.root,
+                &[
+                    "symbolic-ref",
+                    "refs/heads/feature/symbolic-change",
+                    "refs/heads/feature/symbolic-target",
+                ],
+            );
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(
+            &error,
+            GitWorkspaceError::BranchChanged {
+                branch,
+                expected_oid: expected,
+                actual_oid: None,
+                actual_symbolic_target: Some(symbolic_target),
+            } if branch == "feature/symbolic-change"
+                && expected == &expected_oid
+                && symbolic_target == "refs/heads/feature/symbolic-target"
+        ),
+        "unexpected error: {error:?}"
+    );
+    assert!(worktree_path.exists());
+    assert_eq!(
+        git_output(
+            &fixture.root,
+            &["symbolic-ref", "refs/heads/feature/symbolic-change"]
+        ),
+        "refs/heads/feature/symbolic-target"
+    );
+    assert!(ref_exists(
+        &fixture.root,
+        "refs/heads/feature/symbolic-target"
+    ));
+}
+
+#[test]
+fn branch_oid_change_after_worktree_removal_is_not_deleted() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/late-change");
+    let registered_path = worktree_path.canonicalize().unwrap();
+    let expected_oid = ref_oid(&fixture.root, "refs/heads/feature/late-change");
+    let changed_oid = git_output(
+        &fixture.root,
+        &[
+            "-c",
+            "user.name=Zap Tests",
+            "-c",
+            "user.email=zap@example.com",
+            "commit-tree",
+            "HEAD^{tree}",
+            "-p",
+            "HEAD",
+            "-m",
+            "late branch change",
+        ],
+    );
+
+    let error = remove_workspace_with_hooks(
+        &fixture.root,
+        &worktree_path,
+        "feature/late-change",
+        true,
+        false,
+        || {},
+        || {
+            run_git(
+                &fixture.root,
+                &[
+                    "update-ref",
+                    "refs/heads/feature/late-change",
+                    &changed_oid,
+                    &expected_oid,
+                ],
+            );
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::BranchDeleteFailed {
+            worktree_path: removed_path,
+            worktree_removed: true,
+            branch,
+            expected_oid: expected,
+            actual_oid: Some(actual),
+            actual_symbolic_target: None,
+            delete_error,
+            inspection_error: None,
+        } if removed_path == registered_path
+            && branch == "feature/late-change"
+            && expected == expected_oid
+            && actual == changed_oid
+            && matches!(*delete_error, GitWorkspaceError::BranchChanged { .. })
+    ));
+    assert!(!worktree_path.exists());
+    assert_eq!(
+        ref_oid(&fixture.root, "refs/heads/feature/late-change"),
+        changed_oid
+    );
+}
+
+#[test]
+fn symbolic_branch_change_after_worktree_removal_is_not_deleted() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/late-symbolic");
+    let registered_path = worktree_path.canonicalize().unwrap();
+    run_git(&fixture.root, &["branch", "feature/late-symbolic-target"]);
+    let expected_oid = ref_oid(&fixture.root, "refs/heads/feature/late-symbolic");
+
+    let error = remove_workspace_with_hooks(
+        &fixture.root,
+        &worktree_path,
+        "feature/late-symbolic",
+        true,
+        false,
+        || {},
+        || {
+            run_git(
+                &fixture.root,
+                &[
+                    "update-ref",
+                    "--no-deref",
+                    "-d",
+                    "refs/heads/feature/late-symbolic",
+                    &expected_oid,
+                ],
+            );
+            run_git(
+                &fixture.root,
+                &[
+                    "symbolic-ref",
+                    "refs/heads/feature/late-symbolic",
+                    "refs/heads/feature/late-symbolic-target",
+                ],
+            );
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::BranchDeleteFailed {
+            worktree_path: removed_path,
+            worktree_removed: true,
+            branch,
+            expected_oid: expected,
+            actual_oid: None,
+            actual_symbolic_target: Some(symbolic_target),
+            delete_error,
+            inspection_error: None,
+        } if removed_path == registered_path
+            && branch == "feature/late-symbolic"
+            && expected == expected_oid
+            && symbolic_target == "refs/heads/feature/late-symbolic-target"
+            && matches!(*delete_error, GitWorkspaceError::BranchChanged { .. })
+    ));
+    assert!(!worktree_path.exists());
+    assert_eq!(
+        git_output(
+            &fixture.root,
+            &["symbolic-ref", "refs/heads/feature/late-symbolic"]
+        ),
+        "refs/heads/feature/late-symbolic-target"
+    );
+    assert!(ref_exists(
+        &fixture.root,
+        "refs/heads/feature/late-symbolic-target"
+    ));
+}
+
+#[test]
+fn branch_delete_command_io_preserves_partial_mutation_context() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/delete-io");
+    let registered_path = worktree_path.canonicalize().unwrap();
+    let expected_oid = ref_oid(&fixture.root, "refs/heads/feature/delete-io");
+
+    let error = remove_workspace_with_delete_runner(
+        &fixture.root,
+        &worktree_path,
+        "feature/delete-io",
+        true,
+        false,
+        || {
+            Err(GitWorkspaceError::CommandIo {
+                operation: "injected branch delete",
+                args: vec!["update-ref".to_string()],
+                source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "injected IO"),
+            })
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::BranchDeleteFailed {
+            worktree_path,
+            worktree_removed: true,
+            branch,
+            expected_oid: expected,
+            actual_oid: Some(actual),
+            actual_symbolic_target: None,
+            delete_error,
+            inspection_error: None,
+        } if worktree_path == registered_path
+            && branch == "feature/delete-io"
+            && expected == expected_oid
+            && actual == expected_oid
+            && matches!(delete_error.as_ref(), GitWorkspaceError::CommandIo { source, .. } if source.kind() == std::io::ErrorKind::PermissionDenied)
+    ));
+    assert!(!registered_path.exists());
+    assert!(ref_exists(&fixture.root, "refs/heads/feature/delete-io"));
+}
+
+#[test]
+fn branch_delete_inspection_error_is_preserved_with_delete_error() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/inspect-error");
+    let expected_oid = ref_oid(&fixture.root, "refs/heads/feature/inspect-error");
+
+    let error = remove_workspace_with_inspection_runner(
+        &fixture.root,
+        &worktree_path,
+        "feature/inspect-error",
+        true,
+        false,
+        || {
+            Err(GitWorkspaceError::CommandFailed {
+                operation: "injected branch delete",
+                args: vec!["update-ref".to_string()],
+                stderr: "injected delete failure".to_string(),
+            })
+        },
+        || {
+            Err(GitWorkspaceError::CommandIo {
+                operation: "injected branch inspection",
+                args: vec!["symbolic-ref".to_string()],
+                source: std::io::Error::new(std::io::ErrorKind::Other, "injected inspection"),
+            })
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::BranchDeleteFailed {
+            worktree_removed: true,
+            actual_oid: None,
+            actual_symbolic_target: None,
+            delete_error,
+            inspection_error: Some(inspection_error),
+            ..
+        } if matches!(*delete_error, GitWorkspaceError::CommandFailed { .. })
+            && matches!(inspection_error.as_ref(), GitWorkspaceError::CommandIo { operation, .. } if *operation == "injected branch inspection")
+    ));
+    assert!(!worktree_path.exists());
+    assert_eq!(
+        ref_oid(&fixture.root, "refs/heads/feature/inspect-error"),
+        expected_oid
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn removal_uses_registered_path_when_alias_changes_after_preflight() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = GitFixture::new();
+    let original = fixture.add_linked_worktree("feature/alias-original");
+    let other = fixture.add_linked_worktree("feature/alias-other");
+    let alias = fixture.tempdir.path().join("worktree alias");
+    symlink(&original, &alias).unwrap();
+
+    remove_workspace_with_hook(
+        &fixture.root,
+        &alias,
+        "feature/alias-original",
+        false,
+        false,
+        || {
+            std::fs::remove_file(&alias).unwrap();
+            symlink(&other, &alias).unwrap();
+        },
+    )
+    .unwrap();
+
+    assert!(!original.exists());
+    assert!(other.exists());
+    assert!(ref_exists(
+        &fixture.root,
+        "refs/heads/feature/alias-original"
+    ));
+    assert!(ref_exists(&fixture.root, "refs/heads/feature/alias-other"));
+}
+
+#[test]
+fn confirmed_force_removes_unmerged_branch() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/force");
+    std::fs::write(worktree_path.join("force.txt"), "force").unwrap();
+    run_git(&worktree_path, &["add", "force.txt"]);
+    run_git(
+        &worktree_path,
+        &[
+            "-c",
+            "user.name=Zap Tests",
+            "-c",
+            "user.email=zap@example.com",
+            "commit",
+            "-m",
+            "force commit",
+        ],
+    );
+
+    remove_workspace(&fixture.root, &worktree_path, "feature/force", true, true).unwrap();
+
+    assert!(!worktree_path.exists());
+    assert!(!ref_exists(&fixture.root, "refs/heads/feature/force"));
+}
+
+#[test]
+fn removes_worktree_but_keeps_branch_without_remote_metadata() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/keep");
+    run_git(&fixture.root, &["remote", "remove", "origin"]);
+
+    let preflight = deletion_preflight(&fixture.root, &worktree_path, false).unwrap();
+    assert_eq!(preflight.branch, "feature/keep");
+    assert!(preflight.is_merged);
+    assert!(preflight.merge_target.is_empty());
+
+    remove_workspace(&fixture.root, &worktree_path, "feature/keep", false, false).unwrap();
+
+    assert!(!worktree_path.exists());
+    assert!(ref_exists(&fixture.root, "refs/heads/feature/keep"));
+}
+
+#[tokio::test]
+async fn async_worktree_wrappers_return_creation_preflight_and_removal_results() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.tempdir.path().join("async worktree");
+
+    create_from_remote_async(
+        fixture.root.clone(),
+        "refs/remotes/origin/main".to_string(),
+        "feature/async".to_string(),
+        worktree_path.clone(),
+    )
+    .await
+    .unwrap();
+    let preflight = deletion_preflight_async(fixture.root.clone(), worktree_path.clone(), true)
+        .await
+        .unwrap();
+    assert_eq!(preflight.branch, "feature/async");
+    assert!(preflight.is_merged);
+
+    remove_workspace_async(
+        fixture.root.clone(),
+        worktree_path.clone(),
+        "feature/async".to_string(),
+        true,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(!worktree_path.exists());
+    assert!(!ref_exists(&fixture.root, "refs/heads/feature/async"));
+}
+
+#[tokio::test]
+async fn create_from_local_async_returns_created_worktree() {
+    let fixture = GitFixture::new();
+    run_git(&fixture.root, &["branch", "feature/async-local"]);
+    let worktree_path = fixture.tempdir.path().join("async local worktree");
+
+    create_from_local_async(
+        fixture.root.clone(),
+        "feature/async-local".to_string(),
+        worktree_path.clone(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(current_branch(&worktree_path), "feature/async-local");
+    remove_workspace_async(
+        fixture.root.clone(),
+        worktree_path.clone(),
+        "feature/async-local".to_string(),
+        true,
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(!worktree_path.exists());
 }
 
 #[tokio::test]
