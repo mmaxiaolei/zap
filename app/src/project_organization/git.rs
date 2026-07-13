@@ -102,6 +102,20 @@ pub enum GitWorkspaceError {
         operation_error: Box<GitWorkspaceError>,
         abort_error: RefTransactionError,
     },
+    #[error(
+        "worktree `{worktree_path}` was removed, but committing deletion of `{branch_ref}` at {branch_oid} failed: {source}; branch inspection error: {inspection_error:?}"
+    )]
+    BranchDeleteTransactionFailed {
+        worktree_path: PathBuf,
+        worktree_removed: bool,
+        branch_ref: String,
+        branch_oid: String,
+        merge_target_ref: Option<String>,
+        merge_target_oid: Option<String>,
+        #[source]
+        source: RefTransactionError,
+        inspection_error: Option<Box<GitWorkspaceError>>,
+    },
     #[error("failed to canonicalize `{path}`: {source}")]
     Canonicalize {
         path: PathBuf,
@@ -181,26 +195,6 @@ pub enum GitWorkspaceError {
         actual_oid: Option<String>,
         actual_symbolic_target: Option<String>,
     },
-    #[error(
-        "git reported success deleting branch ref `{full_ref}` at expected OID {expected_oid}, but deletion could not be confirmed"
-    )]
-    BranchDeleteNotCompleted {
-        full_ref: String,
-        expected_oid: String,
-    },
-    #[error(
-        "worktree `{worktree_path}` was removed, but deleting branch `{branch}` at expected OID {expected_oid} failed: {delete_error}; current direct OID {actual_oid:?}, symbolic target {actual_symbolic_target:?}, inspection error {inspection_error:?}"
-    )]
-    BranchDeleteFailed {
-        worktree_path: PathBuf,
-        worktree_removed: bool,
-        branch: String,
-        expected_oid: String,
-        actual_oid: Option<String>,
-        actual_symbolic_target: Option<String>,
-        delete_error: Box<GitWorkspaceError>,
-        inspection_error: Option<Box<GitWorkspaceError>>,
-    },
     #[error("git returned invalid branch ref record `{record}`")]
     InvalidBranchRefRecord { record: String },
     #[error("remote ref `{full_ref}` matches multiple remotes: {remotes:?}")]
@@ -270,8 +264,8 @@ pub enum GitWorkspaceError {
     )]
     CleanupFailed {
         path: PathBuf,
-        #[source]
         cleanup_source: io::Error,
+        #[source]
         clone_error: Box<GitWorkspaceError>,
     },
     #[error("Git URL `{url}` does not contain a repository name")]
@@ -978,6 +972,8 @@ pub fn remove_workspace(
         force_branch,
         || {},
         || {},
+        remove_registered_worktree,
+        |_| {},
     )
 }
 
@@ -1003,10 +999,87 @@ where
         force_branch,
         after_candidate,
         after_prepared,
+        remove_registered_worktree,
+        |_| {},
     )
 }
 
-fn remove_workspace_inner<AfterCandidate, AfterPrepared>(
+#[cfg(test)]
+pub(crate) fn remove_workspace_with_hook<AfterCandidate>(
+    repository: &Path,
+    worktree_path: &Path,
+    branch: &str,
+    delete_branch: bool,
+    force_branch: bool,
+    after_candidate: AfterCandidate,
+) -> Result<(), GitWorkspaceError>
+where
+    AfterCandidate: FnOnce(),
+{
+    remove_workspace_inner(
+        repository,
+        worktree_path,
+        branch,
+        delete_branch,
+        force_branch,
+        after_candidate,
+        || {},
+        remove_registered_worktree,
+        |_| {},
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn remove_workspace_with_remove_runner<RemoveRunner>(
+    repository: &Path,
+    worktree_path: &Path,
+    branch: &str,
+    delete_branch: bool,
+    force_branch: bool,
+    remove_runner: RemoveRunner,
+) -> Result<(), GitWorkspaceError>
+where
+    RemoveRunner: FnOnce(&Path, &Path) -> Result<(), GitWorkspaceError>,
+{
+    remove_workspace_inner(
+        repository,
+        worktree_path,
+        branch,
+        delete_branch,
+        force_branch,
+        || {},
+        || {},
+        remove_runner,
+        |_| {},
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn remove_workspace_with_after_remove_hook<AfterRemove>(
+    repository: &Path,
+    worktree_path: &Path,
+    branch: &str,
+    delete_branch: bool,
+    force_branch: bool,
+    after_remove: AfterRemove,
+) -> Result<(), GitWorkspaceError>
+where
+    AfterRemove: FnOnce(&mut PreparedRefDelete),
+{
+    remove_workspace_inner(
+        repository,
+        worktree_path,
+        branch,
+        delete_branch,
+        force_branch,
+        || {},
+        || {},
+        remove_registered_worktree,
+        after_remove,
+    )
+}
+
+fn remove_workspace_inner<AfterCandidate, AfterPrepared, RemoveRunner, AfterRemove>(
     repository: &Path,
     worktree_path: &Path,
     branch: &str,
@@ -1014,10 +1087,14 @@ fn remove_workspace_inner<AfterCandidate, AfterPrepared>(
     force_branch: bool,
     after_candidate: AfterCandidate,
     after_prepared: AfterPrepared,
+    remove_runner: RemoveRunner,
+    after_remove: AfterRemove,
 ) -> Result<(), GitWorkspaceError>
 where
     AfterCandidate: FnOnce(),
     AfterPrepared: FnOnce(),
+    RemoveRunner: FnOnce(&Path, &Path) -> Result<(), GitWorkspaceError>,
+    AfterRemove: FnOnce(&mut PreparedRefDelete),
 {
     let candidate =
         capture_deletion_candidate(repository, worktree_path, delete_branch && !force_branch)?;
@@ -1039,7 +1116,7 @@ where
             oid: &target.oid,
         })
     };
-    let transaction = PreparedRefDelete::prepare(
+    let mut transaction = PreparedRefDelete::prepare(
         repository,
         &candidate.branch_ref,
         &candidate.branch_oid,
@@ -1058,12 +1135,51 @@ where
         Ok(path) => path,
         Err(error) => return abort_after_failed_operation(transaction, error),
     };
-    if let Err(error) = remove_registered_worktree(repository, &registered_path) {
+    if let Err(error) = remove_runner(repository, &registered_path) {
         return abort_after_failed_operation(transaction, error);
     }
-    transaction
-        .commit()
-        .map_err(|source| GitWorkspaceError::RefTransaction { source })
+    after_remove(&mut transaction);
+    if let Err(source) = transaction.commit() {
+        let branch_ref = candidate.branch_ref.clone();
+        let branch_oid = candidate.branch_oid.clone();
+        let merge_target_ref = candidate
+            .merge_target
+            .as_ref()
+            .map(|target| target.full_ref.clone());
+        let merge_target_oid = candidate
+            .merge_target
+            .as_ref()
+            .map(|target| target.oid.clone());
+        let (inspection_error, actual_snapshot) = match direct_ref_snapshot(repository, &branch_ref)
+        {
+            Ok(snapshot) => (None, Some(snapshot)),
+            Err(error) => (Some(Box::new(error)), None),
+        };
+        return Err(GitWorkspaceError::BranchDeleteTransactionFailed {
+            worktree_path: registered_path,
+            worktree_removed: true,
+            branch_ref,
+            branch_oid: branch_oid.clone(),
+            merge_target_ref,
+            merge_target_oid,
+            source,
+            inspection_error: inspection_error.or_else(|| {
+                actual_snapshot.and_then(|snapshot| {
+                    (snapshot.direct_oid.is_some() || snapshot.symbolic_target.is_some()).then(
+                        || {
+                            Box::new(GitWorkspaceError::BranchChanged {
+                                branch: branch.to_string(),
+                                expected_oid: branch_oid,
+                                actual_oid: snapshot.direct_oid,
+                                actual_symbolic_target: snapshot.symbolic_target,
+                            })
+                        },
+                    )
+                })
+            }),
+        });
+    }
+    Ok(())
 }
 
 fn validate_requested_branch(
@@ -1152,275 +1268,6 @@ fn abort_after_failed_operation(
             abort_error,
         }),
     }
-}
-
-#[cfg(test)]
-pub(crate) fn remove_workspace_with_hook<F>(
-    repository: &Path,
-    worktree_path: &Path,
-    branch: &str,
-    delete_branch: bool,
-    force_branch: bool,
-    before_mutation: F,
-) -> Result<(), GitWorkspaceError>
-where
-    F: FnOnce(),
-{
-    remove_workspace_with_hooks(
-        repository,
-        worktree_path,
-        branch,
-        delete_branch,
-        force_branch,
-        before_mutation,
-        || {},
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn remove_workspace_with_hooks<BeforeMutation, BeforeBranchDelete>(
-    repository: &Path,
-    worktree_path: &Path,
-    branch: &str,
-    delete_branch: bool,
-    force_branch: bool,
-    before_mutation: BeforeMutation,
-    before_branch_delete: BeforeBranchDelete,
-) -> Result<(), GitWorkspaceError>
-where
-    BeforeMutation: FnOnce(),
-    BeforeBranchDelete: FnOnce(),
-{
-    remove_workspace_with_runners(
-        repository,
-        worktree_path,
-        branch,
-        delete_branch,
-        force_branch,
-        before_mutation,
-        before_branch_delete,
-        run_branch_compare_delete,
-        direct_ref_snapshot,
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn remove_workspace_with_delete_runner<DeleteRunner>(
-    repository: &Path,
-    worktree_path: &Path,
-    branch: &str,
-    delete_branch: bool,
-    force_branch: bool,
-    delete_runner: DeleteRunner,
-) -> Result<(), GitWorkspaceError>
-where
-    DeleteRunner: FnOnce() -> Result<Output, GitWorkspaceError>,
-{
-    remove_workspace_with_runners(
-        repository,
-        worktree_path,
-        branch,
-        delete_branch,
-        force_branch,
-        || {},
-        || {},
-        move |_, _, _| delete_runner(),
-        direct_ref_snapshot,
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn remove_workspace_with_inspection_runner<DeleteRunner, InspectionRunner>(
-    repository: &Path,
-    worktree_path: &Path,
-    branch: &str,
-    delete_branch: bool,
-    force_branch: bool,
-    delete_runner: DeleteRunner,
-    inspection_runner: InspectionRunner,
-) -> Result<(), GitWorkspaceError>
-where
-    DeleteRunner: FnOnce() -> Result<Output, GitWorkspaceError>,
-    InspectionRunner: FnOnce() -> Result<(), GitWorkspaceError>,
-{
-    remove_workspace_with_runners(
-        repository,
-        worktree_path,
-        branch,
-        delete_branch,
-        force_branch,
-        || {},
-        || {},
-        move |_, _, _| delete_runner(),
-        move |repository, full_ref| {
-            inspection_runner()?;
-            direct_ref_snapshot(repository, full_ref)
-        },
-    )
-}
-
-fn remove_workspace_with_runners<
-    BeforeMutation,
-    BeforeBranchDelete,
-    DeleteRunner,
-    InspectionRunner,
->(
-    repository: &Path,
-    worktree_path: &Path,
-    branch: &str,
-    delete_branch: bool,
-    force_branch: bool,
-    before_mutation: BeforeMutation,
-    before_branch_delete: BeforeBranchDelete,
-    delete_runner: DeleteRunner,
-    inspection_runner: InspectionRunner,
-) -> Result<(), GitWorkspaceError>
-where
-    BeforeMutation: FnOnce(),
-    BeforeBranchDelete: FnOnce(),
-    DeleteRunner: FnOnce(&Path, &str, &str) -> Result<Output, GitWorkspaceError>,
-    InspectionRunner: FnOnce(&Path, &str) -> Result<DirectRefSnapshot, GitWorkspaceError>,
-{
-    let preflight = deletion_preflight(repository, worktree_path, delete_branch)?;
-    if preflight.branch != branch {
-        return Err(GitWorkspaceError::WorktreeBranchMismatch {
-            expected: branch.to_string(),
-            actual: preflight.branch,
-        });
-    }
-    let is_unmerged = preflight
-        .merge_target
-        .as_ref()
-        .is_some_and(|target| !target.is_merged);
-    if delete_branch && is_unmerged && !force_branch {
-        let Some(merge_target) = preflight.merge_target.as_ref() else {
-            unreachable!("unmerged preflight branch must include a merge target");
-        };
-        return Err(GitWorkspaceError::BranchNotMerged {
-            branch: branch.to_string(),
-            merge_target: merge_target.full_ref.clone(),
-        });
-    }
-
-    before_mutation();
-    let full_ref = format!("refs/heads/{branch}");
-    let actual_snapshot = direct_ref_snapshot(repository, &full_ref)?;
-    if actual_snapshot.direct_oid.as_deref() != Some(&preflight.branch_oid)
-        || actual_snapshot.symbolic_target.is_some()
-    {
-        return Err(GitWorkspaceError::BranchChanged {
-            branch: branch.to_string(),
-            expected_oid: preflight.branch_oid,
-            actual_oid: actual_snapshot.direct_oid,
-            actual_symbolic_target: actual_snapshot.symbolic_target,
-        });
-    }
-
-    let remove_args = [
-        OsStr::new("worktree"),
-        OsStr::new("remove"),
-        preflight.worktree_path.as_os_str(),
-    ];
-    git_output_with_os_args_for_operation(repository, "remove worktree", &remove_args)?;
-    if delete_branch {
-        before_branch_delete();
-        let pre_delete_snapshot = match direct_ref_snapshot(repository, &full_ref) {
-            Ok(snapshot) => snapshot,
-            Err(inspection_error) => {
-                return Err(GitWorkspaceError::BranchDeleteFailed {
-                    worktree_path: preflight.worktree_path,
-                    worktree_removed: true,
-                    branch: branch.to_string(),
-                    expected_oid: preflight.branch_oid.clone(),
-                    actual_oid: None,
-                    actual_symbolic_target: None,
-                    delete_error: Box::new(GitWorkspaceError::BranchDeleteNotCompleted {
-                        full_ref,
-                        expected_oid: preflight.branch_oid,
-                    }),
-                    inspection_error: Some(Box::new(inspection_error)),
-                });
-            }
-        };
-        if pre_delete_snapshot.direct_oid.as_deref() != Some(&preflight.branch_oid)
-            || pre_delete_snapshot.symbolic_target.is_some()
-        {
-            let actual_oid = pre_delete_snapshot.direct_oid;
-            let actual_symbolic_target = pre_delete_snapshot.symbolic_target;
-            return Err(GitWorkspaceError::BranchDeleteFailed {
-                worktree_path: preflight.worktree_path,
-                worktree_removed: true,
-                branch: branch.to_string(),
-                expected_oid: preflight.branch_oid.clone(),
-                actual_oid: actual_oid.clone(),
-                actual_symbolic_target: actual_symbolic_target.clone(),
-                delete_error: Box::new(GitWorkspaceError::BranchChanged {
-                    branch: branch.to_string(),
-                    expected_oid: preflight.branch_oid,
-                    actual_oid,
-                    actual_symbolic_target,
-                }),
-                inspection_error: None,
-            });
-        }
-        let delete_error = match delete_runner(repository, &full_ref, &preflight.branch_oid) {
-            Ok(output) if output.status.success() => None,
-            Ok(output) => Some(command_failed(
-                "delete worktree branch at expected OID",
-                &[
-                    "update-ref",
-                    "--no-deref",
-                    "-d",
-                    full_ref.as_str(),
-                    preflight.branch_oid.as_str(),
-                ],
-                &output,
-            )),
-            Err(delete_error) => Some(delete_error),
-        };
-        let (actual_snapshot, inspection_error) = match inspection_runner(repository, &full_ref) {
-            Ok(actual_snapshot) => (Some(actual_snapshot), None),
-            Err(inspection_error) => (None, Some(Box::new(inspection_error))),
-        };
-        if delete_error.is_none()
-            && inspection_error.is_none()
-            && actual_snapshot.as_ref().is_some_and(|snapshot| {
-                snapshot.direct_oid.is_none() && snapshot.symbolic_target.is_none()
-            })
-        {
-            return Ok(());
-        }
-        let delete_error =
-            delete_error.unwrap_or_else(|| GitWorkspaceError::BranchDeleteNotCompleted {
-                full_ref,
-                expected_oid: preflight.branch_oid.clone(),
-            });
-        return Err(GitWorkspaceError::BranchDeleteFailed {
-            worktree_path: preflight.worktree_path,
-            worktree_removed: true,
-            branch: branch.to_string(),
-            expected_oid: preflight.branch_oid,
-            actual_oid: actual_snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.direct_oid.clone()),
-            actual_symbolic_target: actual_snapshot.and_then(|snapshot| snapshot.symbolic_target),
-            delete_error: Box::new(delete_error),
-            inspection_error,
-        });
-    }
-    Ok(())
-}
-
-fn run_branch_compare_delete(
-    repository: &Path,
-    full_ref: &str,
-    expected_oid: &str,
-) -> Result<Output, GitWorkspaceError> {
-    git_output_allow_failure_for_operation(
-        repository,
-        "delete worktree branch at expected OID",
-        &["update-ref", "--no-deref", "-d", full_ref, expected_oid],
-    )
 }
 
 /// 在后台线程删除 linked worktree 和可选本地分支，避免阻塞 UI。

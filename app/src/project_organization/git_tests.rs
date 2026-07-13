@@ -695,6 +695,21 @@ fn cleanup_failure_displays_clone_and_cleanup_errors() {
 }
 
 #[test]
+fn cleanup_failure_exposes_clone_error_as_primary_source() {
+    use std::error::Error;
+
+    let error = GitWorkspaceError::CleanupFailed {
+        path: PathBuf::from("clone-target"),
+        cleanup_source: std::io::Error::other("cleanup denied"),
+        clone_error: Box::new(injected_command_error("clone repository")),
+    };
+
+    assert!(
+        matches!(error.source(), Some(source) if source.to_string().contains("clone repository"))
+    );
+}
+
+#[test]
 fn parses_repository_names_from_supported_git_urls() {
     assert_eq!(
         repository_name_from_url("https://github.com/acme/widgets.git").unwrap(),
@@ -1691,7 +1706,7 @@ fn default_merge_target_deletion_does_not_depend_on_main_worktree_head() {
 }
 
 #[test]
-fn branch_oid_change_after_preflight_blocks_worktree_mutation() {
+fn branch_oid_change_after_candidate_capture_blocks_worktree_mutation() {
     let fixture = GitFixture::new();
     let worktree_path = fixture.add_linked_worktree("feature/changed");
     let expected_oid = ref_oid(&fixture.root, "refs/heads/feature/changed");
@@ -1731,17 +1746,7 @@ fn branch_oid_change_after_preflight_blocks_worktree_mutation() {
     )
     .unwrap_err();
 
-    assert!(matches!(
-        error,
-        GitWorkspaceError::BranchChanged {
-            branch,
-            expected_oid: expected,
-            actual_oid: Some(actual),
-            actual_symbolic_target: None,
-        } if branch == "feature/changed"
-            && expected == expected_oid
-            && actual == changed_oid
-    ));
+    assert!(matches!(error, GitWorkspaceError::RefTransaction { .. }));
     assert!(worktree_path.exists());
     assert_eq!(
         ref_oid(&fixture.root, "refs/heads/feature/changed"),
@@ -1750,7 +1755,7 @@ fn branch_oid_change_after_preflight_blocks_worktree_mutation() {
 }
 
 #[test]
-fn symbolic_branch_change_after_preflight_blocks_worktree_mutation() {
+fn symbolic_branch_change_after_candidate_capture_blocks_worktree_mutation() {
     let fixture = GitFixture::new();
     let worktree_path = fixture.add_linked_worktree("feature/symbolic-change");
     run_git(&fixture.root, &["branch", "feature/symbolic-target"]);
@@ -1785,20 +1790,11 @@ fn symbolic_branch_change_after_preflight_blocks_worktree_mutation() {
     )
     .unwrap_err();
 
-    assert!(
-        matches!(
-            &error,
-            GitWorkspaceError::BranchChanged {
-                branch,
-                expected_oid: expected,
-                actual_oid: None,
-                actual_symbolic_target: Some(symbolic_target),
-            } if branch == "feature/symbolic-change"
-                && expected == &expected_oid
-                && symbolic_target == "refs/heads/feature/symbolic-target"
-        ),
-        "unexpected error: {error:?}"
-    );
+    assert!(matches!(
+        error,
+        GitWorkspaceError::WorktreeBranchMismatch { ref actual, .. }
+            if actual == "feature/symbolic-target"
+    ));
     assert!(worktree_path.exists());
     assert_eq!(
         git_output(
@@ -1813,237 +1809,9 @@ fn symbolic_branch_change_after_preflight_blocks_worktree_mutation() {
     ));
 }
 
-#[test]
-fn branch_oid_change_after_worktree_removal_is_not_deleted() {
-    let fixture = GitFixture::new();
-    let worktree_path = fixture.add_linked_worktree("feature/late-change");
-    let registered_path = worktree_path.canonicalize().unwrap();
-    let expected_oid = ref_oid(&fixture.root, "refs/heads/feature/late-change");
-    let changed_oid = git_output(
-        &fixture.root,
-        &[
-            "-c",
-            "user.name=Zap Tests",
-            "-c",
-            "user.email=zap@example.com",
-            "commit-tree",
-            "HEAD^{tree}",
-            "-p",
-            "HEAD",
-            "-m",
-            "late branch change",
-        ],
-    );
-
-    let error = remove_workspace_with_hooks(
-        &fixture.root,
-        &worktree_path,
-        "feature/late-change",
-        true,
-        false,
-        || {},
-        || {
-            run_git(
-                &fixture.root,
-                &[
-                    "update-ref",
-                    "refs/heads/feature/late-change",
-                    &changed_oid,
-                    &expected_oid,
-                ],
-            );
-        },
-    )
-    .unwrap_err();
-
-    assert!(matches!(
-        error,
-        GitWorkspaceError::BranchDeleteFailed {
-            worktree_path: removed_path,
-            worktree_removed: true,
-            branch,
-            expected_oid: expected,
-            actual_oid: Some(actual),
-            actual_symbolic_target: None,
-            delete_error,
-            inspection_error: None,
-        } if removed_path == registered_path
-            && branch == "feature/late-change"
-            && expected == expected_oid
-            && actual == changed_oid
-            && matches!(*delete_error, GitWorkspaceError::BranchChanged { .. })
-    ));
-    assert!(!worktree_path.exists());
-    assert_eq!(
-        ref_oid(&fixture.root, "refs/heads/feature/late-change"),
-        changed_oid
-    );
-}
-
-#[test]
-fn symbolic_branch_change_after_worktree_removal_is_not_deleted() {
-    let fixture = GitFixture::new();
-    let worktree_path = fixture.add_linked_worktree("feature/late-symbolic");
-    let registered_path = worktree_path.canonicalize().unwrap();
-    run_git(&fixture.root, &["branch", "feature/late-symbolic-target"]);
-    let expected_oid = ref_oid(&fixture.root, "refs/heads/feature/late-symbolic");
-
-    let error = remove_workspace_with_hooks(
-        &fixture.root,
-        &worktree_path,
-        "feature/late-symbolic",
-        true,
-        false,
-        || {},
-        || {
-            run_git(
-                &fixture.root,
-                &[
-                    "update-ref",
-                    "--no-deref",
-                    "-d",
-                    "refs/heads/feature/late-symbolic",
-                    &expected_oid,
-                ],
-            );
-            run_git(
-                &fixture.root,
-                &[
-                    "symbolic-ref",
-                    "refs/heads/feature/late-symbolic",
-                    "refs/heads/feature/late-symbolic-target",
-                ],
-            );
-        },
-    )
-    .unwrap_err();
-
-    assert!(matches!(
-        error,
-        GitWorkspaceError::BranchDeleteFailed {
-            worktree_path: removed_path,
-            worktree_removed: true,
-            branch,
-            expected_oid: expected,
-            actual_oid: None,
-            actual_symbolic_target: Some(symbolic_target),
-            delete_error,
-            inspection_error: None,
-        } if removed_path == registered_path
-            && branch == "feature/late-symbolic"
-            && expected == expected_oid
-            && symbolic_target == "refs/heads/feature/late-symbolic-target"
-            && matches!(*delete_error, GitWorkspaceError::BranchChanged { .. })
-    ));
-    assert!(!worktree_path.exists());
-    assert_eq!(
-        git_output(
-            &fixture.root,
-            &["symbolic-ref", "refs/heads/feature/late-symbolic"]
-        ),
-        "refs/heads/feature/late-symbolic-target"
-    );
-    assert!(ref_exists(
-        &fixture.root,
-        "refs/heads/feature/late-symbolic-target"
-    ));
-}
-
-#[test]
-fn branch_delete_command_io_preserves_partial_mutation_context() {
-    let fixture = GitFixture::new();
-    let worktree_path = fixture.add_linked_worktree("feature/delete-io");
-    let registered_path = worktree_path.canonicalize().unwrap();
-    let expected_oid = ref_oid(&fixture.root, "refs/heads/feature/delete-io");
-
-    let error = remove_workspace_with_delete_runner(
-        &fixture.root,
-        &worktree_path,
-        "feature/delete-io",
-        true,
-        false,
-        || {
-            Err(GitWorkspaceError::CommandIo {
-                operation: "injected branch delete",
-                args: vec!["update-ref".to_string()],
-                source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "injected IO"),
-            })
-        },
-    )
-    .unwrap_err();
-
-    assert!(matches!(
-        error,
-        GitWorkspaceError::BranchDeleteFailed {
-            worktree_path,
-            worktree_removed: true,
-            branch,
-            expected_oid: expected,
-            actual_oid: Some(actual),
-            actual_symbolic_target: None,
-            delete_error,
-            inspection_error: None,
-        } if worktree_path == registered_path
-            && branch == "feature/delete-io"
-            && expected == expected_oid
-            && actual == expected_oid
-            && matches!(delete_error.as_ref(), GitWorkspaceError::CommandIo { source, .. } if source.kind() == std::io::ErrorKind::PermissionDenied)
-    ));
-    assert!(!registered_path.exists());
-    assert!(ref_exists(&fixture.root, "refs/heads/feature/delete-io"));
-}
-
-#[test]
-fn branch_delete_inspection_error_is_preserved_with_delete_error() {
-    let fixture = GitFixture::new();
-    let worktree_path = fixture.add_linked_worktree("feature/inspect-error");
-    let expected_oid = ref_oid(&fixture.root, "refs/heads/feature/inspect-error");
-
-    let error = remove_workspace_with_inspection_runner(
-        &fixture.root,
-        &worktree_path,
-        "feature/inspect-error",
-        true,
-        false,
-        || {
-            Err(GitWorkspaceError::CommandFailed {
-                operation: "injected branch delete",
-                args: vec!["update-ref".to_string()],
-                stderr: "injected delete failure".to_string(),
-            })
-        },
-        || {
-            Err(GitWorkspaceError::CommandIo {
-                operation: "injected branch inspection",
-                args: vec!["symbolic-ref".to_string()],
-                source: std::io::Error::new(std::io::ErrorKind::Other, "injected inspection"),
-            })
-        },
-    )
-    .unwrap_err();
-
-    assert!(matches!(
-        error,
-        GitWorkspaceError::BranchDeleteFailed {
-            worktree_removed: true,
-            actual_oid: None,
-            actual_symbolic_target: None,
-            delete_error,
-            inspection_error: Some(inspection_error),
-            ..
-        } if matches!(*delete_error, GitWorkspaceError::CommandFailed { .. })
-            && matches!(inspection_error.as_ref(), GitWorkspaceError::CommandIo { operation, .. } if *operation == "injected branch inspection")
-    ));
-    assert!(!worktree_path.exists());
-    assert_eq!(
-        ref_oid(&fixture.root, "refs/heads/feature/inspect-error"),
-        expected_oid
-    );
-}
-
 #[cfg(unix)]
 #[test]
-fn removal_uses_registered_path_when_alias_changes_after_preflight() {
+fn removal_rejects_alias_retargeted_after_candidate_capture() {
     use std::os::unix::fs::symlink;
 
     let fixture = GitFixture::new();
@@ -2052,20 +1820,25 @@ fn removal_uses_registered_path_when_alias_changes_after_preflight() {
     let alias = fixture.tempdir.path().join("worktree alias");
     symlink(&original, &alias).unwrap();
 
-    remove_workspace_with_hook(
+    let error = remove_workspace_with_transaction_hooks(
         &fixture.root,
         &alias,
         "feature/alias-original",
-        false,
+        true,
         false,
         || {
             std::fs::remove_file(&alias).unwrap();
             symlink(&other, &alias).unwrap();
         },
+        || {},
     )
-    .unwrap();
+    .unwrap_err();
 
-    assert!(!original.exists());
+    assert!(matches!(
+        error,
+        GitWorkspaceError::WorktreeBranchMismatch { .. }
+    ));
+    assert!(original.exists());
     assert!(other.exists());
     assert!(ref_exists(
         &fixture.root,
@@ -2272,6 +2045,76 @@ fn locked_deletion_aborts_when_target_selection_changes_after_prepare() {
         &fixture.root,
         "refs/heads/feature/target-selection"
     ));
+}
+
+#[test]
+fn worktree_remove_failure_aborts_and_preserves_branch() {
+    let fixture = GitFixture::new();
+    let worktree = fixture.add_linked_worktree("feature/remove-failure");
+
+    let error = remove_workspace_with_remove_runner(
+        &fixture.root,
+        &worktree,
+        "feature/remove-failure",
+        true,
+        false,
+        |_repository, _path| Err(injected_command_error("remove worktree")),
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, GitWorkspaceError::CommandFailed { .. }));
+    assert!(worktree.exists());
+    assert!(ref_exists(
+        &fixture.root,
+        "refs/heads/feature/remove-failure"
+    ));
+}
+
+#[test]
+fn commit_failure_reports_removed_worktree_partial_state() {
+    let fixture = GitFixture::new();
+    let worktree = fixture.add_linked_worktree("feature/commit-failure");
+
+    let error = remove_workspace_with_after_remove_hook(
+        &fixture.root,
+        &worktree,
+        "feature/commit-failure",
+        true,
+        false,
+        |transaction| transaction.terminate_for_test(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::BranchDeleteTransactionFailed {
+            worktree_removed: true,
+            ..
+        }
+    ));
+    assert!(!worktree.exists());
+}
+
+#[test]
+fn wrapper_errors_expose_primary_sources() {
+    use std::error::Error;
+
+    let fixture = GitFixture::new();
+    let target = fixture.tempdir.path().join("source chain target");
+    let creation = create_from_remote_with_runner(
+        &fixture.root,
+        "refs/remotes/origin/main",
+        "feature/source-chain",
+        &target,
+        |_repository, _remote_ref, _branch, _target, _expected_oid| {
+            Err(injected_command_error("create worktree"))
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(creation.source(), Some(source) if source.to_string().contains("create worktree"))
+    );
 }
 
 #[tokio::test]

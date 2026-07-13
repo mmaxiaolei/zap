@@ -102,14 +102,16 @@ Git URL clone 默认路径由 URL 的 repository 名生成，并在冲突时要�
 
 1. 验证选中的完整 remote ref 存在。
 2. 验证新本地分支名合法且 `refs/heads/<name>` 不存在。
-3. 验证目标 worktree 路径不存在。
-4. 执行 `git worktree add --no-track -b <new-branch> <path> <remote-ref>`。
+3. 原子创建最终目标目录并保留其 canonical path，创建失败时报告占用或 I/O 错误。
+4. 执行唯一一条 `git worktree add --no-track -b <new-branch> <path> <remote-ref>` 命令；成功后验证直接 OID 和新分支不带 upstream。
 
 本地模式：
 
 1. 验证 `refs/heads/<branch>` 存在。
 2. 解析 `git worktree list --porcelain`，若分支已检出则返回占用路径。
-3. 执行 `git worktree add <path> refs/heads/<branch>`。
+3. 与远端模式相同地原子创建最终目标目录，再执行 `git worktree add <path> refs/heads/<branch>`。
+
+远端与本地创建都只会清理本次原子 claim 的、未注册且为空的目录。远端 `worktree add -b` 失败时绝不自动删除分支，因为无法安全断定该分支由本次调用创建。
 
 ### 4. 创建与补偿事务
 
@@ -167,13 +169,15 @@ UI 遵循 `warp-ui-guidelines`：按钮使用现有 ActionButton/Button 主题�
 
 ### 7. 删除与外部状态变化
 
-删除前置检查：
+删除前置检查只生成给 UI 的建议快照；真正的删除校验在引用锁内执行：
 
 1. workspace 记录、worktree 路径和目标分支仍相互一致。
 2. `git status --porcelain` 为空；未跟踪文件同样阻止删除。
 3. 若选择删除分支，判断该分支是否合并到已配置 upstream；没有 upstream 时判断是否合并到 repository 默认分支。
 
-未合并状态在关闭终端或移除 worktree前触发二次确认。确认完成后依次关闭所属页签、移除 worktree、执行 `git branch -d` 或明确确认后的 `git branch -D`，最后删除数据库记录。
+删除分支时，服务通过 prepared `git update-ref --stdin` transaction 锁定待删 branch 和非强制删除的 merge target。transaction 只队列 merge target 的 `verify` 与 branch 的 `delete <expected-oid>`，不会对同一 branch 同时队列 `verify` 和 `delete`。持锁后重新检查 worktree 注册路径、branch、dirty 状态、目标选择、目标 OID 与合并关系；强制删除不读取或锁定远端 merge target。
+
+未合并状态在关闭终端或移除 worktree前触发二次确认。确认完成后依次关闭所属页签、移除 worktree、提交已 prepare 的 branch 删除 transaction，最后删除数据库记录。worktree remove 失败必须 abort transaction；若 worktree 已移除但 transaction commit 失败，服务返回带路径、branch、OID 和辅助 inspection 的明确部分状态，而不是推断或补偿删除 branch。
 
 启动一致性检查验证 repository 路径、worktree 路径和 branch/ref。失效记录保留在模型中并带错误状态，UI 提供重新定位或移除记录；不自动选择其他路径或分支。
 

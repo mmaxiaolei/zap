@@ -57,7 +57,7 @@ pub(super) struct LockedRef<'a> {
 
 /// 已完成 prepare、可在外部操作完成后提交或中止的引用删除事务。
 #[derive(Debug)]
-pub(super) struct PreparedRefDelete {
+pub(crate) struct PreparedRefDelete {
     child: std::process::Child,
     stdin: Option<BufWriter<std::process::ChildStdin>>,
     stdout: BufReader<std::process::ChildStdout>,
@@ -146,6 +146,11 @@ impl PreparedRefDelete {
         self.send_line(RefTransactionStage::Abort, "abort")?;
         self.expect_response(RefTransactionStage::Abort, "abort: ok")?;
         self.finish_process(RefTransactionStage::Abort)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn terminate_for_test(&mut self) {
+        let _ = self.child.kill();
     }
 
     fn send_line(
