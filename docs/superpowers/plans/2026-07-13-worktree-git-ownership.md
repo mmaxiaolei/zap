@@ -31,9 +31,6 @@
 
 ```rust
 mod ref_transaction;
-
-pub use ref_transaction::{RefTransactionError, RefTransactionStage};
-use ref_transaction::{LockedRef, PreparedRefDelete};
 ```
 
 在 `ref_transaction.rs` 末尾接入测试文件：
@@ -111,11 +108,11 @@ Expected: compile failure because `PreparedRefDelete`, `LockedRef`, and transact
 
 - [ ] **Step 3: Implement the exact line protocol and process lifecycle**
 
-Define the public diagnostic types and crate-private transaction API:
+Define the module-private diagnostic types and transaction API:
 
 ```rust
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RefTransactionStage {
+pub(super) enum RefTransactionStage {
     Start,
     Prepare,
     Commit,
@@ -125,7 +122,7 @@ pub enum RefTransactionStage {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum RefTransactionError {
+pub(super) enum RefTransactionError {
     #[error("failed to start git update-ref transaction: {source}")]
     Start {
         #[source]
@@ -277,7 +274,8 @@ Expected: all transaction tests pass with non-zero test count. If the real proto
 
 - 初始 RED 命令为 `cargo test -p warp --lib project_organization::git::ref_transaction::tests::prepared_delete_transaction_spans_worktree_remove -- --nocapture`，因事务类型尚未定义而失败，错误为 `E0432`。
 - P2 的 Drop lock-release 与 stale branch-OID 测试添加时立即 GREEN，因为实现已具备 Drop abort/wait 与 expected-old-OID CAS；没有为制造 RED 而破坏协议。
-- 最终 transaction 模块测试为 5/5 通过。
+- 最终 transaction 模块测试为 6/6 通过。
+- 质量审查后收窄无消费者的 re-export；Task 4 接入时再公开必要诊断类型。
 
 ### Task 2: Atomically claim worktree target directories
 

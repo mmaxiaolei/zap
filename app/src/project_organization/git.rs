@@ -8,8 +8,6 @@ use std::{
 use thiserror::Error;
 
 mod ref_transaction;
-use ref_transaction::{LockedRef, PreparedRefDelete};
-pub use ref_transaction::{RefTransactionError, RefTransactionStage};
 
 /// Git 分支引用，保留完整 refname 以避免通过名称前缀猜测类型。
 #[derive(Clone, Debug, Eq, PartialEq)]

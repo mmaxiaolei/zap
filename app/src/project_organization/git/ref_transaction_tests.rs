@@ -132,6 +132,32 @@ fn prepared_delete_transaction_spans_worktree_remove() {
 }
 
 #[test]
+fn prepare_rejects_merge_target_equal_to_branch() {
+    let fixture = TransactionFixture::new();
+    let worktree = fixture.add_worktree("feature/self-target");
+    let branch_ref = "refs/heads/feature/self-target";
+    let branch_oid = fixture.rev_parse(branch_ref);
+
+    let error = PreparedRefDelete::prepare(
+        &fixture.root,
+        branch_ref,
+        &branch_oid,
+        Some(LockedRef {
+            full_ref: branch_ref,
+            oid: &branch_oid,
+        }),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        RefTransactionError::ConflictingRefUpdate { full_ref } if full_ref == branch_ref
+    ));
+    assert!(worktree.exists());
+    assert!(fixture.ref_exists(branch_ref));
+}
+
+#[test]
 fn prepared_transaction_blocks_branch_updates_until_abort() {
     let fixture = TransactionFixture::new();
     let branch_ref = "refs/heads/feature/locked";

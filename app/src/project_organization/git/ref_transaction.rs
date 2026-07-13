@@ -7,7 +7,7 @@ use std::{
 
 /// Git 引用事务的当前协议阶段。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RefTransactionStage {
+pub(super) enum RefTransactionStage {
     Start,
     Prepare,
     Commit,
@@ -18,7 +18,9 @@ pub enum RefTransactionStage {
 
 /// Git 引用事务执行失败。
 #[derive(Debug, thiserror::Error)]
-pub enum RefTransactionError {
+pub(super) enum RefTransactionError {
+    #[error("git update-ref transaction cannot verify and delete the same ref `{full_ref}`")]
+    ConflictingRefUpdate { full_ref: String },
     #[error("failed to start git update-ref transaction: {source}")]
     Start {
         #[source]
@@ -71,6 +73,13 @@ impl PreparedRefDelete {
         branch_oid: &str,
         merge_target: Option<LockedRef<'_>>,
     ) -> Result<Self, RefTransactionError> {
+        let merge_target = merge_target.as_ref();
+        if merge_target.is_some_and(|target| target.full_ref == branch_ref) {
+            return Err(RefTransactionError::ConflictingRefUpdate {
+                full_ref: branch_ref.to_string(),
+            });
+        }
+
         let mut child = command::blocking::Command::new("git")
             .arg("-C")
             .arg(repository)
