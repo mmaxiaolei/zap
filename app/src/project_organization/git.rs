@@ -539,14 +539,14 @@ where
         repository,
         remote_ref,
         new_branch,
-        &claim.requested_path,
+        &claim.canonical_path,
         &expected_oid,
     ) {
         Ok(()) => {
             claim.ensure_directory()?;
             verify_remote_worktree_creation(
                 repository,
-                &claim.requested_path,
+                &claim.canonical_path,
                 new_branch,
                 &expected_oid,
             )
@@ -717,7 +717,7 @@ where
     after_target_claim();
     claim.ensure_directory()?;
 
-    match runner(repository, local_branch, &claim.requested_path) {
+    match runner(repository, local_branch, &claim.canonical_path) {
         Ok(()) => claim.ensure_directory(),
         Err(create_error) => Err(worktree_creation_failed(
             repository,

@@ -711,6 +711,61 @@ fn creates_new_branch_from_remote_ref_without_tracking() {
 }
 
 #[test]
+fn creates_remote_worktree_for_relative_claimed_target() {
+    let fixture = GitFixture::new();
+    assert_ne!(std::env::current_dir().unwrap(), fixture.root);
+    let mut relative_target = std::ffi::OsString::from(".task2-relative-remote-");
+    relative_target.push(fixture.tempdir.path().file_name().unwrap());
+    let relative_target = PathBuf::from(relative_target);
+
+    create_from_remote(
+        &fixture.root,
+        "refs/remotes/origin/main",
+        "feature/relative-remote",
+        &relative_target,
+    )
+    .unwrap();
+
+    let canonical_target = relative_target.canonicalize().unwrap();
+    assert_eq!(current_branch(&canonical_target), "feature/relative-remote");
+    assert!(!fixture.root.join(&relative_target).exists());
+
+    let status = command::blocking::Command::new("git")
+        .arg("-C")
+        .arg(&fixture.root)
+        .args(["worktree", "remove"])
+        .arg(&canonical_target)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[test]
+fn creates_local_worktree_for_relative_claimed_target() {
+    let fixture = GitFixture::new();
+    assert_ne!(std::env::current_dir().unwrap(), fixture.root);
+    run_git(&fixture.root, &["branch", "feature/relative-local"]);
+    let mut relative_target = std::ffi::OsString::from(".task2-relative-local-");
+    relative_target.push(fixture.tempdir.path().file_name().unwrap());
+    let relative_target = PathBuf::from(relative_target);
+
+    create_from_local(&fixture.root, "feature/relative-local", &relative_target).unwrap();
+
+    let canonical_target = relative_target.canonicalize().unwrap();
+    assert_eq!(current_branch(&canonical_target), "feature/relative-local");
+    assert!(!fixture.root.join(&relative_target).exists());
+
+    let status = command::blocking::Command::new("git")
+        .arg("-C")
+        .arg(&fixture.root)
+        .args(["worktree", "remove"])
+        .arg(&canonical_target)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[test]
 fn successful_remote_creation_rejects_branch_change_before_verification() {
     let fixture = GitFixture::new();
     let path = fixture.tempdir.path().join("changed after success");

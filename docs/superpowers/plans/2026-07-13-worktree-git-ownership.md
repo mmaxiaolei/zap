@@ -477,12 +477,14 @@ let args = [
     OsStr::new("--no-track"),
     OsStr::new("-b"),
     OsStr::new(new_branch),
-    claim.requested_path.as_os_str(),
+    claim.canonical_path.as_os_str(),
     OsStr::new(remote_ref),
 ];
 ```
 
 Local creation keeps its existing branch validation, then uses the same claim and executes `git worktree add <claimed-path> <local-branch>`. Do not use production `to_str()` or lossy path conversion.
+
+Git runners and remote success verification must receive `claim.canonical_path`, so an input relative to the calling process has the same meaning as the already-created claim when Git runs with `-C repository`. Keep `claim.requested_path` for claim inspection, cleanup, and error display.
 
 Both creation paths call `claim.ensure_directory()` immediately before `git worktree add` and again after a successful command. A failed local `worktree add` uses the same registration/empty-directory inspection as remote creation with `branch_may_remain: false`; a failed remote `worktree add -b` uses `branch_may_remain: true`.
 
@@ -511,14 +513,14 @@ where
         repository,
         remote_ref,
         new_branch,
-        &claim.requested_path,
+        &claim.canonical_path,
         &expected_oid,
     ) {
         Ok(()) => {
             claim.ensure_directory()?;
             verify_remote_worktree_creation(
                 repository,
-                &claim.requested_path,
+                &claim.canonical_path,
                 new_branch,
                 &expected_oid,
             )
@@ -565,7 +567,7 @@ where
     after_target_claim();
     claim.ensure_directory()?;
 
-    match runner(repository, local_branch, &claim.requested_path) {
+    match runner(repository, local_branch, &claim.canonical_path) {
         Ok(()) => {
             claim.ensure_directory()?;
             Ok(())
@@ -1001,6 +1003,11 @@ git commit -m "fix: claim worktree targets atomically"
 ```
 
 Expected: all Git service tests pass; failures never delete a branch and only remove an empty, unregistered claimed directory.
+
+#### Task 2 Execution Evidence
+
+- Relative-path quality fix: `TargetDirectoryClaim::acquire` creates and canonicalizes the target in the caller's current directory; both production runners and remote verification now receive `claim.canonical_path`, while claim inspection and cleanup retain `claim.requested_path`.
+- Regression coverage: real remote and local Git creation tests pass unique relative targets without changing the global CWD, verify the branch at the canonical target, verify no repository-relative target was created, and remove the created worktree through `git -C <repository> worktree remove <canonical-target>`.
 
 ### Task 3: Complete creation postcondition verification and preflight snapshots
 
