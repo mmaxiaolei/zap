@@ -149,8 +149,17 @@ fn prepared_transaction_blocks_branch_updates_until_abort() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("cannot lock ref"));
     transaction.abort().unwrap();
+
+    let status = command::blocking::Command::new("git")
+        .arg("-C")
+        .arg(&fixture.root)
+        .args(["update-ref", branch_ref, &changed_oid, &branch_oid])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
     assert!(worktree.exists());
-    assert_eq!(fixture.rev_parse(branch_ref), branch_oid);
+    assert_eq!(fixture.rev_parse(branch_ref), changed_oid);
 }
 
 #[test]

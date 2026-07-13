@@ -273,6 +273,12 @@ git commit -m "feat: add prepared git ref transactions"
 
 Expected: all transaction tests pass with non-zero test count. If the real prototype fails on a supported platform, stop and redesign; do not fall back to post-remove OID-only deletion.
 
+#### Task 1 Execution Evidence
+
+- 初始 RED 命令为 `cargo test -p warp --lib project_organization::git::ref_transaction::tests::prepared_delete_transaction_spans_worktree_remove -- --nocapture`，因事务类型尚未定义而失败，错误为 `E0432`。
+- P2 的 Drop lock-release 与 stale branch-OID 测试添加时立即 GREEN，因为实现已具备 Drop abort/wait 与 expected-old-OID CAS；没有为制造 RED 而破坏协议。
+- 最终 transaction 模块测试为 5/5 通过。
+
 ### Task 2: Atomically claim worktree target directories
 
 **Files:**
