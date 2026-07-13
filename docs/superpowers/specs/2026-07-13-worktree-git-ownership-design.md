@@ -10,12 +10,12 @@ Repository Workspaces 的 Task 5 已实现 worktree 创建、删除 preflight �
 4. Remote worktree 创建成功后的验证没有检查 upstream 仍为空。
 5. 部分包装错误没有通过 `std::error::Error::source()` 暴露主底层错误。
 
-本设计优先保证不误删用户数据。无法证明 branch ownership 时，保留残留并返回结构化错误，不以自动清理为名执行推测性删除。
+本设计优先保证不误删用户数据。创建失败时无法证明 branch ownership，就保留残留并返回结构化错误；删除时把权威校验移动到 ref transaction 持锁之后，消除校验完成后的 ref 漂移窗口。
 
 ## 目标
 
-- 关闭同 OID ABA 导致的 branch 误删路径。
-- 删除前验证 branch generation、branch OID 和 merge target OID，并在 mutation 期间锁定相关 refs。
+- 关闭权威删除校验与 branch mutation 之间的同 OID ABA 窗口。
+- 在权威校验和 mutation 期间锁定 branch ref 与 merge target ref。
 - 原子 claim worktree 目标目录，避免接管并发创建的空目录。
 - 创建成功后验证 worktree 注册状态、attached branch、branch OID 和 upstream 后置条件。
 - 对无法自动补偿的残留状态提供完整、可操作、可追踪的结构化错误。
@@ -26,21 +26,22 @@ Repository Workspaces 的 Task 5 已实现 worktree 创建、删除 preflight �
 - 不在 Git 服务中实现数据库、Workspace UI 或页签补偿事务。
 - 不尝试让多个 Git/文件系统操作成为真正的跨资源原子事务。
 - 不在无法证明 ownership 时猜测 branch 是否由本次操作创建。
+- 不追踪跨 UI preflight 的历史 branch generation；同名、同 OID branch 若在 prepared transaction 获取锁前被重建，按当前 branch 重新校验。
 - 不为外部进程直接篡改 `.git` 内部文件提供安全保证；支持范围是标准 Git 命令产生的状态变化。
 
 ## 方案比较
 
-### 方案 A：残留优先创建 + 持锁删除事务
+### 方案 A：残留优先创建 + 锁内权威删除校验
 
-创建失败时不自动删除无法证明 ownership 的 branch。删除时使用 reflog generation token，并通过 prepared `git update-ref --stdin` transaction 锁定 branch 和 merge target，跨越 `git worktree remove`。
+创建失败时不自动删除无法证明 ownership 的 branch。删除时先 prepare `git update-ref --stdin` transaction，锁定 branch 和 merge target，再重新执行 worktree、branch、dirty 和 merge 权威校验，随后跨越 `git worktree remove` 提交 branch delete。
 
-优点：关闭数据误删路径，错误状态诚实，符合 Fail-Fast。缺点：实现和测试复杂，需要处理 Git transaction 协议与部分 mutation。
+优点：权威校验完成后相关 refs 不再漂移，不需要不可移植的文件 identity 或持久化 ownership marker。缺点：锁前发生的同名同 OID 重建按当前 branch 处理；实现必须处理 Git transaction 协议与部分 mutation。
 
-### 方案 B：继续使用 OID compare-delete
+### 方案 B：使用完整 reflog SHA-256 作为 generation token
 
-保留现有 `update-ref --no-deref -d <ref> <expected-oid>`。
+在 preflight 和 mutation 之间比较完整 branch reflog 的 SHA-256。
 
-优点：简单。缺点：同 OID ABA 无法被检测，不能满足安全要求。
+优点：实现表面简单。缺点：实证表明 Git 删除 branch 时会删除 reflog；用相同 OID、committer 和时间重建 branch 可生成字节完全相同的 reflog，因此该 token 可重放，不能证明 generation。
 
 ### 方案 C：永不自动删除 branch
 
@@ -95,26 +96,21 @@ Git 命令失败后：
 
 ## 删除 preflight
 
-`DeletionPreflight` 在既有字段基础上保存：
+`DeletionPreflight` 继续提供 UI 确认所需的只读快照：
 
 - canonical registered worktree path；
 - branch full ref 与 branch OID；
 - merge target full ref 与 merge target OID；
-- branch reflog generation token；
 - dirty、attached 和 merge 结论。
 
-### Reflog generation token
-
-1. 使用 `git rev-parse --git-path logs/refs/heads/<branch>` 获取 reflog 路径。
-2. 读取完整 reflog bytes，并使用仓库已有 `sha2` 依赖计算 SHA-256。
-3. reflog 缺失、不可读或不是普通文件时，`delete_branch=true` 的 preflight 失败；`delete_branch=false` 不需要 token。
-4. token 代表 preflight 时 Git-mediated branch generation。标准 Git delete/recreate 或 update 会改变 reflog 内容。
+该快照只用于展示和确认，不是 mutation 的 ownership 证明。`remove_workspace` 不接收或信任较早的 `DeletionPreflight`；它在本次删除调用中读取 transaction 候选值，并在 transaction prepared 后重新执行权威校验。
 
 ### Merge target
 
 - 有 upstream 时保存 upstream full ref 与解析后的 OID。
 - 无 upstream 时保存 primary remote default branch full ref 与 OID。
 - `merge-base --is-ancestor <branch-oid> <merge-target-oid>` 使用固定 OID，而不是后续可变 ref 名称。
+- merge target full ref 与待删 branch full ref 相同时，在启动 transaction 前返回结构化 invalid-target 错误；不向同一个 ref 排队 `verify` 和 `delete`。
 
 ## 持锁删除事务
 
@@ -122,29 +118,33 @@ branch 删除使用 `git update-ref --stdin` 子进程。命令 stdin/stdout/std
 
 ### Transaction 准备
 
-向 transaction 发送等价命令：
+普通安全删除向 transaction 发送：
 
 ```text
 start
-verify <branch-ref> <branch-oid>
 verify <merge-target-ref> <merge-target-oid>
 delete <branch-ref> <branch-oid>
 prepare
 ```
 
-force delete 不需要验证 merge target，但仍验证 branch ref/OID 和 reflog generation。
+force delete 只发送带 expected old OID 的 `delete`，不验证 merge target。`delete <branch-ref> <branch-oid>` 本身同时执行 branch compare-and-delete；不能再为同一 branch ref 添加 `verify`，因为 Git 会以 `multiple updates for ref` 拒绝 transaction。
 
 `prepare` 成功后 Git 持有相关 ref locks，pending delete 尚未提交。实现必须解析每个协议响应；未知、缺失或失败响应均 abort 并返回结构化 transaction 错误。
 
 ### 锁内验证与 mutation
 
-1. transaction prepared 后重新计算 branch reflog generation token。
-2. token 不匹配时发送 `abort`，等待子进程退出，并在任何 mutation 前返回 `BranchGenerationChanged`。
-3. token 匹配后执行 `git worktree remove <canonical-registered-path>`。
-4. worktree remove 失败时发送 `abort`，branch 保留。
-5. worktree remove 成功后发送 `commit`，提交 branch delete。
+1. 重新读取 `list_worktrees`，要求 canonical registered path 唯一、非 bare、非 detached，并仍 attached 到请求的 local branch。
+2. 重新读取 branch direct ref，要求 OID 等于 transaction 中的 expected OID，且不是 symbolic ref。
+3. 重新检查 worktree status，存在 tracked 或 untracked change 时 abort。
+4. 非 force 删除重新解析 upstream 或 primary remote default branch，要求 target full ref 仍等于 transaction 锁定的 target ref。
+5. 使用锁定的 branch OID 和 target OID 重新执行 `merge-base --is-ancestor`；未合入时 abort。
+6. 全部校验通过后执行 `git worktree remove <canonical-registered-path>`。
+7. worktree remove 失败时发送 `abort`，branch 保留。
+8. worktree remove 成功后发送 `commit`，提交 branch delete。
 
-实现前必须通过真实 Git prototype 验证：prepared branch/merge-target locks 不会阻止 `git worktree remove`。若 prototype 不成立，停止实现并重新设计，不回退到 OID-only delete。
+在读取候选值与 `prepare` 之间，branch 改到不同 OID 或 merge target 漂移会使 transaction prepare 失败。同名、同 OID branch 若在 `prepare` 前被重建，按选定语义作为当前 branch 进入锁内权威校验；`prepare` 之后的 ref mutation 被 Git ref lock 阻止。
+
+真实 Git prototype 已验证：只对 merge target 使用 `verify`、对 branch 使用带 expected OID 的 `delete` 时，prepared transaction 可以跨越 `git worktree remove` 并成功 commit。
 
 ### 部分 mutation
 
@@ -185,13 +185,13 @@ worktree remove 成功但 transaction commit、响应读取或子进程等待失
 
 ### 删除
 
-- 同 OID delete/recreate 改变 reflog token，在 transaction prepare 后、worktree remove 前被拒绝。
-- merge target 在 preflight 后后退，transaction `verify`/`prepare` 失败且无 mutation。
+- 同 OID delete/recreate 若发生在 transaction prepare 前，按当前 branch 完成锁内权威校验；prepare 后的 ref mutation 被锁拒绝。
+- branch 改到不同 OID 或 merge target 在候选读取后漂移，transaction `delete`/`verify`/`prepare` 失败且无 mutation。
+- transaction prepared 后 worktree path、attached branch、dirty 状态或 target selection 改变，锁内权威校验失败并 abort。
 - prepared transaction 下 worktree remove 成功，commit 后 branch 消失。
 - worktree remove 失败触发 abort，branch 保留。
 - commit/IO/协议失败明确报告部分 mutation。
-- reflog 缺失时 delete-branch preflight 失败；keep-branch 删除仍可执行。
-- force delete 跳过 merge target verify，但不跳过 branch generation/OID 验证。
+- force delete 跳过 merge target verify 和 merge 判断，但不跳过 branch OID、worktree identity、attached branch 和 dirty 校验。
 
 ### 错误链
 
@@ -200,10 +200,10 @@ worktree remove 成功但 transaction commit、响应读取或子进程等待失
 
 ## 风险与约束
 
-- prepared transaction 是实现前的强制 prototype gate。
-- reflog generation 仅覆盖标准 Git 命令产生的 ref 变化；直接编辑 `.git` 文件不在支持范围。
-- reflog token 读取与哈希会增加删除 preflight 成本，但 branch 删除是低频操作，成本可接受。
-- `git.rs` 已较大。实现计划应优先把 transaction protocol 和 reflog generation 拆为职责单一的私有单元；不做与 Task 5 无关的重构。
+- 锁前发生的同名、同 OID branch 重建不会作为历史 identity change 单独拒绝；它必须通过锁内全部当前状态校验。
+- ref transaction 不锁 worktree metadata 或 repository config，因此所有依赖这些状态的判断都在 prepared 后重做；最终 `git worktree remove` 仍作为 dirty/locked 等 Git 约束的最后防线。
+- 当前 Git prototype 已通过，但 transaction protocol 与 `worktree remove` 的组合仍需在支持平台的测试环境验证。
+- `git.rs` 已较大。实现计划应把 transaction protocol 拆为职责单一的私有单元；不新增 reflog 模块，不做与 Task 5 无关的重构。
 
 ## 规格同步
 
@@ -211,5 +211,5 @@ worktree remove 成功但 transaction commit、响应读取或子进程等待失
 
 - 创建失败无法证明 branch ownership 时保留 branch 并报告残留；
 - 目标目录通过原子 claim；
-- 删除使用 reflog generation 与 prepared ref transaction；
-- merge target 以 ref + OID 固定并在 transaction 中验证。
+- 删除使用 prepared ref transaction，并在持锁后执行权威校验；
+- merge target 以 ref + OID 固定，在 transaction 中验证并在锁内重新确认 target selection。
