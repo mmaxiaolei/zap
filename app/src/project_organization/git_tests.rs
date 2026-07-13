@@ -71,6 +71,36 @@ impl GitFixture {
     }
 }
 
+struct RelativeWorktreeCleanup {
+    repository: PathBuf,
+    worktree_path: PathBuf,
+}
+
+impl Drop for RelativeWorktreeCleanup {
+    fn drop(&mut self) {
+        if !self.worktree_path.exists() {
+            return;
+        }
+        match command::blocking::Command::new("git")
+            .arg("-C")
+            .arg(&self.repository)
+            .args(["worktree", "remove"])
+            .arg(&self.worktree_path)
+            .status()
+        {
+            Ok(status) if status.success() => {}
+            Ok(status) => eprintln!(
+                "failed to clean relative test worktree `{}`: {status}",
+                self.worktree_path.display()
+            ),
+            Err(error) => eprintln!(
+                "failed to run cleanup for relative test worktree `{}`: {error}",
+                self.worktree_path.display()
+            ),
+        }
+    }
+}
+
 fn run_git(cwd: &Path, args: &[&str]) {
     let status = command::blocking::Command::new("git")
         .arg("-C")
@@ -717,6 +747,11 @@ fn creates_remote_worktree_for_relative_claimed_target() {
     let mut relative_target = std::ffi::OsString::from(".task2-relative-remote-");
     relative_target.push(fixture.tempdir.path().file_name().unwrap());
     let relative_target = PathBuf::from(relative_target);
+    let worktree_path = std::env::current_dir().unwrap().join(&relative_target);
+    let _cleanup = RelativeWorktreeCleanup {
+        repository: fixture.root.clone(),
+        worktree_path,
+    };
 
     create_from_remote(
         &fixture.root,
@@ -748,6 +783,11 @@ fn creates_local_worktree_for_relative_claimed_target() {
     let mut relative_target = std::ffi::OsString::from(".task2-relative-local-");
     relative_target.push(fixture.tempdir.path().file_name().unwrap());
     let relative_target = PathBuf::from(relative_target);
+    let worktree_path = std::env::current_dir().unwrap().join(&relative_target);
+    let _cleanup = RelativeWorktreeCleanup {
+        repository: fixture.root.clone(),
+        worktree_path,
+    };
 
     create_from_local(&fixture.root, "feature/relative-local", &relative_target).unwrap();
 
