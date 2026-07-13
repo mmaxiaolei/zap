@@ -8,6 +8,8 @@ use std::{
 use thiserror::Error;
 
 mod ref_transaction;
+pub use ref_transaction::RefTransactionError;
+use ref_transaction::{LockedRef, PreparedRefDelete};
 
 /// Git 分支引用，保留完整 refname 以避免通过名称前缀猜测类型。
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -75,6 +77,31 @@ pub struct DeletionPreflight {
 /// Repository workspace Git 操作的结构化错误。
 #[derive(Debug, Error)]
 pub enum GitWorkspaceError {
+    #[error("failed to prepare branch deletion transaction: {source}")]
+    RefTransaction {
+        #[source]
+        source: RefTransactionError,
+    },
+    #[error("branch deletion candidate for `{branch_ref}` has no merge target")]
+    MissingMergeTarget { branch_ref: String },
+    #[error(
+        "merge target changed from `{expected}` to `{actual}` while branch deletion was locked"
+    )]
+    MergeTargetChanged { expected: String, actual: String },
+    #[error("ref `{full_ref}` changed while branch deletion was locked: expected {expected_oid}, found {actual_oid}")]
+    RefChanged {
+        full_ref: String,
+        expected_oid: String,
+        actual_oid: String,
+    },
+    #[error(
+        "{operation_error}; aborting the branch deletion transaction also failed: {abort_error}"
+    )]
+    BranchDeleteAbortFailed {
+        #[source]
+        operation_error: Box<GitWorkspaceError>,
+        abort_error: RefTransactionError,
+    },
     #[error("failed to canonicalize `{path}`: {source}")]
     Canonicalize {
         path: PathBuf,
@@ -943,7 +970,7 @@ pub fn remove_workspace(
     delete_branch: bool,
     force_branch: bool,
 ) -> Result<(), GitWorkspaceError> {
-    remove_workspace_with_runners(
+    remove_workspace_inner(
         repository,
         worktree_path,
         branch,
@@ -951,9 +978,180 @@ pub fn remove_workspace(
         force_branch,
         || {},
         || {},
-        run_branch_compare_delete,
-        direct_ref_snapshot,
     )
+}
+
+#[cfg(test)]
+pub(crate) fn remove_workspace_with_transaction_hooks<AfterCandidate, AfterPrepared>(
+    repository: &Path,
+    worktree_path: &Path,
+    branch: &str,
+    delete_branch: bool,
+    force_branch: bool,
+    after_candidate: AfterCandidate,
+    after_prepared: AfterPrepared,
+) -> Result<(), GitWorkspaceError>
+where
+    AfterCandidate: FnOnce(),
+    AfterPrepared: FnOnce(),
+{
+    remove_workspace_inner(
+        repository,
+        worktree_path,
+        branch,
+        delete_branch,
+        force_branch,
+        after_candidate,
+        after_prepared,
+    )
+}
+
+fn remove_workspace_inner<AfterCandidate, AfterPrepared>(
+    repository: &Path,
+    worktree_path: &Path,
+    branch: &str,
+    delete_branch: bool,
+    force_branch: bool,
+    after_candidate: AfterCandidate,
+    after_prepared: AfterPrepared,
+) -> Result<(), GitWorkspaceError>
+where
+    AfterCandidate: FnOnce(),
+    AfterPrepared: FnOnce(),
+{
+    let candidate =
+        capture_deletion_candidate(repository, worktree_path, delete_branch && !force_branch)?;
+    validate_requested_branch(branch, &candidate)?;
+    if !delete_branch {
+        return remove_registered_worktree(repository, &candidate.worktree_path);
+    }
+    after_candidate();
+    let target = if force_branch {
+        None
+    } else {
+        let target = candidate.merge_target.as_ref().ok_or_else(|| {
+            GitWorkspaceError::MissingMergeTarget {
+                branch_ref: candidate.branch_ref.clone(),
+            }
+        })?;
+        Some(LockedRef {
+            full_ref: &target.full_ref,
+            oid: &target.oid,
+        })
+    };
+    let transaction = PreparedRefDelete::prepare(
+        repository,
+        &candidate.branch_ref,
+        &candidate.branch_oid,
+        target,
+    )
+    .map_err(|source| GitWorkspaceError::RefTransaction { source })?;
+    after_prepared();
+    let registered_path = match validate_locked_deletion(
+        repository,
+        worktree_path,
+        branch,
+        &candidate.branch_oid,
+        candidate.merge_target.as_ref(),
+        force_branch,
+    ) {
+        Ok(path) => path,
+        Err(error) => return abort_after_failed_operation(transaction, error),
+    };
+    if let Err(error) = remove_registered_worktree(repository, &registered_path) {
+        return abort_after_failed_operation(transaction, error);
+    }
+    transaction
+        .commit()
+        .map_err(|source| GitWorkspaceError::RefTransaction { source })
+}
+
+fn validate_requested_branch(
+    branch: &str,
+    candidate: &DeletionPreflight,
+) -> Result<(), GitWorkspaceError> {
+    if candidate.branch == branch {
+        Ok(())
+    } else {
+        Err(GitWorkspaceError::WorktreeBranchMismatch {
+            expected: branch.to_string(),
+            actual: candidate.branch.clone(),
+        })
+    }
+}
+
+fn remove_registered_worktree(repository: &Path, path: &Path) -> Result<(), GitWorkspaceError> {
+    let args = [
+        OsStr::new("worktree"),
+        OsStr::new("remove"),
+        path.as_os_str(),
+    ];
+    git_output_with_os_args_for_operation(repository, "remove worktree", &args)?;
+    Ok(())
+}
+
+fn validate_locked_deletion(
+    repository: &Path,
+    path: &Path,
+    branch: &str,
+    expected_oid: &str,
+    expected_target: Option<&MergeTargetSnapshot>,
+    force: bool,
+) -> Result<PathBuf, GitWorkspaceError> {
+    let locked = capture_deletion_candidate(repository, path, !force)?;
+    validate_requested_branch(branch, &locked)?;
+    if locked.branch_oid != expected_oid {
+        let snapshot = direct_ref_snapshot(repository, &locked.branch_ref)?;
+        return Err(GitWorkspaceError::BranchChanged {
+            branch: locked.branch,
+            expected_oid: expected_oid.to_string(),
+            actual_oid: snapshot.direct_oid,
+            actual_symbolic_target: snapshot.symbolic_target,
+        });
+    }
+    if !force {
+        let expected = expected_target.ok_or_else(|| GitWorkspaceError::MissingMergeTarget {
+            branch_ref: locked.branch_ref.clone(),
+        })?;
+        let actual = locked
+            .merge_target
+            .ok_or_else(|| GitWorkspaceError::MissingMergeTarget {
+                branch_ref: locked.branch_ref.clone(),
+            })?;
+        if actual.full_ref != expected.full_ref {
+            return Err(GitWorkspaceError::MergeTargetChanged {
+                expected: expected.full_ref.clone(),
+                actual: actual.full_ref,
+            });
+        }
+        if actual.oid != expected.oid {
+            return Err(GitWorkspaceError::RefChanged {
+                full_ref: expected.full_ref.clone(),
+                expected_oid: expected.oid.clone(),
+                actual_oid: actual.oid,
+            });
+        }
+        if !actual.is_merged {
+            return Err(GitWorkspaceError::BranchNotMerged {
+                branch: locked.branch,
+                merge_target: expected.full_ref.clone(),
+            });
+        }
+    }
+    Ok(locked.worktree_path)
+}
+
+fn abort_after_failed_operation(
+    transaction: PreparedRefDelete,
+    operation_error: GitWorkspaceError,
+) -> Result<(), GitWorkspaceError> {
+    match transaction.abort() {
+        Ok(()) => Err(operation_error),
+        Err(abort_error) => Err(GitWorkspaceError::BranchDeleteAbortFailed {
+            operation_error: Box::new(operation_error),
+            abort_error,
+        }),
+    }
 }
 
 #[cfg(test)]

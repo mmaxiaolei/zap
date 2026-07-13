@@ -7,7 +7,7 @@ use std::{
 
 /// Git 引用事务的当前协议阶段。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum RefTransactionStage {
+pub enum RefTransactionStage {
     Start,
     Prepare,
     Commit,
@@ -18,7 +18,7 @@ pub(super) enum RefTransactionStage {
 
 /// Git 引用事务执行失败。
 #[derive(Debug, thiserror::Error)]
-pub(super) enum RefTransactionError {
+pub enum RefTransactionError {
     #[error("git update-ref transaction cannot verify and delete the same ref `{full_ref}`")]
     ConflictingRefUpdate { full_ref: String },
     #[error("failed to start git update-ref transaction: {source}")]

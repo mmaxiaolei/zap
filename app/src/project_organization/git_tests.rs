@@ -153,6 +153,31 @@ fn ref_oid(repository: &Path, full_ref: &str) -> String {
     git_output(repository, &["rev-parse", "--verify", full_ref])
 }
 
+fn fixture_commit_oid(repository: &Path, message: &str) -> String {
+    git_output(
+        repository,
+        &[
+            "-c",
+            "user.name=Zap Tests",
+            "-c",
+            "user.email=zap@example.com",
+            "commit-tree",
+            "HEAD^{tree}",
+            "-p",
+            "HEAD",
+            "-m",
+            message,
+        ],
+    )
+}
+
+fn advance_remote_main(fixture: &GitFixture) {
+    let full_ref = "refs/remotes/origin/main";
+    let old_oid = ref_oid(&fixture.root, full_ref);
+    let new_oid = fixture_commit_oid(&fixture.root, "advanced remote main");
+    run_git(&fixture.root, &["update-ref", full_ref, &new_oid, &old_oid]);
+}
+
 fn injected_command_error(operation: &'static str) -> GitWorkspaceError {
     GitWorkspaceError::CommandFailed {
         operation,
@@ -2088,6 +2113,165 @@ fn removes_worktree_but_keeps_branch_without_remote_metadata() {
 
     assert!(!worktree_path.exists());
     assert!(ref_exists(&fixture.root, "refs/heads/feature/keep"));
+}
+
+#[test]
+fn locked_deletion_accepts_same_oid_recreation_before_prepare() {
+    let fixture = GitFixture::new();
+    let worktree = fixture.add_linked_worktree("feature/same-oid-current");
+    let branch_ref = "refs/heads/feature/same-oid-current";
+    let oid = ref_oid(&fixture.root, branch_ref);
+
+    remove_workspace_with_transaction_hooks(
+        &fixture.root,
+        &worktree,
+        "feature/same-oid-current",
+        true,
+        false,
+        || {
+            run_git(&fixture.root, &["update-ref", "-d", branch_ref, &oid]);
+            run_git(&fixture.root, &["update-ref", branch_ref, &oid]);
+        },
+        || {},
+    )
+    .unwrap();
+
+    assert!(!worktree.exists());
+    assert!(!ref_exists(&fixture.root, branch_ref));
+}
+
+#[test]
+fn locked_deletion_rejects_different_oid_before_prepare() {
+    let fixture = GitFixture::new();
+    let worktree = fixture.add_linked_worktree("feature/different-oid");
+    let branch_ref = "refs/heads/feature/different-oid";
+    let old_oid = ref_oid(&fixture.root, branch_ref);
+    let changed_oid = fixture_commit_oid(&fixture.root, "changed branch");
+
+    let error = remove_workspace_with_transaction_hooks(
+        &fixture.root,
+        &worktree,
+        "feature/different-oid",
+        true,
+        false,
+        || {
+            run_git(
+                &fixture.root,
+                &["update-ref", branch_ref, &changed_oid, &old_oid],
+            )
+        },
+        || {},
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, GitWorkspaceError::RefTransaction { .. }));
+    assert!(worktree.exists());
+    assert_eq!(ref_oid(&fixture.root, branch_ref), changed_oid);
+}
+
+#[test]
+fn locked_deletion_rejects_target_drift_before_prepare() {
+    let fixture = GitFixture::new();
+    let worktree = fixture.add_linked_worktree("feature/target-drift");
+
+    let error = remove_workspace_with_transaction_hooks(
+        &fixture.root,
+        &worktree,
+        "feature/target-drift",
+        true,
+        false,
+        || advance_remote_main(&fixture),
+        || {},
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, GitWorkspaceError::RefTransaction { .. }));
+    assert!(worktree.exists());
+    assert!(ref_exists(&fixture.root, "refs/heads/feature/target-drift"));
+}
+
+#[test]
+fn force_deletion_does_not_require_remote_metadata() {
+    let fixture = GitFixture::new();
+    run_git(&fixture.root, &["remote", "remove", "origin"]);
+    let worktree = fixture.add_linked_worktree("feature/force-without-remote");
+
+    remove_workspace(
+        &fixture.root,
+        &worktree,
+        "feature/force-without-remote",
+        true,
+        true,
+    )
+    .unwrap();
+
+    assert!(!worktree.exists());
+    assert!(!ref_exists(
+        &fixture.root,
+        "refs/heads/feature/force-without-remote"
+    ));
+}
+
+#[test]
+fn locked_deletion_aborts_when_worktree_becomes_dirty_after_prepare() {
+    let fixture = GitFixture::new();
+    let worktree = fixture.add_linked_worktree("feature/dirty-after-lock");
+
+    let error = remove_workspace_with_transaction_hooks(
+        &fixture.root,
+        &worktree,
+        "feature/dirty-after-lock",
+        true,
+        false,
+        || {},
+        || std::fs::write(worktree.join("keep.txt"), "keep").unwrap(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, GitWorkspaceError::DirtyWorktree { .. }));
+    assert!(worktree.exists());
+    assert!(ref_exists(
+        &fixture.root,
+        "refs/heads/feature/dirty-after-lock"
+    ));
+}
+
+#[test]
+fn locked_deletion_aborts_when_target_selection_changes_after_prepare() {
+    let fixture = GitFixture::new();
+    let worktree = fixture.add_linked_worktree("feature/target-selection");
+    run_git(&fixture.root, &["push", "origin", "main:refs/heads/other"]);
+    run_git(&fixture.root, &["fetch", "origin"]);
+
+    let error = remove_workspace_with_transaction_hooks(
+        &fixture.root,
+        &worktree,
+        "feature/target-selection",
+        true,
+        false,
+        || {},
+        || {
+            run_git(
+                &fixture.root,
+                &[
+                    "branch",
+                    "--set-upstream-to=origin/other",
+                    "feature/target-selection",
+                ],
+            );
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::MergeTargetChanged { .. }
+    ));
+    assert!(worktree.exists());
+    assert!(ref_exists(
+        &fixture.root,
+        "refs/heads/feature/target-selection"
+    ));
 }
 
 #[tokio::test]
