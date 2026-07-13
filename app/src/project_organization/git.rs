@@ -46,19 +46,30 @@ pub struct WorktreeInfo {
     pub prunable_reason: Option<String>,
 }
 
-/// 删除 linked worktree 前的只读校验结果。
+/// 删除预检中的不可变合并目标快照。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MergeTargetSnapshot {
+    /// 用于合并判断的完整 refname。
+    pub full_ref: String,
+    /// Preflight 时目标 ref 指向的精确 commit OID。
+    pub oid: String,
+    /// Preflight 时分支是否已合入目标 commit。
+    pub is_merged: bool,
+}
+
+/// 删除 linked worktree 前提供给 UI 的只读建议快照。
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeletionPreflight {
     /// `list_worktrees` 中已验证的 canonical registered path。
     pub worktree_path: PathBuf,
     /// Worktree 当前检出的本地分支短名称。
     pub branch: String,
+    /// Worktree 当前检出的本地分支完整 refname。
+    pub branch_ref: String,
     /// Preflight 时本地分支指向的精确 commit OID。
     pub branch_oid: String,
-    /// 分支是否已合入 `merge_target`；未请求删分支时固定为 `true`。
-    pub is_merged: bool,
-    /// 用于 merge 判断的完整 ref；未请求删分支时为空字符串。
-    pub merge_target: String,
+    /// 请求删除分支时捕获的合并目标快照；否则为 `None`。
+    pub merge_target: Option<MergeTargetSnapshot>,
 }
 
 /// Repository workspace Git 操作的结构化错误。
@@ -106,6 +117,11 @@ pub enum GitWorkspaceError {
     InvalidBranchRef { full_ref: String },
     #[error("selected remote ref `{full_ref}` is not a direct ref of a configured remote")]
     InvalidRemoteRef { full_ref: String },
+    #[error("branch ref `{branch_ref}` cannot use itself as merge target `{target_ref}")]
+    InvalidMergeTarget {
+        branch_ref: String,
+        target_ref: String,
+    },
     #[error("branch ref `{full_ref}` does not exist")]
     BranchNotFound { full_ref: String },
     #[error("branch name `{branch}` is invalid")]
@@ -209,8 +225,11 @@ pub enum GitWorkspaceError {
         worktree_path: PathBuf,
         branch: String,
         expected_oid: String,
+        #[source]
         verification_error: Box<GitWorkspaceError>,
     },
+    #[error("newly created branch `{branch}` unexpectedly tracks `{upstream}")]
+    UnexpectedBranchUpstream { branch: String, upstream: String },
     #[error("git returned invalid direct ref record `{record}`")]
     InvalidDirectRefRecord { record: String },
     #[error("failed to create clone target `{path}`: {source}")]
@@ -634,6 +653,12 @@ fn verify_remote_worktree_creation(
             actual_symbolic_target: actual_snapshot.symbolic_target,
         });
     }
+    if let Some(upstream) = branch_upstream(repository, &expected_branch)? {
+        return Err(GitWorkspaceError::UnexpectedBranchUpstream {
+            branch: branch.to_string(),
+            upstream,
+        });
+    }
     Ok(())
 }
 
@@ -756,14 +781,19 @@ pub async fn create_from_local_async(
     .await
 }
 
-/// 只读校验 linked worktree 是否可删除。
-///
-/// 未请求删除分支时不读取 remote 或执行 merge 判断，`is_merged` 返回 `true`，
-/// `merge_target` 返回空字符串。
+/// 只读校验 linked worktree 是否可删除，并捕获供 UI 使用的建议快照。
 pub fn deletion_preflight(
     repository: &Path,
     worktree_path: &Path,
     delete_branch: bool,
+) -> Result<DeletionPreflight, GitWorkspaceError> {
+    capture_deletion_candidate(repository, worktree_path, delete_branch)
+}
+
+fn capture_deletion_candidate(
+    repository: &Path,
+    worktree_path: &Path,
+    include_merge_target: bool,
 ) -> Result<DeletionPreflight, GitWorkspaceError> {
     let worktree_path = canonicalize(worktree_path)?;
     let mut matches = list_worktrees(repository)?
@@ -800,12 +830,12 @@ pub fn deletion_preflight(
         });
     }
     let branch_snapshot = direct_ref_snapshot(repository, &full_ref)?;
+    if branch_snapshot.symbolic_target.is_some() {
+        return Err(GitWorkspaceError::WorktreeHasNoLocalBranch {
+            path: worktree_path,
+        });
+    }
     let Some(branch_oid) = branch_snapshot.direct_oid else {
-        if branch_snapshot.symbolic_target.is_some() {
-            return Err(GitWorkspaceError::WorktreeHasNoLocalBranch {
-                path: worktree_path,
-            });
-        }
         return Err(GitWorkspaceError::BranchNotFound { full_ref });
     };
 
@@ -820,39 +850,68 @@ pub fn deletion_preflight(
         });
     }
 
-    if !delete_branch {
+    if !include_merge_target {
         return Ok(DeletionPreflight {
             worktree_path,
             branch: branch.to_string(),
+            branch_ref: full_ref,
             branch_oid,
-            is_merged: true,
-            merge_target: String::new(),
+            merge_target: None,
         });
     }
 
-    let merge_target = match branch_upstream(repository, &full_ref)? {
-        Some(upstream) => upstream,
+    let merge_target = resolve_merge_target_ref(repository, &full_ref)?;
+    if merge_target == full_ref {
+        return Err(GitWorkspaceError::InvalidMergeTarget {
+            branch_ref: full_ref,
+            target_ref: merge_target,
+        });
+    }
+    let target_oid = resolve_commit_oid(repository, &merge_target)?;
+    let is_merged = is_ancestor(repository, &branch_oid, &target_oid)?;
+
+    Ok(DeletionPreflight {
+        worktree_path,
+        branch: branch.to_string(),
+        branch_ref: full_ref,
+        branch_oid,
+        merge_target: Some(MergeTargetSnapshot {
+            full_ref: merge_target,
+            oid: target_oid,
+            is_merged,
+        }),
+    })
+}
+
+fn resolve_merge_target_ref(
+    repository: &Path,
+    branch_ref: &str,
+) -> Result<String, GitWorkspaceError> {
+    match branch_upstream(repository, branch_ref)? {
+        Some(upstream) => Ok(upstream),
         None => {
             let remote = primary_remote(repository)?;
             match default_branch(repository, &remote)? {
-                BranchRef::Remote { full_ref, .. } => full_ref,
+                BranchRef::Remote { full_ref, .. } => Ok(full_ref),
                 BranchRef::Local { full_ref, .. } => {
-                    return Err(GitWorkspaceError::InvalidRemoteRef { full_ref });
+                    Err(GitWorkspaceError::InvalidRemoteRef { full_ref })
                 }
             }
         }
-    };
-    let args = [
-        "merge-base",
-        "--is-ancestor",
-        branch_oid.as_str(),
-        merge_target.as_str(),
-    ];
+    }
+}
+
+fn is_ancestor(
+    repository: &Path,
+    branch_oid: &str,
+    target_oid: &str,
+) -> Result<bool, GitWorkspaceError> {
+    let args = ["merge-base", "--is-ancestor", branch_oid, target_oid];
     let output =
         git_output_allow_failure_for_operation(repository, "check branch merge status", &args)?;
-    let is_merged = match output.status.code() {
-        Some(0) => true,
-        Some(1) => false,
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
         Some(exit_code) => {
             debug_assert_ne!(exit_code, 0);
             debug_assert_ne!(exit_code, 1);
@@ -861,15 +920,7 @@ pub fn deletion_preflight(
         None => {
             return Err(command_failed("check branch merge status", &args, &output));
         }
-    };
-
-    Ok(DeletionPreflight {
-        worktree_path,
-        branch: branch.to_string(),
-        branch_oid,
-        is_merged,
-        merge_target,
-    })
+    }
 }
 
 /// 在后台线程执行 linked worktree 删除预检，避免阻塞 UI。
@@ -1039,10 +1090,17 @@ where
             actual: preflight.branch,
         });
     }
-    if delete_branch && !preflight.is_merged && !force_branch {
+    let is_unmerged = preflight
+        .merge_target
+        .as_ref()
+        .is_some_and(|target| !target.is_merged);
+    if delete_branch && is_unmerged && !force_branch {
+        let Some(merge_target) = preflight.merge_target.as_ref() else {
+            unreachable!("unmerged preflight branch must include a merge target");
+        };
         return Err(GitWorkspaceError::BranchNotMerged {
             branch: branch.to_string(),
-            merge_target: preflight.merge_target,
+            merge_target: merge_target.full_ref.clone(),
         });
     }
 

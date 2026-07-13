@@ -741,6 +741,51 @@ fn creates_new_branch_from_remote_ref_without_tracking() {
 }
 
 #[test]
+fn successful_remote_creation_rejects_new_upstream() {
+    let fixture = GitFixture::new();
+    let path = fixture.tempdir.path().join("unexpected upstream");
+
+    let error = create_from_remote_with_runner(
+        &fixture.root,
+        "refs/remotes/origin/main",
+        "feature/unexpected-upstream",
+        &path,
+        |repository, remote_ref, new_branch, claimed_path, _| {
+            let status = command::blocking::Command::new("git")
+                .arg("-C")
+                .arg(repository)
+                .args(["worktree", "add", "--no-track", "-b", new_branch])
+                .arg(claimed_path)
+                .arg(remote_ref)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            run_git(
+                repository,
+                &[
+                    "branch",
+                    "--set-upstream-to=origin/main",
+                    "feature/unexpected-upstream",
+                ],
+            );
+            Ok(())
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::WorktreeCreationVerificationFailed {
+            verification_error,
+            ..
+        } if matches!(verification_error.as_ref(), GitWorkspaceError::UnexpectedBranchUpstream {
+            branch,
+            upstream,
+        } if branch == "feature/unexpected-upstream" && upstream == "refs/remotes/origin/main")
+    ));
+}
+
+#[test]
 fn creates_remote_worktree_for_relative_claimed_target() {
     let fixture = GitFixture::new();
     assert_ne!(std::env::current_dir().unwrap(), fixture.root);
@@ -1438,6 +1483,52 @@ fn detached_worktree_is_rejected_before_mutation() {
 }
 
 #[test]
+fn deletion_preflight_captures_merge_target_oid() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/preflight-target");
+
+    let preflight = deletion_preflight(&fixture.root, &worktree_path, true).unwrap();
+    let merge_target = preflight.merge_target.as_ref().unwrap();
+
+    assert_eq!(preflight.branch_ref, "refs/heads/feature/preflight-target");
+    assert_eq!(merge_target.full_ref, "refs/remotes/origin/main");
+    assert_eq!(
+        merge_target.oid,
+        ref_oid(&fixture.root, "refs/remotes/origin/main")
+    );
+    assert!(merge_target.is_merged);
+}
+
+#[test]
+fn deletion_preflight_rejects_self_merge_target() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/self-target");
+    run_git(
+        &fixture.root,
+        &["config", "branch.feature/self-target.remote", "."],
+    );
+    run_git(
+        &fixture.root,
+        &[
+            "config",
+            "branch.feature/self-target.merge",
+            "refs/heads/feature/self-target",
+        ],
+    );
+
+    let error = deletion_preflight(&fixture.root, &worktree_path, true).unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::InvalidMergeTarget {
+            branch_ref,
+            target_ref,
+        } if branch_ref == "refs/heads/feature/self-target"
+            && target_ref == "refs/heads/feature/self-target"
+    ));
+}
+
+#[test]
 fn unmerged_branch_without_force_blocks_removal_before_mutation() {
     let fixture = GitFixture::new();
     let worktree_path = fixture.add_linked_worktree("feature/unmerged");
@@ -1457,8 +1548,9 @@ fn unmerged_branch_without_force_blocks_removal_before_mutation() {
     );
 
     let preflight = deletion_preflight(&fixture.root, &worktree_path, true).unwrap();
-    assert!(!preflight.is_merged);
-    assert_eq!(preflight.merge_target, "refs/remotes/origin/main");
+    let merge_target = preflight.merge_target.as_ref().unwrap();
+    assert!(!merge_target.is_merged);
+    assert_eq!(merge_target.full_ref, "refs/remotes/origin/main");
 
     let error = remove_workspace(
         &fixture.root,
@@ -1498,8 +1590,9 @@ fn merged_branch_is_safely_removed() {
 
     let preflight = deletion_preflight(&fixture.root, &worktree_path, true).unwrap();
     assert_eq!(preflight.branch, "feature/merged");
-    assert!(preflight.is_merged);
-    assert_eq!(preflight.merge_target, "refs/remotes/origin/integration");
+    let merge_target = preflight.merge_target.as_ref().unwrap();
+    assert!(merge_target.is_merged);
+    assert_eq!(merge_target.full_ref, "refs/remotes/origin/integration");
 
     remove_workspace(&fixture.root, &worktree_path, "feature/merged", true, false).unwrap();
 
@@ -1544,8 +1637,9 @@ fn default_merge_target_deletion_does_not_depend_on_main_worktree_head() {
     run_git(&fixture.root, &["switch", "other"]);
 
     let preflight = deletion_preflight(&fixture.root, &worktree_path, true).unwrap();
-    assert!(preflight.is_merged);
-    assert_eq!(preflight.merge_target, "refs/remotes/origin/main");
+    let merge_target = preflight.merge_target.as_ref().unwrap();
+    assert!(merge_target.is_merged);
+    assert_eq!(merge_target.full_ref, "refs/remotes/origin/main");
     assert_eq!(
         preflight.worktree_path,
         worktree_path.canonicalize().unwrap()
@@ -1988,8 +2082,7 @@ fn removes_worktree_but_keeps_branch_without_remote_metadata() {
 
     let preflight = deletion_preflight(&fixture.root, &worktree_path, false).unwrap();
     assert_eq!(preflight.branch, "feature/keep");
-    assert!(preflight.is_merged);
-    assert!(preflight.merge_target.is_empty());
+    assert!(preflight.merge_target.is_none());
 
     remove_workspace(&fixture.root, &worktree_path, "feature/keep", false, false).unwrap();
 
@@ -2014,7 +2107,7 @@ async fn async_worktree_wrappers_return_creation_preflight_and_removal_results()
         .await
         .unwrap();
     assert_eq!(preflight.branch, "feature/async");
-    assert!(preflight.is_merged);
+    assert!(preflight.merge_target.as_ref().unwrap().is_merged);
 
     remove_workspace_async(
         fixture.root.clone(),
