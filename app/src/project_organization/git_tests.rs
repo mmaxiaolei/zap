@@ -123,6 +123,14 @@ fn ref_oid(repository: &Path, full_ref: &str) -> String {
     git_output(repository, &["rev-parse", "--verify", full_ref])
 }
 
+fn injected_command_error(operation: &'static str) -> GitWorkspaceError {
+    GitWorkspaceError::CommandFailed {
+        operation,
+        args: vec!["worktree".to_string(), "add".to_string()],
+        stderr: "injected creation failure".to_string(),
+    }
+}
+
 #[test]
 fn rejects_linked_worktree_as_repository() {
     let fixture = GitFixture::new();
@@ -723,21 +731,31 @@ fn successful_remote_creation_rejects_branch_change_before_verification() {
         ],
     );
 
-    let error = create_from_remote_with_success_hook(
+    let error = create_from_remote_with_runner(
         &fixture.root,
         "refs/remotes/origin/main",
         "feature/post-success-change",
         &path,
-        || {
+        |repository, remote_ref, new_branch, claimed_path, runner_expected_oid| {
+            let status = command::blocking::Command::new("git")
+                .arg("-C")
+                .arg(repository)
+                .args(["worktree", "add", "--no-track", "-b", new_branch])
+                .arg(claimed_path)
+                .arg(remote_ref)
+                .status()
+                .unwrap();
+            assert!(status.success());
             run_git(
                 &fixture.root,
                 &[
                     "update-ref",
                     "refs/heads/feature/post-success-change",
                     &changed_oid,
-                    &expected_oid,
+                    runner_expected_oid,
                 ],
             );
+            Ok(())
         },
     )
     .unwrap_err();
@@ -877,106 +895,71 @@ fn rejects_existing_target_before_remote_creation() {
 }
 
 #[test]
-fn atomic_claim_preserves_concurrent_same_oid_direct_branch() {
+fn remote_creation_claims_target_before_git_command() {
     let fixture = GitFixture::new();
-    let path = fixture.tempdir.path().join("concurrent claim target");
-    let expected_oid = ref_oid(&fixture.root, "refs/remotes/origin/main");
+    let path = fixture.tempdir.path().join("remote claimed target");
 
-    let error = create_from_remote_with_hooks(
+    create_from_remote_with_after_target_claim_hook(
         &fixture.root,
         "refs/remotes/origin/main",
-        "feature/concurrent-claim",
+        "feature/remote-target-claim",
         &path,
         || {
-            run_git(
-                &fixture.root,
-                &[
-                    "update-ref",
-                    "refs/heads/feature/concurrent-claim",
-                    &expected_oid,
-                ],
-            );
+            let error = std::fs::create_dir(&path).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
         },
-        || {},
     )
-    .unwrap_err();
+    .unwrap();
 
-    assert!(matches!(
-        error,
-        GitWorkspaceError::BranchClaimFailed {
-            branch,
-            expected_oid: expected,
-            claim_error,
-        } if branch == "feature/concurrent-claim"
-            && expected == expected_oid
-            && matches!(*claim_error, GitWorkspaceError::CommandFailed { operation, ref stderr, .. }
-                if operation == "atomically claim local branch" && !stderr.is_empty())
-    ));
-    assert_eq!(
-        ref_oid(&fixture.root, "refs/heads/feature/concurrent-claim"),
-        expected_oid
-    );
-    assert!(!path.exists());
+    assert_eq!(current_branch(&path), "feature/remote-target-claim");
 }
 
 #[test]
-fn atomic_claim_preserves_concurrent_same_oid_symbolic_branch() {
+fn local_creation_claims_target_before_git_command() {
     let fixture = GitFixture::new();
-    run_git(
-        &fixture.root,
-        &["branch", "feature/concurrent-claim-target"],
-    );
-    let path = fixture
-        .tempdir
-        .path()
-        .join("concurrent symbolic claim target");
-    let expected_oid = ref_oid(&fixture.root, "refs/remotes/origin/main");
+    run_git(&fixture.root, &["branch", "feature/local-target-claim"]);
+    let path = fixture.tempdir.path().join("local claimed target");
 
-    let error = create_from_remote_with_hooks(
+    create_from_local_with_after_target_claim_hook(
         &fixture.root,
-        "refs/remotes/origin/main",
-        "feature/concurrent-symbolic-claim",
+        "feature/local-target-claim",
         &path,
         || {
-            run_git(
-                &fixture.root,
-                &[
-                    "symbolic-ref",
-                    "refs/heads/feature/concurrent-symbolic-claim",
-                    "refs/heads/feature/concurrent-claim-target",
-                ],
-            );
+            let error = std::fs::create_dir(&path).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
         },
-        || {},
+    )
+    .unwrap();
+
+    assert_eq!(current_branch(&path), "feature/local-target-claim");
+}
+
+#[test]
+fn creation_rejects_claim_replaced_by_file_before_git_command() {
+    let fixture = GitFixture::new();
+    let path = fixture.tempdir.path().join("replaced target");
+
+    let error = create_from_remote_with_after_target_claim_hook(
+        &fixture.root,
+        "refs/remotes/origin/main",
+        "feature/replaced-target",
+        &path,
+        || {
+            std::fs::remove_dir(&path).unwrap();
+            std::fs::write(&path, "replacement").unwrap();
+        },
     )
     .unwrap_err();
 
     assert!(matches!(
         error,
-        GitWorkspaceError::BranchClaimFailed {
-            branch,
-            expected_oid: expected,
-            claim_error,
-        } if branch == "feature/concurrent-symbolic-claim"
-            && expected == expected_oid
-            && matches!(*claim_error, GitWorkspaceError::CommandFailed { operation, ref stderr, .. }
-                if operation == "atomically claim local branch" && !stderr.is_empty())
+        GitWorkspaceError::ClaimedTargetNotDirectory { path: error_path } if error_path == path
     ));
-    assert_eq!(
-        git_output(
-            &fixture.root,
-            &[
-                "symbolic-ref",
-                "refs/heads/feature/concurrent-symbolic-claim"
-            ]
-        ),
-        "refs/heads/feature/concurrent-claim-target"
-    );
-    assert!(ref_exists(
+    assert!(!ref_exists(
         &fixture.root,
-        "refs/heads/feature/concurrent-claim-target"
+        "refs/heads/feature/replaced-target"
     ));
-    assert!(!path.exists());
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "replacement");
 }
 
 #[cfg(unix)]
@@ -1011,222 +994,176 @@ fn rejects_dangling_symlink_target_without_creating_branch() {
 }
 
 #[test]
-fn remote_creation_failure_cleans_branch_created_at_expected_oid() {
+fn remote_runner_failure_preserves_branch_and_removes_empty_claimed_target() {
     let fixture = GitFixture::new();
-    let path = fixture.tempdir.path().join("raced target");
-    let sentinel = path.join("keep.txt");
+    let path = fixture.tempdir.path().join("remote residual target");
 
-    let error = create_from_remote_with_hooks(
+    let error = create_from_remote_with_runner(
         &fixture.root,
         "refs/remotes/origin/main",
-        "feature/raced-target",
+        "feature/residual",
         &path,
-        || {
-            std::fs::create_dir(&path).unwrap();
-            std::fs::write(&sentinel, "keep").unwrap();
+        |repository, _, new_branch, _, expected_oid| {
+            run_git(
+                repository,
+                &["update-ref", "refs/heads/feature/residual", expected_oid],
+            );
+            assert_eq!(new_branch, "feature/residual");
+            Err(injected_command_error(
+                "inject remote residual creation failure",
+            ))
         },
-        || {},
     )
     .unwrap_err();
 
     assert!(matches!(
         error,
-        GitWorkspaceError::CommandFailed { operation, stderr, .. }
-            if operation == "create worktree from remote" && !stderr.is_empty()
+        GitWorkspaceError::WorktreeCreationFailed {
+            worktree_path,
+            branch,
+            branch_may_remain: true,
+            worktree_registered: Some(false),
+            claimed_directory_removed: true,
+            create_error,
+            cleanup_error: None,
+        } if worktree_path == path
+            && branch == "feature/residual"
+            && matches!(create_error.as_ref(), GitWorkspaceError::CommandFailed {
+                operation: "inject remote residual creation failure",
+                ..
+            })
     ));
-    assert!(!ref_exists(
+    assert!(ref_exists(&fixture.root, "refs/heads/feature/residual"));
+    assert!(!path.exists());
+}
+
+#[test]
+fn remote_runner_failure_keeps_nonempty_claimed_target() {
+    let fixture = GitFixture::new();
+    let path = fixture.tempdir.path().join("remote nonempty target");
+    let sentinel = path.join("keep.txt");
+
+    let error = create_from_remote_with_runner(
         &fixture.root,
-        "refs/heads/feature/raced-target"
+        "refs/remotes/origin/main",
+        "feature/nonempty-residual",
+        &path,
+        |_, _, _, claimed_path, _| {
+            std::fs::write(claimed_path.join("keep.txt"), "keep").unwrap();
+            Err(injected_command_error(
+                "inject remote nonempty creation failure",
+            ))
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::WorktreeCreationFailed {
+            worktree_path,
+            branch,
+            branch_may_remain: true,
+            worktree_registered: Some(false),
+            claimed_directory_removed: false,
+            create_error,
+            cleanup_error: Some(cleanup_error),
+        } if worktree_path == path
+            && branch == "feature/nonempty-residual"
+            && matches!(create_error.as_ref(), GitWorkspaceError::CommandFailed {
+                operation: "inject remote nonempty creation failure",
+                ..
+            })
+            && matches!(cleanup_error.as_ref(), GitWorkspaceError::ClaimedTargetNotEmpty {
+                path: cleanup_path,
+            } if cleanup_path == &path)
     ));
     assert_eq!(std::fs::read_to_string(sentinel).unwrap(), "keep");
 }
 
 #[test]
-fn remote_creation_cleanup_rejects_ref_recreated_after_compare_delete() {
+fn remote_runner_failure_preserves_registered_worktree() {
     let fixture = GitFixture::new();
-    let expected_oid = ref_oid(&fixture.root, "refs/remotes/origin/main");
-    run_git(
-        &fixture.root,
-        &[
-            "update-ref",
-            "refs/heads/feature/recreated-cleanup",
-            &expected_oid,
-        ],
-    );
+    let path = fixture.tempdir.path().join("registered residual target");
 
-    let error = cleanup_failed_remote_creation_with_hook(
+    let error = create_from_remote_with_runner(
         &fixture.root,
-        "feature/recreated-cleanup",
-        &expected_oid,
-        GitWorkspaceError::CommandFailed {
-            operation: "injected worktree creation",
-            args: vec!["worktree".to_string(), "add".to_string()],
-            stderr: "injected creation failure".to_string(),
-        },
-        || {
-            run_git(
-                &fixture.root,
-                &[
-                    "update-ref",
-                    "refs/heads/feature/recreated-cleanup",
-                    &expected_oid,
-                ],
-            );
+        "refs/remotes/origin/main",
+        "feature/registered-residual",
+        &path,
+        |repository, remote_ref, new_branch, claimed_path, _| {
+            let status = command::blocking::Command::new("git")
+                .arg("-C")
+                .arg(repository)
+                .args(["worktree", "add", "--no-track", "-b", new_branch])
+                .arg(claimed_path)
+                .arg(remote_ref)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            Err(injected_command_error(
+                "inject registered remote creation failure",
+            ))
         },
     )
     .unwrap_err();
 
     assert!(matches!(
         error,
-        GitWorkspaceError::WorktreeCreationCleanupFailed {
+        GitWorkspaceError::WorktreeCreationFailed {
+            worktree_path,
             branch,
+            branch_may_remain: true,
+            worktree_registered: Some(true),
+            claimed_directory_removed: false,
             create_error,
-            cleanup_error,
-        } if branch == "feature/recreated-cleanup"
-            && matches!(*create_error, GitWorkspaceError::CommandFailed {
-                operation: "injected worktree creation",
+            cleanup_error: None,
+        } if worktree_path == path
+            && branch == "feature/registered-residual"
+            && matches!(create_error.as_ref(), GitWorkspaceError::CommandFailed {
+                operation: "inject registered remote creation failure",
                 ..
             })
-            && matches!(cleanup_error.as_ref(), GitWorkspaceError::BranchCleanupFailed {
-                actual_oid: Some(actual),
-                actual_symbolic_target: None,
-                delete_error,
-                inspection_error: None,
-                ..
-            } if *actual == expected_oid
-                && matches!(delete_error.as_ref(), GitWorkspaceError::BranchDeleteNotCompleted { .. }))
     ));
-    assert_eq!(
-        ref_oid(&fixture.root, "refs/heads/feature/recreated-cleanup"),
-        expected_oid
-    );
-}
-
-#[test]
-fn remote_creation_failure_preserves_concurrently_changed_branch() {
-    let fixture = GitFixture::new();
-    let path = fixture.tempdir.path().join("changed raced target");
-    let expected_oid = ref_oid(&fixture.root, "refs/remotes/origin/main");
-    let changed_oid = git_output(
-        &fixture.root,
-        &[
-            "-c",
-            "user.name=Zap Tests",
-            "-c",
-            "user.email=zap@example.com",
-            "commit-tree",
-            "HEAD^{tree}",
-            "-p",
-            "HEAD",
-            "-m",
-            "concurrent branch change",
-        ],
-    );
-
-    let error = create_from_remote_with_hooks(
-        &fixture.root,
-        "refs/remotes/origin/main",
-        "feature/changed-race",
-        &path,
-        || {
-            std::fs::create_dir(&path).unwrap();
-            std::fs::write(path.join("keep.txt"), "keep").unwrap();
-        },
-        || {
-            run_git(
-                &fixture.root,
-                &[
-                    "update-ref",
-                    "refs/heads/feature/changed-race",
-                    &changed_oid,
-                    &expected_oid,
-                ],
-            );
-        },
-    )
-    .unwrap_err();
-
-    assert!(matches!(
-        error,
-        GitWorkspaceError::WorktreeCreationBranchChanged {
-            branch,
-            expected_oid: expected,
-            actual_oid: Some(actual),
-            actual_symbolic_target: None,
-            create_error,
-        } if branch == "feature/changed-race"
-            && expected == expected_oid
-            && actual == changed_oid
-            && matches!(*create_error, GitWorkspaceError::CommandFailed { .. })
-    ));
-    assert_eq!(
-        ref_oid(&fixture.root, "refs/heads/feature/changed-race"),
-        changed_oid
-    );
-}
-
-#[test]
-fn remote_creation_cleanup_preserves_same_oid_symbolic_branch() {
-    let fixture = GitFixture::new();
-    run_git(&fixture.root, &["branch", "feature/cleanup-target"]);
-    let path = fixture.tempdir.path().join("symbolic cleanup target");
-    let expected_oid = ref_oid(&fixture.root, "refs/remotes/origin/main");
-
-    let error = create_from_remote_with_hooks(
-        &fixture.root,
-        "refs/remotes/origin/main",
-        "feature/symbolic-cleanup",
-        &path,
-        || {
-            std::fs::create_dir(&path).unwrap();
-            std::fs::write(path.join("keep.txt"), "keep").unwrap();
-        },
-        || {
-            run_git(
-                &fixture.root,
-                &[
-                    "update-ref",
-                    "--no-deref",
-                    "-d",
-                    "refs/heads/feature/symbolic-cleanup",
-                    &expected_oid,
-                ],
-            );
-            run_git(
-                &fixture.root,
-                &[
-                    "symbolic-ref",
-                    "refs/heads/feature/symbolic-cleanup",
-                    "refs/heads/feature/cleanup-target",
-                ],
-            );
-        },
-    )
-    .unwrap_err();
-
-    assert!(matches!(
-        error,
-        GitWorkspaceError::WorktreeCreationBranchChanged {
-            branch,
-            expected_oid: expected,
-            actual_oid: None,
-            actual_symbolic_target: Some(symbolic_target),
-            create_error,
-        } if branch == "feature/symbolic-cleanup"
-            && expected == expected_oid
-            && symbolic_target == "refs/heads/feature/cleanup-target"
-            && matches!(*create_error, GitWorkspaceError::CommandFailed { .. })
-    ));
-    assert_eq!(
-        git_output(
-            &fixture.root,
-            &["symbolic-ref", "refs/heads/feature/symbolic-cleanup"]
-        ),
-        "refs/heads/feature/cleanup-target"
-    );
+    assert!(path.exists());
     assert!(ref_exists(
         &fixture.root,
-        "refs/heads/feature/cleanup-target"
+        "refs/heads/feature/registered-residual"
+    ));
+}
+
+#[test]
+fn local_runner_failure_removes_empty_claimed_target_and_preserves_branch() {
+    let fixture = GitFixture::new();
+    let path = fixture.tempdir.path().join("local residual target");
+    run_git(&fixture.root, &["branch", "feature/local-residual"]);
+
+    let error =
+        create_from_local_with_runner(&fixture.root, "feature/local-residual", &path, |_, _, _| {
+            Err(injected_command_error("inject local creation failure"))
+        })
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::WorktreeCreationFailed {
+            worktree_path,
+            branch,
+            branch_may_remain: false,
+            worktree_registered: Some(false),
+            claimed_directory_removed: true,
+            create_error,
+            cleanup_error: None,
+        } if worktree_path == path
+            && branch == "feature/local-residual"
+            && matches!(create_error.as_ref(), GitWorkspaceError::CommandFailed {
+                operation: "inject local creation failure",
+                ..
+            })
+    ));
+    assert!(!path.exists());
+    assert!(ref_exists(
+        &fixture.root,
+        "refs/heads/feature/local-residual"
     ));
 }
 

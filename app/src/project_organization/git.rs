@@ -112,14 +112,6 @@ pub enum GitWorkspaceError {
     InvalidBranchName { branch: String },
     #[error("local branch `{branch}` already exists")]
     BranchAlreadyExists { branch: String },
-    #[error(
-        "failed to atomically claim local branch `{branch}` at expected OID {expected_oid}: {claim_error}"
-    )]
-    BranchClaimFailed {
-        branch: String,
-        expected_oid: String,
-        claim_error: Box<GitWorkspaceError>,
-    },
     #[error("local branch `{branch}` is already checked out at `{path}`")]
     BranchAlreadyCheckedOut { branch: String, path: PathBuf },
     #[error("worktree `{path}` is not registered in the repository")]
@@ -154,17 +146,6 @@ pub enum GitWorkspaceError {
         expected_oid: String,
     },
     #[error(
-        "failed to clean up branch ref `{full_ref}` at expected OID {expected_oid}: {delete_error}; current direct OID {actual_oid:?}, symbolic target {actual_symbolic_target:?}, inspection error {inspection_error:?}"
-    )]
-    BranchCleanupFailed {
-        full_ref: String,
-        expected_oid: String,
-        actual_oid: Option<String>,
-        actual_symbolic_target: Option<String>,
-        delete_error: Box<GitWorkspaceError>,
-        inspection_error: Option<Box<GitWorkspaceError>>,
-    },
-    #[error(
         "worktree `{worktree_path}` was removed, but deleting branch `{branch}` at expected OID {expected_oid} failed: {delete_error}; current direct OID {actual_oid:?}, symbolic target {actual_symbolic_target:?}, inspection error {inspection_error:?}"
     )]
     BranchDeleteFailed {
@@ -188,29 +169,38 @@ pub enum GitWorkspaceError {
     InvalidWorktreeRecord { record: String },
     #[error("target `{path}` already exists")]
     TargetExists { path: PathBuf },
-    #[error("failed to inspect target `{path}`: {source}")]
-    TargetInspection {
+    #[error("failed to claim target directory `{path}`: {source}")]
+    TargetClaimFailed {
         path: PathBuf,
         #[source]
         source: io::Error,
     },
-    #[error(
-        "worktree creation for branch `{branch}` failed and the branch changed from expected OID {expected_oid} to direct OID {actual_oid:?}, symbolic target {actual_symbolic_target:?}: {create_error}"
-    )]
-    WorktreeCreationBranchChanged {
-        branch: String,
-        expected_oid: String,
-        actual_oid: Option<String>,
-        actual_symbolic_target: Option<String>,
-        create_error: Box<GitWorkspaceError>,
+    #[error("failed to inspect claimed target directory `{path}`: {source}")]
+    ClaimedTargetInspection {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
     },
-    #[error(
-        "worktree creation for branch `{branch}` failed: {create_error}; branch cleanup also failed: {cleanup_error}"
-    )]
-    WorktreeCreationCleanupFailed {
+    #[error("claimed target `{path}` is not a directory")]
+    ClaimedTargetNotDirectory { path: PathBuf },
+    #[error("claimed target `{path}` is not empty")]
+    ClaimedTargetNotEmpty { path: PathBuf },
+    #[error("failed to clean up claimed target directory `{path}`: {source}")]
+    ClaimedTargetCleanupFailed {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("worktree creation failed for `{branch}` at `{worktree_path}`: {create_error}; branch may remain: {branch_may_remain}; registered: {worktree_registered:?}; claimed directory removed: {claimed_directory_removed}; cleanup error: {cleanup_error:?}")]
+    WorktreeCreationFailed {
+        worktree_path: PathBuf,
         branch: String,
+        branch_may_remain: bool,
+        worktree_registered: Option<bool>,
+        claimed_directory_removed: bool,
+        #[source]
         create_error: Box<GitWorkspaceError>,
-        cleanup_error: Box<GitWorkspaceError>,
+        cleanup_error: Option<Box<GitWorkspaceError>>,
     },
     #[error(
         "worktree `{worktree_path}` for branch `{branch}` was created but could not be verified at expected OID {expected_oid}; the worktree and branch may remain: {verification_error}"
@@ -475,138 +465,128 @@ pub fn create_from_remote(
     new_branch: &str,
     worktree_path: &Path,
 ) -> Result<(), GitWorkspaceError> {
-    create_from_remote_inner(
+    create_from_remote_core(
         repository,
         remote_ref,
         new_branch,
         worktree_path,
         || {},
-        || {},
-        || {},
+        create_remote_worktree,
     )
 }
 
 #[cfg(test)]
-pub(crate) fn create_from_remote_with_hooks<BeforeCommand, AfterFailure>(
+pub(crate) fn create_from_remote_with_after_target_claim_hook<F>(
     repository: &Path,
     remote_ref: &str,
     new_branch: &str,
     worktree_path: &Path,
-    before_command: BeforeCommand,
-    after_failure: AfterFailure,
+    after: F,
 ) -> Result<(), GitWorkspaceError>
 where
-    BeforeCommand: FnOnce(),
-    AfterFailure: FnOnce(),
+    F: FnOnce(),
 {
-    create_from_remote_inner(
+    create_from_remote_core(
         repository,
         remote_ref,
         new_branch,
         worktree_path,
-        before_command,
-        after_failure,
-        || {},
+        after,
+        create_remote_worktree,
     )
 }
 
 #[cfg(test)]
-pub(crate) fn create_from_remote_with_success_hook<AfterSuccess>(
+pub(crate) fn create_from_remote_with_runner<Runner>(
     repository: &Path,
     remote_ref: &str,
     new_branch: &str,
     worktree_path: &Path,
-    after_success: AfterSuccess,
+    runner: Runner,
 ) -> Result<(), GitWorkspaceError>
 where
-    AfterSuccess: FnOnce(),
+    Runner: FnOnce(&Path, &str, &str, &Path, &str) -> Result<(), GitWorkspaceError>,
 {
-    create_from_remote_inner(
+    create_from_remote_core(
         repository,
         remote_ref,
         new_branch,
         worktree_path,
         || {},
-        || {},
-        after_success,
+        runner,
     )
 }
 
-fn create_from_remote_inner<BeforeClaim, AfterFailure, AfterSuccess>(
+fn create_from_remote_core<AfterTargetClaim, Runner>(
     repository: &Path,
     remote_ref: &str,
     new_branch: &str,
     worktree_path: &Path,
-    before_claim: BeforeClaim,
-    after_failure: AfterFailure,
-    after_success: AfterSuccess,
+    after_target_claim: AfterTargetClaim,
+    runner: Runner,
 ) -> Result<(), GitWorkspaceError>
 where
-    BeforeClaim: FnOnce(),
-    AfterFailure: FnOnce(),
-    AfterSuccess: FnOnce(),
+    AfterTargetClaim: FnOnce(),
+    Runner: FnOnce(&Path, &str, &str, &Path, &str) -> Result<(), GitWorkspaceError>,
 {
     let expected_oid = validate_remote_ref(repository, remote_ref)?;
     validate_new_branch(repository, new_branch)?;
-    validate_target_missing(worktree_path)?;
-    before_claim();
+    let claim = TargetDirectoryClaim::acquire(worktree_path)?;
+    after_target_claim();
+    claim.ensure_directory()?;
 
-    let full_ref = format!("refs/heads/{new_branch}");
-    let zero_oid = "0".repeat(expected_oid.len());
-    let claim_args = [
-        "update-ref",
-        "--no-deref",
-        full_ref.as_str(),
-        expected_oid.as_str(),
-        zero_oid.as_str(),
-    ];
-    let claim_output = git_output_allow_failure_for_operation(
+    match runner(
         repository,
-        "atomically claim local branch",
-        &claim_args,
-    )
-    .map_err(|claim_error| GitWorkspaceError::BranchClaimFailed {
-        branch: new_branch.to_string(),
-        expected_oid: expected_oid.clone(),
-        claim_error: Box::new(claim_error),
-    })?;
-    if !claim_output.status.success() {
-        return Err(GitWorkspaceError::BranchClaimFailed {
-            branch: new_branch.to_string(),
-            expected_oid: expected_oid.clone(),
-            claim_error: Box::new(command_failed(
-                "atomically claim local branch",
-                &claim_args,
-                &claim_output,
-            )),
-        });
+        remote_ref,
+        new_branch,
+        &claim.requested_path,
+        &expected_oid,
+    ) {
+        Ok(()) => {
+            claim.ensure_directory()?;
+            verify_remote_worktree_creation(
+                repository,
+                &claim.requested_path,
+                new_branch,
+                &expected_oid,
+            )
+            .map_err(|verification_error| {
+                GitWorkspaceError::WorktreeCreationVerificationFailed {
+                    worktree_path: claim.requested_path,
+                    branch: new_branch.to_string(),
+                    expected_oid,
+                    verification_error: Box::new(verification_error),
+                }
+            })
+        }
+        Err(create_error) => Err(worktree_creation_failed(
+            repository,
+            &claim,
+            new_branch,
+            true,
+            create_error,
+        )),
     }
+}
 
+fn create_remote_worktree(
+    repository: &Path,
+    remote_ref: &str,
+    new_branch: &str,
+    claimed_path: &Path,
+    _: &str,
+) -> Result<(), GitWorkspaceError> {
     let args = [
         OsStr::new("worktree"),
         OsStr::new("add"),
-        worktree_path.as_os_str(),
+        OsStr::new("--no-track"),
+        OsStr::new("-b"),
         OsStr::new(new_branch),
+        claimed_path.as_os_str(),
+        OsStr::new(remote_ref),
     ];
-    match git_output_with_os_args_for_operation(repository, "create worktree from remote", &args) {
-        Ok(output) => {
-            drop(output);
-            after_success();
-            verify_remote_worktree_creation(repository, worktree_path, new_branch, &expected_oid)
-                .map_err(|verification_error| {
-                    GitWorkspaceError::WorktreeCreationVerificationFailed {
-                        worktree_path: worktree_path.to_path_buf(),
-                        branch: new_branch.to_string(),
-                        expected_oid,
-                        verification_error: Box::new(verification_error),
-                    }
-                })
-        }
-        Err(create_error) => {
-            after_failure();
-            cleanup_failed_remote_creation(repository, new_branch, &expected_oid, create_error)
-        }
-    }
+    git_output_with_os_args_for_operation(repository, "create worktree from remote", &args)?;
+    Ok(())
 }
 
 fn verify_remote_worktree_creation(
@@ -676,6 +656,52 @@ pub fn create_from_local(
     local_branch: &str,
     worktree_path: &Path,
 ) -> Result<(), GitWorkspaceError> {
+    create_from_local_core(
+        repository,
+        local_branch,
+        worktree_path,
+        || {},
+        create_local_worktree,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn create_from_local_with_after_target_claim_hook<F>(
+    repository: &Path,
+    branch: &str,
+    path: &Path,
+    after: F,
+) -> Result<(), GitWorkspaceError>
+where
+    F: FnOnce(),
+{
+    create_from_local_core(repository, branch, path, after, create_local_worktree)
+}
+
+#[cfg(test)]
+pub(crate) fn create_from_local_with_runner<Runner>(
+    repository: &Path,
+    branch: &str,
+    path: &Path,
+    runner: Runner,
+) -> Result<(), GitWorkspaceError>
+where
+    Runner: FnOnce(&Path, &str, &Path) -> Result<(), GitWorkspaceError>,
+{
+    create_from_local_core(repository, branch, path, || {}, runner)
+}
+
+fn create_from_local_core<AfterTargetClaim, Runner>(
+    repository: &Path,
+    local_branch: &str,
+    worktree_path: &Path,
+    after_target_claim: AfterTargetClaim,
+    runner: Runner,
+) -> Result<(), GitWorkspaceError>
+where
+    AfterTargetClaim: FnOnce(),
+    Runner: FnOnce(&Path, &str, &Path) -> Result<(), GitWorkspaceError>,
+{
     let full_ref = format!("refs/heads/{local_branch}");
     validate_ref_exists(repository, &full_ref)?;
     if let Some(worktree) = list_worktrees(repository)?
@@ -687,12 +713,31 @@ pub fn create_from_local(
             path: worktree.path,
         });
     }
-    validate_target_missing(worktree_path)?;
+    let claim = TargetDirectoryClaim::acquire(worktree_path)?;
+    after_target_claim();
+    claim.ensure_directory()?;
 
+    match runner(repository, local_branch, &claim.requested_path) {
+        Ok(()) => claim.ensure_directory(),
+        Err(create_error) => Err(worktree_creation_failed(
+            repository,
+            &claim,
+            local_branch,
+            false,
+            create_error,
+        )),
+    }
+}
+
+fn create_local_worktree(
+    repository: &Path,
+    local_branch: &str,
+    claimed_path: &Path,
+) -> Result<(), GitWorkspaceError> {
     let args = [
         OsStr::new("worktree"),
         OsStr::new("add"),
-        worktree_path.as_os_str(),
+        claimed_path.as_os_str(),
         OsStr::new(local_branch),
     ];
     git_output_with_os_args_for_operation(repository, "create worktree from local branch", &args)?;
@@ -1358,138 +1403,111 @@ fn ref_exists(repository: &Path, full_ref: &str) -> Result<bool, GitWorkspaceErr
     }
 }
 
-fn validate_target_missing(path: &Path) -> Result<(), GitWorkspaceError> {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            drop(metadata);
-            Err(GitWorkspaceError::TargetExists {
+struct TargetDirectoryClaim {
+    requested_path: PathBuf,
+    canonical_path: PathBuf,
+}
+
+impl TargetDirectoryClaim {
+    fn acquire(path: &Path) -> Result<Self, GitWorkspaceError> {
+        std::fs::create_dir(path).map_err(|source| match source.kind() {
+            io::ErrorKind::AlreadyExists => GitWorkspaceError::TargetExists {
                 path: path.to_path_buf(),
+            },
+            _ => GitWorkspaceError::TargetClaimFailed {
+                path: path.to_path_buf(),
+                source,
+            },
+        })?;
+        let canonical_path = canonicalize(path)?;
+        Ok(Self {
+            requested_path: path.to_path_buf(),
+            canonical_path,
+        })
+    }
+
+    fn ensure_directory(&self) -> Result<(), GitWorkspaceError> {
+        let metadata = std::fs::symlink_metadata(&self.requested_path).map_err(|source| {
+            GitWorkspaceError::ClaimedTargetInspection {
+                path: self.requested_path.clone(),
+                source,
+            }
+        })?;
+        if metadata.file_type().is_dir() {
+            Ok(())
+        } else {
+            Err(GitWorkspaceError::ClaimedTargetNotDirectory {
+                path: self.requested_path.clone(),
             })
         }
-        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(GitWorkspaceError::TargetInspection {
-            path: path.to_path_buf(),
-            source,
-        }),
     }
 }
 
-fn cleanup_failed_remote_creation(
+fn worktree_creation_failed(
     repository: &Path,
+    claim: &TargetDirectoryClaim,
     branch: &str,
-    expected_oid: &str,
+    branch_may_remain: bool,
     create_error: GitWorkspaceError,
+) -> GitWorkspaceError {
+    let (worktree_registered, mut cleanup_error) = match list_worktrees(repository) {
+        Ok(worktrees) => (
+            Some(
+                worktrees
+                    .into_iter()
+                    .any(|worktree| worktree.path == claim.canonical_path),
+            ),
+            None,
+        ),
+        Err(error) => (None, Some(Box::new(error))),
+    };
+    let mut claimed_directory_removed = false;
+    if worktree_registered == Some(false) {
+        match remove_claimed_directory_if_empty(claim) {
+            Ok(()) => claimed_directory_removed = true,
+            Err(error) => cleanup_error = Some(Box::new(error)),
+        }
+    }
+
+    GitWorkspaceError::WorktreeCreationFailed {
+        worktree_path: claim.requested_path.clone(),
+        branch: branch.to_string(),
+        branch_may_remain,
+        worktree_registered,
+        claimed_directory_removed,
+        create_error: Box::new(create_error),
+        cleanup_error,
+    }
+}
+
+fn remove_claimed_directory_if_empty(
+    claim: &TargetDirectoryClaim,
 ) -> Result<(), GitWorkspaceError> {
-    cleanup_failed_remote_creation_inner(repository, branch, expected_oid, create_error, || {})
-}
-
-#[cfg(test)]
-pub(crate) fn cleanup_failed_remote_creation_with_hook<AfterDelete>(
-    repository: &Path,
-    branch: &str,
-    expected_oid: &str,
-    create_error: GitWorkspaceError,
-    after_delete: AfterDelete,
-) -> Result<(), GitWorkspaceError>
-where
-    AfterDelete: FnOnce(),
-{
-    cleanup_failed_remote_creation_inner(
-        repository,
-        branch,
-        expected_oid,
-        create_error,
-        after_delete,
-    )
-}
-
-fn cleanup_failed_remote_creation_inner<AfterDelete>(
-    repository: &Path,
-    branch: &str,
-    expected_oid: &str,
-    create_error: GitWorkspaceError,
-    after_delete: AfterDelete,
-) -> Result<(), GitWorkspaceError>
-where
-    AfterDelete: FnOnce(),
-{
-    let full_ref = format!("refs/heads/{branch}");
-    let actual_snapshot = match direct_ref_snapshot(repository, &full_ref) {
-        Ok(actual_snapshot) => actual_snapshot,
-        Err(cleanup_error) => {
-            return Err(GitWorkspaceError::WorktreeCreationCleanupFailed {
-                branch: branch.to_string(),
-                create_error: Box::new(create_error),
-                cleanup_error: Box::new(cleanup_error),
+    let mut entries = std::fs::read_dir(&claim.requested_path).map_err(|source| {
+        GitWorkspaceError::ClaimedTargetCleanupFailed {
+            path: claim.requested_path.clone(),
+            source,
+        }
+    })?;
+    match entries.next() {
+        None => {}
+        Some(Ok(_)) => {
+            return Err(GitWorkspaceError::ClaimedTargetNotEmpty {
+                path: claim.requested_path.clone(),
             });
         }
-    };
-    if actual_snapshot.direct_oid.is_none() && actual_snapshot.symbolic_target.is_none() {
-        return Err(create_error);
+        Some(Err(source)) => {
+            return Err(GitWorkspaceError::ClaimedTargetCleanupFailed {
+                path: claim.requested_path.clone(),
+                source,
+            });
+        }
     }
-    if actual_snapshot.direct_oid.as_deref() != Some(expected_oid)
-        || actual_snapshot.symbolic_target.is_some()
-    {
-        return Err(GitWorkspaceError::WorktreeCreationBranchChanged {
-            branch: branch.to_string(),
-            expected_oid: expected_oid.to_string(),
-            actual_oid: actual_snapshot.direct_oid,
-            actual_symbolic_target: actual_snapshot.symbolic_target,
-            create_error: Box::new(create_error),
-        });
-    }
-
-    let args = [
-        "update-ref",
-        "--no-deref",
-        "-d",
-        full_ref.as_str(),
-        expected_oid,
-    ];
-    let delete_error = match git_output_allow_failure_for_operation(
-        repository,
-        "clean up branch after worktree creation failure",
-        &args,
-    ) {
-        Ok(cleanup_output) if cleanup_output.status.success() => None,
-        Ok(cleanup_output) => Some(command_failed(
-            "clean up branch after worktree creation failure",
-            &args,
-            &cleanup_output,
-        )),
-        Err(cleanup_error) => Some(cleanup_error),
-    };
-    after_delete();
-    let (actual_snapshot, inspection_error) = match direct_ref_snapshot(repository, &full_ref) {
-        Ok(actual_snapshot) => (Some(actual_snapshot), None),
-        Err(inspection_error) => (None, Some(Box::new(inspection_error))),
-    };
-    if delete_error.is_none()
-        && inspection_error.is_none()
-        && actual_snapshot.as_ref().is_some_and(|snapshot| {
-            snapshot.direct_oid.is_none() && snapshot.symbolic_target.is_none()
-        })
-    {
-        return Err(create_error);
-    }
-    let delete_error =
-        delete_error.unwrap_or_else(|| GitWorkspaceError::BranchDeleteNotCompleted {
-            full_ref: full_ref.clone(),
-            expected_oid: expected_oid.to_string(),
-        });
-    Err(GitWorkspaceError::WorktreeCreationCleanupFailed {
-        branch: branch.to_string(),
-        create_error: Box::new(create_error),
-        cleanup_error: Box::new(GitWorkspaceError::BranchCleanupFailed {
-            full_ref,
-            expected_oid: expected_oid.to_string(),
-            actual_oid: actual_snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.direct_oid.clone()),
-            actual_symbolic_target: actual_snapshot.and_then(|snapshot| snapshot.symbolic_target),
-            delete_error: Box::new(delete_error),
-            inspection_error,
-        }),
+    std::fs::remove_dir(&claim.requested_path).map_err(|source| {
+        GitWorkspaceError::ClaimedTargetCleanupFailed {
+            path: claim.requested_path.clone(),
+            source,
+        }
     })
 }
 
