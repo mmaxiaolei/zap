@@ -497,6 +497,93 @@ fn parses_worktree_paths_and_full_branch_refs() {
 }
 
 #[test]
+fn existing_worktree_options_exclude_primary_detached_and_prunable_worktrees() {
+    let repository_root = PathBuf::from("/tmp/repository");
+    let options = existing_worktree_options(
+        &repository_root,
+        [
+            WorktreeInfo {
+                path: repository_root.clone(),
+                head: Some("a".to_string()),
+                branch: Some("refs/heads/main".to_string()),
+                is_bare: false,
+                is_detached: false,
+                is_locked: false,
+                locked_reason: None,
+                is_prunable: false,
+                prunable_reason: None,
+            },
+            WorktreeInfo {
+                path: PathBuf::from("/tmp/repository-feature"),
+                head: Some("b".to_string()),
+                branch: Some("refs/heads/feature/existing".to_string()),
+                is_bare: false,
+                is_detached: false,
+                is_locked: false,
+                locked_reason: None,
+                is_prunable: false,
+                prunable_reason: None,
+            },
+            WorktreeInfo {
+                path: PathBuf::from("/tmp/repository-detached"),
+                head: Some("c".to_string()),
+                branch: None,
+                is_bare: false,
+                is_detached: true,
+                is_locked: false,
+                locked_reason: None,
+                is_prunable: false,
+                prunable_reason: None,
+            },
+            WorktreeInfo {
+                path: PathBuf::from("/tmp/repository-prunable"),
+                head: Some("d".to_string()),
+                branch: Some("refs/heads/feature/prunable".to_string()),
+                is_bare: false,
+                is_detached: false,
+                is_locked: false,
+                locked_reason: None,
+                is_prunable: true,
+                prunable_reason: Some("missing".to_string()),
+            },
+        ],
+    );
+
+    assert_eq!(
+        options,
+        vec![ExistingWorktreeOption::new(
+            PathBuf::from("/tmp/repository-feature"),
+            "feature/existing",
+        )],
+    );
+}
+
+#[test]
+fn validates_registered_existing_worktree_without_rejecting_dirty_contents() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/adopt");
+    std::fs::write(worktree_path.join("untracked.txt"), "dirty").unwrap();
+
+    assert_eq!(
+        validate_existing_worktree(&fixture.root, &worktree_path, "feature/adopt").unwrap(),
+        worktree_path.canonicalize().unwrap(),
+    );
+}
+
+#[test]
+fn rejects_repository_primary_worktree_for_existing_workspace_adoption() {
+    let fixture = GitFixture::new();
+
+    let error = validate_existing_worktree(&fixture.root, &fixture.root, "main").unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::PrimaryWorktreeCannotBeWorkspace { path }
+            if path == fixture.root.canonicalize().unwrap()
+    ));
+}
+
+#[test]
 fn preserves_prunable_worktree_when_its_path_no_longer_exists() {
     let fixture = GitFixture::new();
     let linked_path = fixture.add_linked_worktree("feature/prunable");

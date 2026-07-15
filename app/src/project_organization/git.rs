@@ -48,6 +48,22 @@ pub struct WorktreeInfo {
     pub prunable_reason: Option<String>,
 }
 
+/// 可作为 repository workspace 接入的已注册 linked worktree。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExistingWorktreeOption {
+    pub path: PathBuf,
+    pub branch_name: String,
+}
+
+impl ExistingWorktreeOption {
+    pub fn new(path: PathBuf, branch_name: impl Into<String>) -> Self {
+        Self {
+            path,
+            branch_name: branch_name.into(),
+        }
+    }
+}
+
 /// 删除预检中的不可变合并目标快照。
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MergeTargetSnapshot {
@@ -131,6 +147,8 @@ pub enum GitWorkspaceError {
         git_dir: PathBuf,
         common_dir: PathBuf,
     },
+    #[error("repository primary worktree `{path}` cannot be registered as a workspace")]
+    PrimaryWorktreeCannotBeWorkspace { path: PathBuf },
     #[error("repository `{repo}` has no configured remote")]
     RemoteNotFound { repo: PathBuf },
     #[error("remote `{remote}` in repository `{repo}` has no default branch: {stderr}")]
@@ -496,6 +514,88 @@ pub fn list_worktrees(repo: &Path) -> Result<Vec<WorktreeInfo>, GitWorkspaceErro
 /// 在后台线程列出 worktree，避免在 UI 调用线程运行 blocking Git。
 pub async fn list_worktrees_async(repo: PathBuf) -> Result<Vec<WorktreeInfo>, GitWorkspaceError> {
     spawn_git_task("list repository worktrees", move || list_worktrees(&repo)).await
+}
+
+/// 将已注册 worktree 转换为可接入的 linked worktree 候选项。
+pub fn existing_worktree_options(
+    repository_root: &Path,
+    worktrees: impl IntoIterator<Item = WorktreeInfo>,
+) -> Vec<ExistingWorktreeOption> {
+    let mut options = worktrees
+        .into_iter()
+        .filter_map(|worktree| {
+            let branch_name = worktree
+                .branch
+                .as_deref()?
+                .strip_prefix("refs/heads/")?;
+            (!worktree.is_bare
+                && !worktree.is_detached
+                && !worktree.is_prunable
+                && worktree.path != repository_root
+                && !branch_name.is_empty())
+                .then(|| ExistingWorktreeOption::new(worktree.path, branch_name))
+        })
+        .collect::<Vec<_>>();
+    options.sort_by(|left, right| {
+        (&left.branch_name, &left.path).cmp(&(&right.branch_name, &right.path))
+    });
+    options
+}
+
+/// 校验已注册 linked worktree 在接入 workspace 前仍存在且检出预期本地分支。
+pub fn validate_existing_worktree(
+    repository: &Path,
+    worktree_path: &Path,
+    local_branch: &str,
+) -> Result<PathBuf, GitWorkspaceError> {
+    let registered_path = canonicalize(worktree_path)?;
+    if registered_path == canonicalize(repository)? {
+        return Err(GitWorkspaceError::PrimaryWorktreeCannotBeWorkspace {
+            path: registered_path,
+        });
+    }
+
+    let mut matches = list_worktrees(repository)?
+        .into_iter()
+        .filter(|worktree| worktree.path == registered_path);
+    let Some(worktree) = matches.next() else {
+        return Err(GitWorkspaceError::WorktreeNotFound {
+            path: registered_path,
+        });
+    };
+    if matches.next().is_some() {
+        return Err(GitWorkspaceError::AmbiguousWorktree {
+            path: registered_path,
+        });
+    }
+
+    let expected_branch = format!("refs/heads/{local_branch}");
+    if worktree.is_bare
+        || worktree.is_detached
+        || worktree.branch.as_deref() != Some(&expected_branch)
+    {
+        return Err(GitWorkspaceError::WorktreeBranchMismatch {
+            expected: expected_branch,
+            actual: worktree
+                .branch
+                .unwrap_or_else(|| "<detached or missing>".to_string()),
+        });
+    }
+
+    validate_ref_exists(repository, &format!("refs/heads/{local_branch}"))?;
+    Ok(registered_path)
+}
+
+/// 在后台线程校验已注册 linked worktree，避免阻塞 UI 调用线程。
+pub async fn validate_existing_worktree_async(
+    repository: PathBuf,
+    worktree_path: PathBuf,
+    local_branch: String,
+) -> Result<PathBuf, GitWorkspaceError> {
+    spawn_git_task("validate existing worktree", move || {
+        validate_existing_worktree(&repository, &worktree_path, &local_branch)
+    })
+    .await
 }
 
 /// 从完整 remote ref 创建不跟踪 upstream 的新本地分支和 linked worktree。
