@@ -14,6 +14,7 @@ use crate::ai::blocklist::InputConfig;
 use crate::ai::blocklist::SerializedBlockListItem;
 use crate::code::editor_management::CodeSource;
 use crate::drive::ZapDriveObjectSettings;
+use crate::project_organization::domain::RepositoryWorkspaceId;
 use crate::root_view::quake_mode_window_id;
 use crate::server::ids::SyncId;
 use crate::settings_view::SettingsSection;
@@ -45,6 +46,8 @@ pub struct PersistedAgentManagementFilters {
 pub struct WindowSnapshot {
     pub tabs: Vec<TabSnapshot>,
     pub active_tab_index: usize,
+    pub active_repository_workspace_id: Option<RepositoryWorkspaceId>,
+    pub repository_workspace_states: Vec<RepositoryWorkspaceWindowStateSnapshot>,
     pub bounds: Option<RectF>,
     pub fullscreen_state: FullscreenState,
     pub quake_mode: bool,
@@ -64,12 +67,19 @@ pub struct WindowSnapshot {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TabSnapshot {
+    pub repository_workspace_id: Option<RepositoryWorkspaceId>,
     pub custom_title: Option<String>,
     pub root: PaneNodeSnapshot,
     pub default_directory_color: Option<AnsiColorIdentifier>,
     pub selected_color: SelectedTabColor,
     pub left_panel: Option<LeftPanelSnapshot>,
     pub right_panel: Option<RightPanelSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepositoryWorkspaceWindowStateSnapshot {
+    pub repository_workspace_id: RepositoryWorkspaceId,
+    pub active_tab_index: usize,
 }
 
 impl TabSnapshot {
@@ -317,6 +327,7 @@ pub enum CodeReviewPaneSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum LeftPanelDisplayedTab {
+    ProjectTree,
     FileTree,
     GlobalSearch,
     ZapDrive,
@@ -329,6 +340,7 @@ pub enum LeftPanelDisplayedTab {
 impl From<ToolPanelView> for LeftPanelDisplayedTab {
     fn from(view: ToolPanelView) -> Self {
         match view {
+            ToolPanelView::ProjectTree => LeftPanelDisplayedTab::ProjectTree,
             ToolPanelView::ProjectExplorer => LeftPanelDisplayedTab::FileTree,
             ToolPanelView::GlobalSearch { .. } => LeftPanelDisplayedTab::GlobalSearch,
             ToolPanelView::ZapDrive => LeftPanelDisplayedTab::ZapDrive,

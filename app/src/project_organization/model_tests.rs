@@ -249,6 +249,36 @@ fn add_local_repository_rejects_duplicate_canonical_path() {
 }
 
 #[test]
+fn add_local_repository_with_remote_persists_remote_url() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).unwrap();
+        let (model, _operations) = create_acknowledged_model(&mut app, vec![], vec![]);
+
+        let repository_id = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository_with_remote(
+                    &repository_path,
+                    "https://example.com/zap.git".to_string(),
+                    ctx,
+                )
+            })
+            .unwrap();
+
+        assert_eq!(
+            model.read(&app, |model, _| {
+                model
+                    .repository(repository_id)
+                    .and_then(|repository| repository.remote_url.as_deref())
+                    .map(str::to_string)
+            }),
+            Some("https://example.com/zap.git".to_string())
+        );
+    });
+}
+
+#[test]
 fn add_repository_rejects_ambiguous_recovered_aliases() {
     App::test((), |mut app| async move {
         let tempdir = TempDir::new().unwrap();

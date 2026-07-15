@@ -15,6 +15,7 @@ mod lightbox_view;
 mod native_modal;
 mod one_time_modal_model;
 mod registry;
+mod repository_workspace_tabs;
 pub mod rewind_confirmation_dialog;
 pub mod sync_inputs;
 pub mod tab_settings;
@@ -97,6 +98,10 @@ use crate::workspace::view::{
 pub use one_time_modal_model::OneTimeModalModel;
 pub use registry::WorkspaceRegistry;
 pub use toast_stack::ToastStack;
+
+#[cfg(test)]
+#[path = "repository_workspace_tabs_tests.rs"]
+mod repository_workspace_tabs_tests;
 
 pub fn init(app: &mut AppContext) {
     app.add_singleton_model(|_| WorkspaceRegistry::new());

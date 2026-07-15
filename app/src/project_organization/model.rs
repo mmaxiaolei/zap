@@ -71,6 +71,24 @@ impl ProjectOrganizationModel {
         path: impl AsRef<Path>,
         ctx: &mut ModelContext<Self>,
     ) -> Result<RepositoryId, ProjectOrganizationError> {
+        self.add_local_repository_with_optional_remote(path, None, ctx)
+    }
+
+    pub fn add_local_repository_with_remote(
+        &mut self,
+        path: impl AsRef<Path>,
+        remote_url: String,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<RepositoryId, ProjectOrganizationError> {
+        self.add_local_repository_with_optional_remote(path, Some(remote_url), ctx)
+    }
+
+    fn add_local_repository_with_optional_remote(
+        &mut self,
+        path: impl AsRef<Path>,
+        remote_url: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<RepositoryId, ProjectOrganizationError> {
         let canonical_path = Self::canonicalize(path.as_ref())?;
         match self.repository_match_for_canonical_path(&canonical_path, None) {
             CanonicalPathMatch::None => {}
@@ -100,7 +118,7 @@ impl ProjectOrganizationModel {
             id: RepositoryId::from(Uuid::new_v4()),
             display_name,
             path: canonical_path,
-            remote_url: None,
+            remote_url,
             source: RepositorySource::Local,
             created_at: now,
             last_opened_at: now,

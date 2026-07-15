@@ -15,6 +15,7 @@ fn single_tab_snapshot(root: PaneNodeSnapshot) -> AppState {
     AppState {
         windows: vec![WindowSnapshot {
             tabs: vec![TabSnapshot {
+                repository_workspace_id: None,
                 custom_title: None,
                 default_directory_color: None,
                 selected_color: SelectedTabColor::default(),
@@ -23,6 +24,8 @@ fn single_tab_snapshot(root: PaneNodeSnapshot) -> AppState {
                 right_panel: None,
             }],
             active_tab_index: 0,
+            active_repository_workspace_id: None,
+            repository_workspace_states: Vec::new(),
             bounds: None,
             quake_mode: false,
             universal_search_width: None,
@@ -48,6 +51,8 @@ fn multi_tab_snapshot(active_tab_index: usize, tabs: Vec<TabSnapshot>) -> AppSta
         windows: vec![WindowSnapshot {
             tabs,
             active_tab_index,
+            active_repository_workspace_id: None,
+            repository_workspace_states: Vec::new(),
             bounds: None,
             quake_mode: false,
             universal_search_width: None,
@@ -233,6 +238,7 @@ fn test_config_with_active_tab_index() {
         1,
         vec![
             TabSnapshot {
+                repository_workspace_id: None,
                 custom_title: None,
                 default_directory_color: None,
                 selected_color: SelectedTabColor::default(),
@@ -275,6 +281,7 @@ fn test_config_with_active_tab_index_and_filtered_tabs() {
         1,
         vec![
             TabSnapshot {
+                repository_workspace_id: None,
                 custom_title: None,
                 default_directory_color: None,
                 selected_color: SelectedTabColor::default(),
@@ -298,6 +305,7 @@ fn test_config_with_active_tab_index_and_filtered_tabs() {
                 right_panel: None,
             },
             TabSnapshot {
+                repository_workspace_id: None,
                 custom_title: None,
                 default_directory_color: None,
                 selected_color: SelectedTabColor::default(),
@@ -339,6 +347,7 @@ fn test_config_with_active_tab_being_filtered() {
         1,
         vec![
             TabSnapshot {
+                repository_workspace_id: None,
                 custom_title: None,
                 default_directory_color: None,
                 selected_color: SelectedTabColor::default(),
@@ -368,6 +377,7 @@ fn test_config_with_active_tab_being_filtered() {
                 right_panel: None,
             },
             TabSnapshot {
+                repository_workspace_id: None,
                 custom_title: None,
                 default_directory_color: None,
                 selected_color: SelectedTabColor::default(),

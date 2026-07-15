@@ -41,12 +41,12 @@ use super::block_list::{
 };
 use super::model::{
     self, ActiveMCPServer, CurrentUserInformation, MCPEnvironmentVariables, NewActiveMCPServer,
-    NewApp, NewCommand, NewFolder, NewNotebook, NewServerExperiment, NewTab, NewTeam, NewWindow,
-    NewWorkspace, NewWorkspaceTeam, ObjectMetadata, ObjectPermissions, Repository,
-    RepositoryWorkspace, Tab, Window, AI_DOCUMENT_PANE_KIND, AI_FACT_PANE_KIND, CODE_PANE_KIND,
-    ENV_VAR_COLLECTION_PANE_KIND, EXECUTION_PROFILE_EDITOR_PANE_KIND, MCP_SERVER_PANE_KIND,
-    NOTEBOOK_PANE_KIND, SETTINGS_PANE_KIND, TERMINAL_PANE_KIND, WELCOME_PANE_KIND,
-    WORKFLOW_PANE_KIND,
+    NewApp, NewCommand, NewFolder, NewNotebook, NewRepositoryWorkspaceWindowState,
+    NewServerExperiment, NewTab, NewTeam, NewWindow, NewWorkspace, NewWorkspaceTeam,
+    ObjectMetadata, ObjectPermissions, Repository, RepositoryWorkspace, Tab, Window,
+    AI_DOCUMENT_PANE_KIND, AI_FACT_PANE_KIND, CODE_PANE_KIND, ENV_VAR_COLLECTION_PANE_KIND,
+    EXECUTION_PROFILE_EDITOR_PANE_KIND, MCP_SERVER_PANE_KIND, NOTEBOOK_PANE_KIND,
+    SETTINGS_PANE_KIND, TERMINAL_PANE_KIND, WELCOME_PANE_KIND, WORKFLOW_PANE_KIND,
 };
 use super::schema;
 use super::{
@@ -65,8 +65,8 @@ use crate::ai::mcp::{
 };
 use crate::app_state::{
     AIFactPaneSnapshot, AmbientAgentPaneSnapshot, CodeReviewPaneSnapshot,
-    EnvVarCollectionPaneSnapshot, LeftPanelSnapshot, RightPanelSnapshot, SettingsPaneSnapshot,
-    WorkflowPaneSnapshot,
+    EnvVarCollectionPaneSnapshot, LeftPanelSnapshot, RepositoryWorkspaceWindowStateSnapshot,
+    RightPanelSnapshot, SettingsPaneSnapshot, WorkflowPaneSnapshot,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::PersistedCurrentUserInformation;
@@ -89,6 +89,7 @@ use crate::persistence::model::{
     NewGenericStringObject, NewObjectStoreRefresh, NewPersistedObjectAction, NewTeamSettings,
     ProjectRules, UserProfile, CODE_REVIEW_PANE_KIND, GET_STARTED_PANE_KIND,
 };
+use crate::project_organization::domain::RepositoryWorkspaceId;
 use crate::server::experiments::ServerExperiment;
 use crate::server::ids::{ClientId, HashableId, ServerId, SyncId, ToServerId};
 use crate::server::telemetry::TelemetryEvent;
@@ -1154,6 +1155,9 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                     .theme_override
                     .as_ref()
                     .and_then(|k| serde_json::to_string(k).ok()),
+                active_repository_workspace_id: window
+                    .active_repository_workspace_id
+                    .map(|id| id.to_string()),
             };
             diesel::insert_into(schema::windows::dsl::windows)
                 .values(new_window)
@@ -1187,12 +1191,30 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                         SelectedTabColor::Unset => None,
                         _ => serde_yaml::to_string(&tab.selected_color).ok(),
                     },
+                    repository_workspace_id: tab
+                        .repository_workspace_id
+                        .map(|id| id.to_string()),
                 })
                 .collect();
 
             diesel::insert_into(schema::tabs::dsl::tabs)
                 .values(tabs)
                 .execute(conn)?;
+
+            let workspace_window_states = window
+                .repository_workspace_states
+                .iter()
+                .map(|state| NewRepositoryWorkspaceWindowState {
+                    window_id,
+                    repository_workspace_id: state.repository_workspace_id.to_string(),
+                    active_tab_index: state.active_tab_index.try_into().unwrap_or(0),
+                })
+                .collect::<Vec<_>>();
+            if !workspace_window_states.is_empty() {
+                diesel::insert_into(schema::repository_workspace_window_states::dsl::repository_workspace_window_states)
+                    .values(workspace_window_states)
+                    .execute(conn)?;
+            }
 
             // Same ID issue as above.
             let tab_ids: Vec<i32> = schema::tabs::dsl::tabs
@@ -2833,6 +2855,12 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
 /// happen is the user won't have session restoration.
 ///
 /// In the future, the awkwardness of the transaction interface is resolved in diesel 2.0.0.
+fn parse_repository_workspace_id(value: &str) -> std::result::Result<RepositoryWorkspaceId, Error> {
+    value
+        .parse::<RepositoryWorkspaceId>()
+        .map_err(|error| Error::DeserializationError(Box::new(error)))
+}
+
 fn read_sqlite_data(
     conn: &mut SqliteConnection,
     current_user_id: Option<UserUid>,
@@ -2853,6 +2881,54 @@ fn read_sqlite_data(
         .load::<Tab>(conn)?
         .grouped_by(&db_windows);
 
+    let mut workspace_window_states_by_window = HashMap::new();
+    for (window_id, workspace_id, workspace_active_tab_index) in
+        schema::repository_workspace_window_states::dsl::repository_workspace_window_states
+            .select((
+                schema::repository_workspace_window_states::columns::window_id,
+                schema::repository_workspace_window_states::columns::repository_workspace_id,
+                schema::repository_workspace_window_states::columns::active_tab_index,
+            ))
+            .load::<(i32, String, i32)>(conn)?
+    {
+        let repository_workspace_id = parse_repository_workspace_id(&workspace_id)?;
+        let workspace_tab_index = workspace_active_tab_index
+            .try_into()
+            .map_err(|error| Error::DeserializationError(Box::new(error)))?;
+        workspace_window_states_by_window
+            .entry(window_id)
+            .or_insert_with(Vec::new)
+            .push(RepositoryWorkspaceWindowStateSnapshot {
+                repository_workspace_id,
+                active_tab_index: workspace_tab_index,
+            });
+    }
+
+    let tab_workspace_ids = db_tabs
+        .iter()
+        .map(|tabs_for_window| {
+            tabs_for_window
+                .iter()
+                .map(|tab| {
+                    tab.repository_workspace_id
+                        .as_deref()
+                        .map(parse_repository_workspace_id)
+                        .transpose()
+                })
+                .collect::<std::result::Result<Vec<_>, Error>>()
+        })
+        .collect::<std::result::Result<Vec<_>, Error>>()?;
+    let active_workspace_ids = db_windows
+        .iter()
+        .map(|window| {
+            window
+                .active_repository_workspace_id
+                .as_deref()
+                .map(parse_repository_workspace_id)
+                .transpose()
+        })
+        .collect::<std::result::Result<Vec<_>, Error>>()?;
+
     let db_panels = schema::panels::dsl::panels
         .load::<model::Panel>(conn)?
         .into_iter()
@@ -2864,9 +2940,12 @@ fn read_sqlite_data(
         .enumerate()
         .zip(db_tabs)
         .map(|((idx, window), tabs_for_window)| {
+            let tab_workspace_ids = &tab_workspace_ids[idx];
+            let active_workspace_id = active_workspace_ids[idx];
             let saved_tabs: Vec<_> = tabs_for_window
                 .into_iter()
-                .filter_map(|tab| {
+                .zip(tab_workspace_ids.iter().copied())
+                .filter_map(|(tab, repository_workspace_id)| {
                     let root = read_root_node(conn, tab.id).ok()?;
                     let panel = db_panels.get(&tab.id);
 
@@ -2879,6 +2958,7 @@ fn read_sqlite_data(
                         .and_then(|s| serde_json::from_str::<RightPanelSnapshot>(s).ok());
 
                     Some(TabSnapshot {
+                        repository_workspace_id,
                         root,
                         custom_title: tab.custom_title,
                         default_directory_color: None,
@@ -2969,6 +3049,10 @@ fn read_sqlite_data(
             WindowSnapshot {
                 tabs: saved_tabs,
                 active_tab_index: tab_index,
+                active_repository_workspace_id: active_workspace_id,
+                repository_workspace_states: workspace_window_states_by_window
+                    .remove(&window.id)
+                    .unwrap_or_default(),
                 quake_mode: window.quake_mode,
                 bounds,
                 universal_search_width: window.universal_search_width,

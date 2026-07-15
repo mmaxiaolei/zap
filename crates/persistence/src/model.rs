@@ -14,10 +14,10 @@ use super::schema::{
     generic_string_objects, ignored_suggestions, mcp_environment_variables,
     mcp_server_installations, mcp_server_panes, notebook_panes, notebooks, object_actions,
     object_metadata, object_permissions, pane_branches, pane_leaves, pane_nodes, panels,
-    project_rules, repositories, repository_workspaces, server_experiments, settings_panes,
-    ssh_nodes, ssh_onekey_credentials, ssh_servers, sync_meta, tabs, team_members, team_settings,
-    teams, terminal_panes, user_profiles, welcome_panes, windows, workflow_panes, workflows,
-    workspace_teams, workspaces,
+    project_rules, repositories, repository_workspace_window_states, repository_workspaces,
+    server_experiments, settings_panes, ssh_nodes, ssh_onekey_credentials, ssh_servers, sync_meta,
+    tabs, team_members, team_settings, teams, terminal_panes, user_profiles, welcome_panes,
+    windows, workflow_panes, workflows, workspace_teams, workspaces,
 };
 
 #[derive(Insertable)]
@@ -309,6 +309,7 @@ pub struct NewWindow {
     pub left_panel_open: Option<bool>,
     pub vertical_tabs_panel_open: Option<bool>,
     pub theme_override: Option<String>,
+    pub active_repository_workspace_id: Option<String>,
 }
 
 #[derive(Identifiable, Queryable, Associations)]
@@ -327,6 +328,15 @@ pub struct NewTab {
     pub window_id: i32,
     pub custom_title: Option<String>,
     pub color: Option<String>,
+    pub repository_workspace_id: Option<String>,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = repository_workspace_window_states)]
+pub struct NewRepositoryWorkspaceWindowState {
+    pub window_id: i32,
+    pub repository_workspace_id: String,
+    pub active_tab_index: i32,
 }
 
 /// The panes data model includes pane_nodes, pane_leaves and pane_branches.

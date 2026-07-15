@@ -24,6 +24,7 @@ use crate::{
         BlockCompleted, ModelEvent, RepositoryPersistence, RepositoryPersistenceError,
         RepositoryPersistenceOperation, RepositoryPersistenceRequest,
     },
+    project_organization::domain::RepositoryWorkspaceId,
     server::ids::ClientId,
     server_time::ServerTimestamp,
     tab::SelectedTabColor,
@@ -243,6 +244,7 @@ fn test_deduplicate_no_snapshots() {
 fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapshot {
     WindowSnapshot {
         tabs: vec![TabSnapshot {
+            repository_workspace_id: None,
             custom_title: None,
             root: PaneNodeSnapshot::Leaf(LeafSnapshot {
                 is_focused: true,
@@ -269,6 +271,8 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
             right_panel: None,
         }],
         active_tab_index: 0,
+        active_repository_workspace_id: None,
+        repository_workspace_states: Vec::new(),
         bounds: None,
         fullscreen_state: Default::default(),
         quake_mode: false,
@@ -316,6 +320,54 @@ fn test_sqlite_round_trips_vertical_tabs_panel_open() {
             .collect::<Vec<_>>(),
         vec![false, true]
     );
+}
+
+#[test]
+fn repository_workspace_state_round_trips() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174100",
+        "/tmp/repository-workspace-state",
+    );
+    let workspace = repository_workspace_row(
+        "123e4567-e89b-12d3-a456-426614174101",
+        &repository.id,
+        "feature/workspace-state",
+        "/tmp/repository-workspace-state-feature",
+    );
+    let workspace_id = RepositoryWorkspaceId(
+        workspace
+            .id
+            .parse()
+            .expect("workspace fixture should have a valid UUID"),
+    );
+    save_repository(&mut conn, repository).expect("repository should save");
+    save_repository_workspace(&mut conn, workspace).expect("workspace should save");
+
+    let mut window = test_terminal_window_snapshot(false);
+    window.active_repository_workspace_id = Some(workspace_id);
+    window.repository_workspace_states =
+        vec![crate::app_state::RepositoryWorkspaceWindowStateSnapshot {
+            repository_workspace_id: workspace_id,
+            active_tab_index: 0,
+        }];
+    window.tabs[0].repository_workspace_id = Some(workspace_id);
+    let state = AppState {
+        windows: vec![window],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    save_app_state(&mut conn, &state).expect("app state should save");
+    let restored = read_sqlite_data(&mut conn, None)
+        .expect("app state should load")
+        .app_state;
+
+    assert_eq!(restored.windows, state.windows);
+    assert_eq!(restored.active_window_index, state.active_window_index);
 }
 
 #[test]
@@ -1112,6 +1164,7 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
     let app_state = AppState {
         windows: vec![WindowSnapshot {
             tabs: vec![TabSnapshot {
+                repository_workspace_id: None,
                 custom_title: None,
                 root: PaneNodeSnapshot::Leaf(LeafSnapshot {
                     is_focused: true,
@@ -1138,6 +1191,8 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
                 right_panel: None,
             }],
             active_tab_index: 0,
+            active_repository_workspace_id: None,
+            repository_workspace_states: Vec::new(),
             bounds: None,
             fullscreen_state: Default::default(),
             quake_mode: false,
@@ -1185,6 +1240,7 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
     let app_state = AppState {
         windows: vec![WindowSnapshot {
             tabs: vec![TabSnapshot {
+                repository_workspace_id: None,
                 custom_title: None,
                 root: PaneNodeSnapshot::Leaf(LeafSnapshot {
                     is_focused: true,
@@ -1211,6 +1267,8 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
                 right_panel: None,
             }],
             active_tab_index: 0,
+            active_repository_workspace_id: None,
+            repository_workspace_states: Vec::new(),
             bounds: None,
             fullscreen_state: Default::default(),
             quake_mode: false,
@@ -1329,9 +1387,7 @@ fn test_migrate_zap_app_group_sqlite_copies_newer_legacy_files() {
         fs::read_to_string(target_db.with_extension("sqlite-shm")).unwrap(),
         "legacy-shm"
     );
-    assert!(state_dir
-        .join(".zap-app-group-sqlite-migrated")
-        .exists());
+    assert!(state_dir.join(".zap-app-group-sqlite-migrated").exists());
 }
 
 #[cfg(target_os = "macos")]
