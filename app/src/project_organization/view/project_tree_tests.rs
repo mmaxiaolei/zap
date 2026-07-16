@@ -104,12 +104,13 @@ fn repository_workspace_mode_keeps_setting_but_uses_horizontal_tabbar() {
 }
 
 #[test]
-fn tree_groups_and_sorts_workspaces_by_repository() {
+fn tree_sorts_repositories_by_creation_time_and_workspaces_by_name() {
     let repository_a = RepositoryId(uuid::Uuid::from_u128(1));
     let repository_b = RepositoryId(uuid::Uuid::from_u128(2));
     let workspace_a = RepositoryWorkspaceId(uuid::Uuid::from_u128(3));
     let workspace_b = RepositoryWorkspaceId(uuid::Uuid::from_u128(4));
-    let timestamp = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+    let earlier = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+    let later = chrono::DateTime::from_timestamp(1, 0).unwrap().naive_utc();
 
     let state = ProjectTreeState::from_records(
         vec![
@@ -119,8 +120,8 @@ fn tree_groups_and_sorts_workspaces_by_repository() {
                 path: "/tmp/zebra".into(),
                 remote_url: None,
                 source: RepositorySource::Local,
-                created_at: timestamp,
-                last_opened_at: timestamp,
+                created_at: earlier,
+                last_opened_at: earlier,
             },
             Repository {
                 id: repository_a,
@@ -128,8 +129,8 @@ fn tree_groups_and_sorts_workspaces_by_repository() {
                 path: "/tmp/alpha".into(),
                 remote_url: None,
                 source: RepositorySource::Local,
-                created_at: timestamp,
-                last_opened_at: timestamp,
+                created_at: later,
+                last_opened_at: later,
             },
         ],
         vec![
@@ -139,8 +140,8 @@ fn tree_groups_and_sorts_workspaces_by_repository() {
                 display_name: "zeta".to_string(),
                 branch: "feature/zeta".to_string(),
                 worktree_path: "/tmp/alpha-zeta".into(),
-                created_at: timestamp,
-                last_opened_at: timestamp,
+                created_at: earlier,
+                last_opened_at: earlier,
             },
             RepositoryWorkspace {
                 id: workspace_b,
@@ -148,19 +149,19 @@ fn tree_groups_and_sorts_workspaces_by_repository() {
                 display_name: "beta".to_string(),
                 branch: "feature/beta".to_string(),
                 worktree_path: "/tmp/alpha-beta".into(),
-                created_at: timestamp,
-                last_opened_at: timestamp,
+                created_at: earlier,
+                last_opened_at: earlier,
             },
         ],
         &[(workspace_a, 2), (workspace_b, 1)].into_iter().collect(),
     );
 
-    assert_eq!(state.repositories()[0].display_name, "alpha");
-    assert_eq!(state.repositories()[1].display_name, "zebra");
-    assert_eq!(state.repositories()[0].workspaces[0].display_name, "beta");
-    assert_eq!(state.repositories()[0].workspaces[0].tab_count, 1);
-    assert_eq!(state.repositories()[0].workspaces[1].display_name, "zeta");
-    assert_eq!(state.repositories()[0].workspaces[1].tab_count, 2);
+    assert_eq!(state.repositories()[0].display_name, "zebra");
+    assert_eq!(state.repositories()[1].display_name, "alpha");
+    assert_eq!(state.repositories()[1].workspaces[0].display_name, "beta");
+    assert_eq!(state.repositories()[1].workspaces[0].tab_count, 1);
+    assert_eq!(state.repositories()[1].workspaces[1].display_name, "zeta");
+    assert_eq!(state.repositories()[1].workspaces[1].tab_count, 2);
 }
 
 #[test]

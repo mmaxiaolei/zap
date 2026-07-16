@@ -105,7 +105,13 @@ impl ProjectTreeState {
                 });
         }
 
-        let mut repositories = repositories
+        let mut repositories = repositories;
+        repositories.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.display_name.cmp(&right.display_name))
+        });
+        let repositories = repositories
             .into_iter()
             .map(|repository| {
                 let mut workspaces = workspaces_by_repository
@@ -120,8 +126,6 @@ impl ProjectTreeState {
                 }
             })
             .collect::<Vec<_>>();
-        repositories.sort_by(|left, right| left.display_name.cmp(&right.display_name));
-
         Self::new(repositories)
     }
 
