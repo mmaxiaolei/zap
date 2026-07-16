@@ -83,13 +83,24 @@ if selected {
 }
 ```
 
-Wrap the selected container with a left accent border using the existing negative-padding compensation pattern so the selected state does not change row width:
+Add the left accent stripe as a stretched first child inside a selected-only flex wrapper. The stripe's negative left margin cancels its fixed width, so text and the row's available width do not shift:
 
 ```rust
 let row = if selected {
-    Container::new(row_container.finish())
-        .with_border(Border::left(3.).with_border_fill(theme.accent()))
-        .with_padding_left(-3.)
+    Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+        .with_child(
+            Container::new(
+                ConstrainedBox::new(Empty::new().finish())
+                    .with_width(3.)
+                    .finish(),
+            )
+                .with_margin_left(-3.)
+                .with_background(theme.accent())
+                .finish(),
+        )
+        .with_child(Shrinkable::new(1.0, row_container.finish()).finish())
         .finish()
 } else {
     row_container.finish()

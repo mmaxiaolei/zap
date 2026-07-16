@@ -5,9 +5,9 @@ use std::{
 
 use warpui::{
     elements::{
-        ChildView, ConstrainedBox, Container, CrossAxisAlignment, Element, Empty, Flex, Hoverable,
-        MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, SavePosition, Shrinkable,
-        Text,
+        Border, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Element, Empty, Flex,
+        Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, SavePosition,
+        Shrinkable, Text,
     },
     platform::Cursor,
     ui_components::components::UiComponent,
@@ -222,6 +222,13 @@ fn repository_add_workspace_position_id(repository_id: RepositoryId) -> String {
 
 fn should_show_workspace_delete_button(workspace_row_hovered: bool) -> bool {
     workspace_row_hovered
+}
+
+fn workspace_row_is_selected(
+    selected_workspace_id: Option<RepositoryWorkspaceId>,
+    workspace_id: RepositoryWorkspaceId,
+) -> bool {
+    selected_workspace_id == Some(workspace_id)
 }
 
 fn synchronize_mouse_states<Id>(mouse_states: &mut HashMap<Id, MouseStateHandle>, ids: &HashSet<Id>)
@@ -474,7 +481,12 @@ impl ProjectTreePanel {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let selected = self.state.selected_workspace_id() == Some(workspace.workspace_id);
+        let selected = workspace_row_is_selected(
+            self.state.selected_workspace_id(),
+            workspace.workspace_id,
+        );
+        let selection_background = theme.surface_2();
+        let selection_accent = theme.accent();
         let label_color = if selected {
             theme.accent().into_solid()
         } else {
@@ -545,16 +557,41 @@ impl ProjectTreePanel {
                 } else {
                     delete_placeholder
                 };
-                let row = Flex::row()
+                let row_content = Flex::row()
                     .with_main_axis_size(MainAxisSize::Max)
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_child(Shrinkable::new(1.0, content).finish())
                     .with_child(delete)
                     .finish();
-                Container::new(row)
+                let mut row_container = Container::new(row_content)
                     .with_padding_left(36.)
-                    .with_vertical_padding(4.)
-                    .finish()
+                    .with_vertical_padding(4.);
+                if selected {
+                    row_container = row_container
+                        .with_background(selection_background)
+                        .with_border(Border::all(1.).with_border_fill(selection_accent))
+                        .with_uniform_margin(-1.);
+                }
+
+                if selected {
+                    Flex::row()
+                        .with_main_axis_size(MainAxisSize::Max)
+                        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                        .with_child(
+                            Container::new(
+                                ConstrainedBox::new(Empty::new().finish())
+                                    .with_width(3.)
+                                    .finish(),
+                            )
+                                .with_margin_left(-3.)
+                                .with_background(selection_accent)
+                                .finish(),
+                        )
+                        .with_child(Shrinkable::new(1.0, row_container.finish()).finish())
+                        .finish()
+                } else {
+                    row_container.finish()
+                }
             },
         )
         .with_cursor(Cursor::PointingHand)

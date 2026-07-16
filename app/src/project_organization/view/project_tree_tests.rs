@@ -25,8 +25,9 @@ use crate::project_organization::domain::{
 
 use super::{
     repository_add_workspace_position_id, resolved_project_organization_tab_layout,
-    should_show_workspace_delete_button, synchronize_mouse_states, ProjectTreeEvent,
-    ProjectTreePanel, ProjectTreeState, RepositoryTreeNode, TabLayout, WorkspaceTreeNode,
+    should_show_workspace_delete_button, synchronize_mouse_states, workspace_row_is_selected,
+    ProjectTreeEvent, ProjectTreePanel, ProjectTreeState, RepositoryTreeNode, TabLayout,
+    WorkspaceTreeNode,
 };
 
 struct ProjectTreeTestHost {
@@ -211,6 +212,16 @@ fn synchronize_mouse_states_removes_stale_entries_and_preserves_existing_handles
 fn workspace_delete_button_only_shows_when_workspace_row_is_hovered() {
     assert!(!should_show_workspace_delete_button(false));
     assert!(should_show_workspace_delete_button(true));
+}
+
+#[test]
+fn workspace_row_selection_matches_only_the_active_workspace() {
+    let selected = RepositoryWorkspaceId(uuid::Uuid::from_u128(1));
+    let other = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));
+
+    assert!(workspace_row_is_selected(Some(selected), selected));
+    assert!(!workspace_row_is_selected(Some(selected), other));
+    assert!(!workspace_row_is_selected(None, selected));
 }
 
 #[test]
