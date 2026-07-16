@@ -5,7 +5,7 @@ use std::{
 
 use warpui::{
     elements::{
-        ChildView, ConstrainedBox, Container, CrossAxisAlignment, Element, Flex, Hoverable,
+        ChildView, ConstrainedBox, Container, CrossAxisAlignment, Element, Empty, Flex, Hoverable,
         MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, SavePosition, Shrinkable,
         Text,
     },
@@ -218,6 +218,10 @@ pub enum ProjectTreeEvent {
 
 fn repository_add_workspace_position_id(repository_id: RepositoryId) -> String {
     format!("project_tree:repository:{repository_id}:add_workspace")
+}
+
+fn should_show_workspace_delete_button(workspace_row_hovered: bool) -> bool {
+    workspace_row_hovered
 }
 
 fn synchronize_mouse_states<Id>(mouse_states: &mut HashMap<Id, MouseStateHandle>, ids: &HashSet<Id>)
@@ -525,11 +529,9 @@ impl ProjectTreePanel {
         })
         .with_cursor(Cursor::PointingHand)
         .finish();
-        let row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(Shrinkable::new(1.0, content).finish())
-            .with_child(delete)
+        let delete_placeholder = ConstrainedBox::new(Empty::new().finish())
+            .with_width(icons::ICON_DIMENSIONS)
+            .with_height(icons::ICON_DIMENSIONS)
             .finish();
 
         Hoverable::new(
@@ -537,7 +539,18 @@ impl ProjectTreePanel {
                 .get(&workspace_id)
                 .expect("workspace row mouse state should be initialized during tree refresh")
                 .clone(),
-            move |_| {
+            move |mouse_state| {
+                let delete = if should_show_workspace_delete_button(mouse_state.is_hovered()) {
+                    delete
+                } else {
+                    delete_placeholder
+                };
+                let row = Flex::row()
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_child(Shrinkable::new(1.0, content).finish())
+                    .with_child(delete)
+                    .finish();
                 Container::new(row)
                     .with_padding_left(36.)
                     .with_vertical_padding(4.)

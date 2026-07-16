@@ -4992,6 +4992,21 @@ impl Workspace {
 
     /// Focuses the given pane within the pane group.
     pub fn focus_pane(&mut self, pane_view_locator: PaneViewLocator, ctx: &mut ViewContext<Self>) {
+        if !self
+            .tabs
+            .iter()
+            .any(|tab_data| tab_data.pane_group.id() == pane_view_locator.pane_group_id)
+        {
+            if let Some(workspace_id) =
+                self.repository_workspace_tabs
+                    .find_inactive_workspace(|tab_data| {
+                        tab_data.pane_group.id() == pane_view_locator.pane_group_id
+                    })
+            {
+                self.switch_repository_workspace(workspace_id, ctx);
+            }
+        }
+
         if let Some((index, tab)) = self
             .tabs
             .iter()

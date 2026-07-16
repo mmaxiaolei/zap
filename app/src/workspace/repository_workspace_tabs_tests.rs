@@ -79,3 +79,20 @@ fn taking_an_inactive_workspace_removes_only_its_tab_state() {
     assert!(sets.inactive_states().next().is_none());
     assert_eq!(sets.active_workspace_id(), Some(workspace_a));
 }
+
+#[test]
+fn finds_inactive_workspace_containing_target_tab() {
+    let workspace_a = RepositoryWorkspaceId(uuid::Uuid::from_u128(1));
+    let workspace_b = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));
+    let mut sets = RepositoryWorkspaceTabSets::new(Some(workspace_a));
+    sets.insert_inactive(
+        Some(workspace_b),
+        RepositoryWorkspaceTabState::new(vec![20_u64], 0),
+    );
+
+    assert_eq!(
+        sets.find_inactive_workspace(|tab| *tab == 20),
+        Some(Some(workspace_b))
+    );
+    assert_eq!(sets.find_inactive_workspace(|tab| *tab == 10), None);
+}

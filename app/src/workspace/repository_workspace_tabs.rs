@@ -51,6 +51,19 @@ impl<T> RepositoryWorkspaceTabSets<T> {
         self.inactive.remove(&workspace_id)
     }
 
+    pub(crate) fn find_inactive_workspace(
+        &self,
+        mut contains: impl FnMut(&T) -> bool,
+    ) -> Option<Option<RepositoryWorkspaceId>> {
+        self.inactive.iter().find_map(|(workspace_id, state)| {
+            state
+                .tabs
+                .iter()
+                .any(&mut contains)
+                .then_some(*workspace_id)
+        })
+    }
+
     pub(crate) fn switch_to(
         &mut self,
         workspace_id: Option<RepositoryWorkspaceId>,

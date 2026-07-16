@@ -25,8 +25,8 @@ use crate::project_organization::domain::{
 
 use super::{
     repository_add_workspace_position_id, resolved_project_organization_tab_layout,
-    synchronize_mouse_states, ProjectTreeEvent, ProjectTreePanel, ProjectTreeState,
-    RepositoryTreeNode, TabLayout, WorkspaceTreeNode,
+    should_show_workspace_delete_button, synchronize_mouse_states, ProjectTreeEvent,
+    ProjectTreePanel, ProjectTreeState, RepositoryTreeNode, TabLayout, WorkspaceTreeNode,
 };
 
 struct ProjectTreeTestHost {
@@ -205,6 +205,12 @@ fn synchronize_mouse_states_removes_stale_entries_and_preserves_existing_handles
             .get(&retained_id)
             .expect("retained mouse state should remain cached"),
     ));
+}
+
+#[test]
+fn workspace_delete_button_only_shows_when_workspace_row_is_hovered() {
+    assert!(!should_show_workspace_delete_button(false));
+    assert!(should_show_workspace_delete_button(true));
 }
 
 #[test]
