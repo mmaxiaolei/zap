@@ -10,7 +10,10 @@ use warpui::{
 
 use crate::project_organization::{
     domain::{RepositoryId, RepositoryWorkspaceId},
-    git::{workspace_dir_name, BranchRef},
+    git::{
+        existing_worktree_options, workspace_dir_name, BranchRef, ExistingWorktreeOption,
+        WorktreeInfo,
+    },
 };
 use crate::{
     appearance::Appearance,
@@ -26,10 +29,22 @@ pub enum CreateWorkspaceMode {
     #[default]
     RemoteBranch,
     ExistingLocalBranch,
+    ExistingWorktree,
 }
 
-fn submit_is_disabled(mode: CreateWorkspaceMode, has_remote_fetch_error: bool) -> bool {
-    mode == CreateWorkspaceMode::RemoteBranch && has_remote_fetch_error
+fn submit_is_disabled(
+    mode: CreateWorkspaceMode,
+    has_remote_fetch_error: bool,
+    has_existing_worktree_fetch_error: bool,
+    has_existing_worktree_selection: bool,
+) -> bool {
+    match mode {
+        CreateWorkspaceMode::RemoteBranch => has_remote_fetch_error,
+        CreateWorkspaceMode::ExistingLocalBranch => false,
+        CreateWorkspaceMode::ExistingWorktree => {
+            has_existing_worktree_fetch_error || !has_existing_worktree_selection
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -37,6 +52,7 @@ pub struct CreateWorkspaceForm {
     mode: CreateWorkspaceMode,
     remote_ref: Option<String>,
     local_branch: Option<String>,
+    existing_worktree_branch: Option<String>,
     new_branch: String,
 }
 
@@ -56,6 +72,9 @@ pub enum CreateWorkspaceSource {
         new_branch: String,
     },
     ExistingLocalBranch {
+        local_branch: String,
+    },
+    ExistingWorktree {
         local_branch: String,
     },
 }
@@ -186,9 +205,18 @@ impl CreateWorkspaceForm {
         }
         self.mode = mode;
         match mode {
-            CreateWorkspaceMode::RemoteBranch => self.local_branch = None,
+            CreateWorkspaceMode::RemoteBranch => {
+                self.local_branch = None;
+                self.existing_worktree_branch = None;
+            }
             CreateWorkspaceMode::ExistingLocalBranch => {
                 self.remote_ref = None;
+                self.existing_worktree_branch = None;
+                self.new_branch.clear();
+            }
+            CreateWorkspaceMode::ExistingWorktree => {
+                self.remote_ref = None;
+                self.local_branch = None;
                 self.new_branch.clear();
             }
         }
@@ -200,6 +228,10 @@ impl CreateWorkspaceForm {
 
     pub fn set_local_branch(&mut self, local_branch: String) {
         self.local_branch = Some(local_branch);
+    }
+
+    pub fn set_existing_worktree_branch(&mut self, branch: String) {
+        self.existing_worktree_branch = Some(branch);
     }
 
     pub fn set_new_branch(&mut self, new_branch: String) {
@@ -216,6 +248,10 @@ impl CreateWorkspaceForm {
             }
             CreateWorkspaceMode::ExistingLocalBranch => self
                 .local_branch
+                .as_deref()
+                .is_some_and(|branch| !branch.trim().is_empty() && !branch.starts_with("refs/")),
+            CreateWorkspaceMode::ExistingWorktree => self
+                .existing_worktree_branch
                 .as_deref()
                 .is_some_and(|branch| !branch.trim().is_empty() && !branch.starts_with("refs/")),
         }
@@ -245,6 +281,9 @@ impl CreateWorkspaceForm {
                     local_branch: self.local_branch.clone()?,
                 }
             }
+            CreateWorkspaceMode::ExistingWorktree => CreateWorkspaceSource::ExistingWorktree {
+                local_branch: self.existing_worktree_branch.clone()?,
+            },
         };
         Some(CreateWorkspaceRequest {
             repository_id,
@@ -263,6 +302,10 @@ pub enum CreateWorkspaceModalEvent {
         repository_id: RepositoryId,
         workspace_id: RepositoryWorkspaceId,
     },
+    RetryExistingWorktrees {
+        repository_id: RepositoryId,
+        workspace_id: RepositoryWorkspaceId,
+    },
     Submit(CreateWorkspaceRequest),
 }
 
@@ -273,7 +316,9 @@ pub enum CreateWorkspaceModalAction {
     SetMode(CreateWorkspaceMode),
     SelectRemoteBranch(RemoteBranchOption),
     SelectLocalBranch(String),
+    SelectExistingWorktree(ExistingWorktreeOption),
     RetryBranchRefs,
+    RetryExistingWorktrees,
     Submit,
 }
 
@@ -290,6 +335,13 @@ impl CreateWorkspaceTarget {
             workspace_id: self.workspace_id,
         }
     }
+
+    fn retry_existing_worktrees_event(self) -> CreateWorkspaceModalEvent {
+        CreateWorkspaceModalEvent::RetryExistingWorktrees {
+            repository_id: self.repository_id,
+            workspace_id: self.workspace_id,
+        }
+    }
 }
 
 /// 创建 repository workspace 的表单视图。
@@ -298,25 +350,32 @@ impl CreateWorkspaceTarget {
 /// [`CreateWorkspaceRequest`]，由窗口根协调 Git、SQLite 和首个终端页签。
 pub struct CreateWorkspaceModal {
     target: Option<CreateWorkspaceTarget>,
+    repository_root: Option<PathBuf>,
     form: CreateWorkspaceForm,
     defaults: Option<CreateWorkspaceDefaults>,
     remote_branch_picker: ViewHandle<FilterableDropdown<CreateWorkspaceModalAction>>,
     local_branch_picker: ViewHandle<FilterableDropdown<CreateWorkspaceModalAction>>,
+    existing_worktree_picker: ViewHandle<FilterableDropdown<CreateWorkspaceModalAction>>,
     new_branch_editor: ViewHandle<EditorView>,
     display_name_editor: ViewHandle<EditorView>,
     worktree_path_editor: ViewHandle<EditorView>,
     remote_mode_button: ViewHandle<ActionButton>,
     local_mode_button: ViewHandle<ActionButton>,
+    existing_worktree_mode_button: ViewHandle<ActionButton>,
     cancel_button: ViewHandle<ActionButton>,
     retry_remote_button: ViewHandle<ActionButton>,
+    retry_existing_worktree_button: ViewHandle<ActionButton>,
     submit_button: ViewHandle<ActionButton>,
     validation_error: Option<String>,
     remote_fetch_error: Option<String>,
+    existing_worktree_fetch_error: Option<String>,
     remote_branch_options: Vec<RemoteBranchOption>,
     local_branches: Vec<String>,
+    existing_worktree_options: Vec<ExistingWorktreeOption>,
     local_branch_fallback_loaded: bool,
     selected_remote_branch: Option<RemoteBranchOption>,
     selected_local_branch: Option<String>,
+    selected_existing_worktree: Option<ExistingWorktreeOption>,
 }
 
 impl CreateWorkspaceModal {
@@ -329,6 +388,13 @@ impl CreateWorkspaceModal {
             picker
         });
         let local_branch_picker = ctx.add_typed_action_view(|ctx| {
+            let mut picker = FilterableDropdown::new(ctx);
+            picker.set_top_bar_max_width(480.);
+            picker.set_menu_width(480., ctx);
+            picker.set_disabled(ctx);
+            picker
+        });
+        let existing_worktree_picker = ctx.add_typed_action_view(|ctx| {
             let mut picker = FilterableDropdown::new(ctx);
             picker.set_top_bar_max_width(480.);
             picker.set_menu_width(480., ctx);
@@ -356,6 +422,15 @@ impl CreateWorkspaceModal {
                     ));
                 })
         });
+        let existing_worktree_mode_button = ctx.add_view(|_| {
+            ActionButton::new("Use existing worktree", SecondaryTheme)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(CreateWorkspaceModalAction::SetMode(
+                        CreateWorkspaceMode::ExistingWorktree,
+                    ));
+                })
+        });
         let cancel_button = ctx.add_view(|_| {
             ActionButton::new("Cancel", NakedTheme)
                 .with_size(ButtonSize::Small)
@@ -368,6 +443,13 @@ impl CreateWorkspaceModal {
                     ctx.dispatch_typed_action(CreateWorkspaceModalAction::RetryBranchRefs)
                 })
         });
+        let retry_existing_worktree_button = ctx.add_view(|_| {
+            ActionButton::new("Retry", SecondaryTheme)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(CreateWorkspaceModalAction::RetryExistingWorktrees)
+                })
+        });
         let submit_button = ctx.add_view(|_| {
             ActionButton::new("Create workspace", PrimaryTheme)
                 .with_size(ButtonSize::Small)
@@ -376,25 +458,32 @@ impl CreateWorkspaceModal {
 
         let mut modal = Self {
             target: None,
+            repository_root: None,
             form: CreateWorkspaceForm::new(),
             defaults: None,
             remote_branch_picker,
             local_branch_picker,
+            existing_worktree_picker,
             new_branch_editor,
             display_name_editor,
             worktree_path_editor,
             remote_mode_button,
             local_mode_button,
+            existing_worktree_mode_button,
             cancel_button,
             retry_remote_button,
+            retry_existing_worktree_button,
             submit_button,
             validation_error: None,
             remote_fetch_error: None,
+            existing_worktree_fetch_error: None,
             remote_branch_options: Vec::new(),
             local_branches: Vec::new(),
+            existing_worktree_options: Vec::new(),
             local_branch_fallback_loaded: false,
             selected_remote_branch: None,
             selected_local_branch: None,
+            selected_existing_worktree: None,
         };
         modal.subscribe_to_editors(ctx);
         modal
@@ -404,6 +493,7 @@ impl CreateWorkspaceModal {
         &mut self,
         repository_id: RepositoryId,
         workspace_id: RepositoryWorkspaceId,
+        repository_root: PathBuf,
         home: PathBuf,
         repository_name: String,
         ctx: &mut ViewContext<Self>,
@@ -412,6 +502,7 @@ impl CreateWorkspaceModal {
             repository_id,
             workspace_id,
         });
+        self.repository_root = Some(repository_root);
         self.form = CreateWorkspaceForm::new();
         self.defaults = Some(CreateWorkspaceDefaults::new(home, repository_name));
         self.validation_error = None;
@@ -419,6 +510,7 @@ impl CreateWorkspaceModal {
         self.local_branch_fallback_loaded = false;
         self.selected_remote_branch = None;
         self.selected_local_branch = None;
+        self.selected_existing_worktree = None;
         self.reset_editor(&self.new_branch_editor, "", ctx);
         self.reset_editor(&self.display_name_editor, "", ctx);
         self.reset_editor(&self.worktree_path_editor, "", ctx);
@@ -427,12 +519,15 @@ impl CreateWorkspaceModal {
             picker.set_disabled(ctx);
         });
         self.begin_branch_fetch(ctx);
+        self.begin_existing_worktree_fetch(ctx);
     }
 
     pub fn on_close(&mut self, ctx: &mut ViewContext<Self>) {
         self.target = None;
+        self.repository_root = None;
         self.validation_error = None;
         self.remote_fetch_error = None;
+        self.existing_worktree_fetch_error = None;
         self.sync_submit_button_disabled_state(ctx);
         ctx.notify();
     }
@@ -472,6 +567,81 @@ impl CreateWorkspaceModal {
                 picker.set_disabled(ctx);
             });
         }
+        ctx.notify();
+    }
+
+    pub fn begin_existing_worktree_fetch(&mut self, ctx: &mut ViewContext<Self>) {
+        self.existing_worktree_fetch_error = None;
+        self.existing_worktree_options.clear();
+        self.selected_existing_worktree = None;
+        self.existing_worktree_picker.update(ctx, |picker, ctx| {
+            picker.set_items(
+                vec![DropdownItem::new(
+                    "Fetching existing worktrees...",
+                    CreateWorkspaceModalAction::NoOp,
+                )],
+                ctx,
+            );
+            picker.set_selected_by_action(CreateWorkspaceModalAction::NoOp, ctx);
+            picker.set_disabled(ctx);
+        });
+        self.sync_submit_button_disabled_state(ctx);
+        ctx.notify();
+    }
+
+    pub fn set_existing_worktrees(
+        &mut self,
+        worktrees: Vec<WorktreeInfo>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(repository_root) = self.repository_root.as_deref() else {
+            return;
+        };
+        self.existing_worktree_fetch_error = None;
+        self.existing_worktree_options = existing_worktree_options(repository_root, worktrees);
+        self.selected_existing_worktree = None;
+        let existing_worktree_items = self
+            .existing_worktree_options
+            .iter()
+            .cloned()
+            .map(|worktree| {
+                DropdownItem::new(
+                    worktree.branch_name.clone(),
+                    CreateWorkspaceModalAction::SelectExistingWorktree(worktree),
+                )
+            })
+            .collect();
+        self.existing_worktree_picker.update(ctx, |picker, ctx| {
+            picker.set_items(existing_worktree_items, ctx);
+            picker.set_enabled(ctx);
+        });
+
+        if let Some(worktree) = self.existing_worktree_options.first().cloned() {
+            self.existing_worktree_picker.update(ctx, |picker, ctx| {
+                picker.set_selected_by_action(
+                    CreateWorkspaceModalAction::SelectExistingWorktree(worktree.clone()),
+                    ctx,
+                );
+            });
+            self.selected_existing_worktree = Some(worktree.clone());
+            if self.form.mode() == CreateWorkspaceMode::ExistingWorktree {
+                self.select_existing_worktree(worktree, ctx);
+            }
+        }
+        self.sync_submit_button_disabled_state(ctx);
+        ctx.notify();
+    }
+
+    pub fn set_existing_worktree_fetch_error(
+        &mut self,
+        message: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.existing_worktree_fetch_error = Some(message);
+        self.existing_worktree_picker.update(ctx, |picker, ctx| {
+            picker.set_disabled(ctx);
+        });
+        self.sync_submit_button_disabled_state(ctx);
         ctx.notify();
     }
 
@@ -634,12 +804,22 @@ impl CreateWorkspaceModal {
                     self.select_local_branch(branch, ctx);
                 }
             }
+            CreateWorkspaceMode::ExistingWorktree => {
+                if let Some(worktree) = self.selected_existing_worktree.clone() {
+                    self.select_existing_worktree(worktree, ctx);
+                }
+            }
         }
         ctx.notify();
     }
 
     fn sync_submit_button_disabled_state(&mut self, ctx: &mut ViewContext<Self>) {
-        let disabled = submit_is_disabled(self.form.mode(), self.remote_fetch_error.is_some());
+        let disabled = submit_is_disabled(
+            self.form.mode(),
+            self.remote_fetch_error.is_some(),
+            self.existing_worktree_fetch_error.is_some(),
+            self.selected_existing_worktree.is_some(),
+        );
         self.submit_button.update(ctx, |button, ctx| {
             button.set_disabled(disabled, ctx);
         });
@@ -650,6 +830,7 @@ impl CreateWorkspaceModal {
         self.selected_remote_branch = Some(branch.clone());
         self.apply_defaults(&branch.branch_name, true, ctx);
         self.validation_error = None;
+        self.sync_submit_button_disabled_state(ctx);
         ctx.notify();
     }
 
@@ -658,6 +839,21 @@ impl CreateWorkspaceModal {
         self.selected_local_branch = Some(branch.clone());
         self.apply_defaults(&branch, false, ctx);
         self.validation_error = None;
+        self.sync_submit_button_disabled_state(ctx);
+        ctx.notify();
+    }
+
+    fn select_existing_worktree(
+        &mut self,
+        worktree: ExistingWorktreeOption,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.form
+            .set_existing_worktree_branch(worktree.branch_name.clone());
+        self.selected_existing_worktree = Some(worktree.clone());
+        self.reset_editor(&self.display_name_editor, &worktree.branch_name, ctx);
+        self.validation_error = None;
+        self.sync_submit_button_disabled_state(ctx);
         ctx.notify();
     }
 
@@ -721,6 +917,23 @@ impl CreateWorkspaceModal {
                     self.form.set_local_branch(branch);
                 }
             }
+            CreateWorkspaceMode::ExistingWorktree => {
+                if self.existing_worktree_fetch_error.is_some() {
+                    self.validation_error = Some(
+                        "Retry existing worktree loading before creating a workspace.".to_string(),
+                    );
+                    ctx.notify();
+                    return;
+                }
+                let Some(worktree) = self.selected_existing_worktree.clone() else {
+                    self.validation_error = Some(
+                        "Select an existing worktree before creating a workspace.".to_string(),
+                    );
+                    ctx.notify();
+                    return;
+                };
+                self.form.set_existing_worktree_branch(worktree.branch_name);
+            }
         }
 
         let source_branch = match self.form.mode() {
@@ -728,6 +941,10 @@ impl CreateWorkspaceModal {
             CreateWorkspaceMode::ExistingLocalBranch => {
                 self.selected_local_branch.clone().unwrap_or_default()
             }
+            CreateWorkspaceMode::ExistingWorktree => self
+                .selected_existing_worktree
+                .as_ref()
+                .map_or_else(String::new, |worktree| worktree.branch_name.clone()),
         };
         let display_name = {
             let name = Self::editor_text(&self.display_name_editor, ctx);
@@ -737,7 +954,15 @@ impl CreateWorkspaceModal {
                 name
             }
         };
-        let worktree_path = PathBuf::from(Self::editor_text(&self.worktree_path_editor, ctx));
+        let worktree_path = if self.form.mode() == CreateWorkspaceMode::ExistingWorktree {
+            self.selected_existing_worktree
+                .as_ref()
+                .expect("existing worktree selection was checked before request construction")
+                .path
+                .clone()
+        } else {
+            PathBuf::from(Self::editor_text(&self.worktree_path_editor, ctx))
+        };
 
         let Some(request) = self.form.build_request(
             target.repository_id,
@@ -800,9 +1025,17 @@ impl TypedActionView for CreateWorkspaceModal {
             CreateWorkspaceModalAction::SelectLocalBranch(branch) => {
                 self.select_local_branch(branch.clone(), ctx)
             }
+            CreateWorkspaceModalAction::SelectExistingWorktree(worktree) => {
+                self.select_existing_worktree(worktree.clone(), ctx)
+            }
             CreateWorkspaceModalAction::RetryBranchRefs => {
                 if let Some(target) = self.target {
                     ctx.emit(target.retry_branch_refs_event());
+                }
+            }
+            CreateWorkspaceModalAction::RetryExistingWorktrees => {
+                if let Some(target) = self.target {
+                    ctx.emit(target.retry_existing_worktrees_event());
                 }
             }
             CreateWorkspaceModalAction::Submit => self.try_submit(ctx),
@@ -819,15 +1052,20 @@ impl View for CreateWorkspaceModal {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let is_remote = self.form.mode() == CreateWorkspaceMode::RemoteBranch;
-        let branch_label = if is_remote {
-            "Remote branch"
-        } else {
-            "Local branch"
-        };
-        let branch_picker = if is_remote {
-            ChildView::new(&self.remote_branch_picker).finish()
-        } else {
-            ChildView::new(&self.local_branch_picker).finish()
+        let is_existing_worktree = self.form.mode() == CreateWorkspaceMode::ExistingWorktree;
+        let (branch_label, branch_picker) = match self.form.mode() {
+            CreateWorkspaceMode::RemoteBranch => (
+                "Remote branch",
+                ChildView::new(&self.remote_branch_picker).finish(),
+            ),
+            CreateWorkspaceMode::ExistingLocalBranch => (
+                "Local branch",
+                ChildView::new(&self.local_branch_picker).finish(),
+            ),
+            CreateWorkspaceMode::ExistingWorktree => (
+                "Existing worktree",
+                ChildView::new(&self.existing_worktree_picker).finish(),
+            ),
         };
         let mut form = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
@@ -848,6 +1086,7 @@ impl View for CreateWorkspaceModal {
                     .with_spacing(8.)
                     .with_child(ChildView::new(&self.remote_mode_button).finish())
                     .with_child(ChildView::new(&self.local_mode_button).finish())
+                    .with_child(ChildView::new(&self.existing_worktree_mode_button).finish())
                     .finish(),
             )
             .with_child(Self::section(branch_label, branch_picker, appearance));
@@ -865,6 +1104,20 @@ impl View for CreateWorkspaceModal {
                 form.add_child(ChildView::new(&self.retry_remote_button).finish());
             }
         }
+        if is_existing_worktree {
+            if let Some(error) = &self.existing_worktree_fetch_error {
+                form.add_child(Self::constrain_editor(
+                    Text::new_inline(
+                        error.clone(),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_body(),
+                    )
+                    .with_color(theme.ui_error_color())
+                    .finish(),
+                ));
+                form.add_child(ChildView::new(&self.retry_existing_worktree_button).finish());
+            }
+        }
         if is_remote {
             form.add_child(Self::section(
                 "New local branch",
@@ -877,11 +1130,22 @@ impl View for CreateWorkspaceModal {
             Self::constrain_editor(ChildView::new(&self.display_name_editor).finish()),
             appearance,
         ));
-        form.add_child(Self::section(
-            "Worktree path",
-            Self::constrain_editor(ChildView::new(&self.worktree_path_editor).finish()),
-            appearance,
-        ));
+        let worktree_path = if is_existing_worktree {
+            let path = self
+                .selected_existing_worktree
+                .as_ref()
+                .map_or_else(String::new, |worktree| {
+                    worktree.path.to_string_lossy().into_owned()
+                });
+            Self::constrain_editor(
+                Text::new_inline(path, appearance.ui_font_family(), appearance.ui_font_body())
+                    .with_color(theme.main_text_color(theme.background()).into())
+                    .finish(),
+            )
+        } else {
+            Self::constrain_editor(ChildView::new(&self.worktree_path_editor).finish())
+        };
+        form.add_child(Self::section("Worktree path", worktree_path, appearance));
         if let Some(error) = &self.validation_error {
             form.add_child(Self::constrain_editor(
                 Text::new_inline(

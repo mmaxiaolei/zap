@@ -75,8 +75,8 @@ use crate::project_organization::domain::{
 };
 use crate::project_organization::git::{
     create_from_local_async, create_from_remote_async, deletion_preflight_async,
-    fetch_and_list_refs_async, list_branch_refs_async, remove_workspace_async,
-    validate_repository_async,
+    fetch_and_list_refs_async, list_branch_refs_async, list_worktrees_async,
+    remove_workspace_async, validate_existing_worktree_async, validate_repository_async,
 };
 use crate::project_organization::model::ProjectOrganizationModel;
 use crate::project_organization::view::create_workspace_modal::{
@@ -1030,6 +1030,10 @@ pub struct Workspace {
     tab_config_action_sidecar_item: Option<SidecarItemKind>,
     tab_config_action_sidecar_mouse_states: crate::tab_configs::action_sidecar::SidecarMouseStates,
     remove_tab_config_confirmation_dialog: ViewHandle<RemoveTabConfigConfirmationDialog>,
+}
+
+fn source_creates_worktree(source: &CreateWorkspaceSource) -> bool {
+    !matches!(source, CreateWorkspaceSource::ExistingWorktree { .. })
 }
 
 impl Workspace {
@@ -5654,6 +5658,7 @@ impl Workspace {
                 body.configure(
                     repository_id,
                     workspace_id,
+                    repository.path.clone(),
                     home,
                     repository.display_name.clone(),
                     ctx,
@@ -5661,7 +5666,13 @@ impl Workspace {
             });
         });
         self.create_workspace_modal.open();
-        self.fetch_create_workspace_branch_refs(repository_id, workspace_id, repository.path, ctx);
+        self.fetch_create_workspace_branch_refs(
+            repository_id,
+            workspace_id,
+            repository.path.clone(),
+            ctx,
+        );
+        self.fetch_existing_worktrees(repository_id, workspace_id, repository.path, ctx);
         ctx.notify();
     }
 
@@ -5726,6 +5737,50 @@ impl Workspace {
         );
     }
 
+    fn fetch_existing_worktrees(
+        &mut self,
+        repository_id: crate::project_organization::domain::RepositoryId,
+        workspace_id: RepositoryWorkspaceId,
+        repository_path: PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let mut should_fetch = false;
+        self.create_workspace_modal.view.update(ctx, |modal, ctx| {
+            modal.body().update(ctx, |body, ctx| {
+                if body.matches_target(repository_id, workspace_id) {
+                    should_fetch = true;
+                    body.begin_existing_worktree_fetch(ctx);
+                }
+            });
+        });
+        if !should_fetch {
+            return;
+        }
+
+        ctx.spawn(
+            list_worktrees_async(repository_path),
+            move |workspace, result, ctx| {
+                workspace
+                    .create_workspace_modal
+                    .view
+                    .update(ctx, |modal, ctx| {
+                        modal.body().update(ctx, |body, ctx| {
+                            if !body.matches_target(repository_id, workspace_id) {
+                                return;
+                            }
+                            match result {
+                                Ok(worktrees) => body.set_existing_worktrees(worktrees, ctx),
+                                Err(error) => body.set_existing_worktree_fetch_error(
+                                    format!("Failed to list existing worktrees: {error}"),
+                                    ctx,
+                                ),
+                            }
+                        });
+                    });
+            },
+        );
+    }
+
     fn handle_create_workspace_modal_body_event(
         &mut self,
         event: &CreateWorkspaceModalEvent,
@@ -5750,6 +5805,19 @@ impl Workspace {
                     repository.path,
                     ctx,
                 );
+            }
+            CreateWorkspaceModalEvent::RetryExistingWorktrees {
+                repository_id,
+                workspace_id,
+            } => {
+                let Some(repository) = ProjectOrganizationModel::handle(ctx)
+                    .as_ref(ctx)
+                    .repository(*repository_id)
+                    .cloned()
+                else {
+                    return;
+                };
+                self.fetch_existing_worktrees(*repository_id, *workspace_id, repository.path, ctx);
             }
             CreateWorkspaceModalEvent::Submit(request) => {
                 self.close_create_workspace_modal(ctx);
@@ -5999,9 +6067,11 @@ impl Workspace {
         let branch = match &request.source {
             CreateWorkspaceSource::RemoteBranch { new_branch, .. } => new_branch.clone(),
             CreateWorkspaceSource::ExistingLocalBranch { local_branch } => local_branch.clone(),
+            CreateWorkspaceSource::ExistingWorktree { local_branch } => local_branch.clone(),
         };
         let delete_branch_on_cleanup =
             matches!(&request.source, CreateWorkspaceSource::RemoteBranch { .. });
+        let should_cleanup_on_persistence_failure = source_creates_worktree(&request.source);
         let source = request.source.clone();
         let git_operation = async move {
             match source {
@@ -6014,6 +6084,11 @@ impl Workspace {
                 }
                 CreateWorkspaceSource::ExistingLocalBranch { local_branch } => {
                     create_from_local_async(repository_path, local_branch, worktree_path).await
+                }
+                CreateWorkspaceSource::ExistingWorktree { local_branch } => {
+                    validate_existing_worktree_async(repository_path, worktree_path, local_branch)
+                        .await
+                        .map(|_| ())
                 }
             }
         };
@@ -6034,6 +6109,17 @@ impl Workspace {
                 let persisted = ProjectOrganizationModel::handle(ctx)
                     .update(ctx, |model, ctx| model.insert_workspace(record, ctx));
                 if let Err(error) = persisted {
+                    if !should_cleanup_on_persistence_failure {
+                        workspace.toast_stack.update(ctx, |toast_stack, ctx| {
+                            toast_stack.add_ephemeral_toast(
+                                DismissibleToast::error(format!(
+                                    "Failed to save workspace: {error}"
+                                )),
+                                ctx,
+                            );
+                        });
+                        return;
+                    }
                     let cleanup_branch = branch.clone();
                     ctx.spawn(
                         remove_workspace_async(

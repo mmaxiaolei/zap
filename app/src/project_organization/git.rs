@@ -149,6 +149,8 @@ pub enum GitWorkspaceError {
     },
     #[error("repository primary worktree `{path}` cannot be registered as a workspace")]
     PrimaryWorktreeCannotBeWorkspace { path: PathBuf },
+    #[error("prunable worktree `{path}` cannot be registered as a workspace")]
+    PrunableWorktreeCannotBeWorkspace { path: PathBuf },
     #[error("repository `{repo}` has no configured remote")]
     RemoteNotFound { repo: PathBuf },
     #[error("remote `{remote}` in repository `{repo}` has no default branch: {stderr}")]
@@ -524,16 +526,13 @@ pub fn existing_worktree_options(
     let mut options = worktrees
         .into_iter()
         .filter_map(|worktree| {
-            let branch_name = worktree
-                .branch
-                .as_deref()?
-                .strip_prefix("refs/heads/")?;
+            let branch_name = worktree.branch.as_deref()?.strip_prefix("refs/heads/")?;
             (!worktree.is_bare
                 && !worktree.is_detached
                 && !worktree.is_prunable
                 && worktree.path != repository_root
                 && !branch_name.is_empty())
-                .then(|| ExistingWorktreeOption::new(worktree.path, branch_name))
+            .then(|| ExistingWorktreeOption::new(worktree.path, branch_name))
         })
         .collect::<Vec<_>>();
     options.sort_by(|left, right| {
@@ -570,6 +569,11 @@ pub fn validate_existing_worktree(
     }
 
     let expected_branch = format!("refs/heads/{local_branch}");
+    if worktree.is_prunable {
+        return Err(GitWorkspaceError::PrunableWorktreeCannotBeWorkspace {
+            path: registered_path,
+        });
+    }
     if worktree.is_bare
         || worktree.is_detached
         || worktree.branch.as_deref() != Some(&expected_branch)

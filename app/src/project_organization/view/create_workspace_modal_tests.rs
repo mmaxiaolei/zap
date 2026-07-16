@@ -11,10 +11,45 @@ use super::{
 
 #[test]
 fn remote_fetch_error_disables_submit_only_in_remote_mode() {
-    assert!(submit_is_disabled(CreateWorkspaceMode::RemoteBranch, true));
+    assert!(submit_is_disabled(
+        CreateWorkspaceMode::RemoteBranch,
+        true,
+        false,
+        false,
+    ));
+    assert!(!submit_is_disabled(
+        CreateWorkspaceMode::RemoteBranch,
+        false,
+        true,
+        false,
+    ));
     assert!(!submit_is_disabled(
         CreateWorkspaceMode::ExistingLocalBranch,
-        true
+        true,
+        true,
+        false,
+    ));
+}
+
+#[test]
+fn existing_worktree_submit_is_disabled_until_a_selection_is_available() {
+    assert!(submit_is_disabled(
+        CreateWorkspaceMode::ExistingWorktree,
+        false,
+        false,
+        false,
+    ));
+    assert!(submit_is_disabled(
+        CreateWorkspaceMode::ExistingWorktree,
+        false,
+        true,
+        true,
+    ));
+    assert!(!submit_is_disabled(
+        CreateWorkspaceMode::ExistingWorktree,
+        false,
+        false,
+        true,
     ));
 }
 
@@ -105,6 +140,34 @@ fn remote_branch_form_builds_a_workspace_creation_request() {
             remote_ref,
             new_branch,
         } if remote_ref == "refs/remotes/origin/main" && new_branch == "feature/project-tree"
+    ));
+}
+
+#[test]
+fn existing_worktree_form_builds_a_workspace_creation_request() {
+    let repository_id = RepositoryId(uuid::Uuid::from_u128(1));
+    let workspace_id = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));
+    let mut form = CreateWorkspaceForm::new();
+    form.set_mode(CreateWorkspaceMode::ExistingWorktree);
+    form.set_existing_worktree_branch("feature/adopt".to_string());
+
+    let request = form
+        .build_request(
+            repository_id,
+            workspace_id,
+            "Adopt workspace".to_string(),
+            PathBuf::from("/tmp/adopt"),
+        )
+        .unwrap();
+
+    assert_eq!(request.repository_id, repository_id);
+    assert_eq!(request.workspace_id, workspace_id);
+    assert_eq!(request.display_name, "Adopt workspace");
+    assert_eq!(request.worktree_path, PathBuf::from("/tmp/adopt"));
+    assert!(matches!(
+        request.source,
+        CreateWorkspaceSource::ExistingWorktree { local_branch }
+            if local_branch == "feature/adopt"
     ));
 }
 

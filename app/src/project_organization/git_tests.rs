@@ -584,6 +584,23 @@ fn rejects_repository_primary_worktree_for_existing_workspace_adoption() {
 }
 
 #[test]
+fn rejects_prunable_existing_worktree_during_workspace_adoption() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/prunable-adoption");
+    std::fs::remove_file(worktree_path.join(".git")).unwrap();
+
+    let error =
+        validate_existing_worktree(&fixture.root, &worktree_path, "feature/prunable-adoption")
+            .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::PrunableWorktreeCannotBeWorkspace { path }
+            if path == worktree_path.canonicalize().unwrap()
+    ));
+}
+
+#[test]
 fn preserves_prunable_worktree_when_its_path_no_longer_exists() {
     let fixture = GitFixture::new();
     let linked_path = fixture.add_linked_worktree("feature/prunable");

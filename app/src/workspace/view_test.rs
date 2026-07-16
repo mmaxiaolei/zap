@@ -187,6 +187,20 @@ fn initialize_app(app: &mut App) {
     app.update(workspace::init);
 }
 
+#[test]
+fn existing_worktree_source_never_requests_git_cleanup() {
+    assert!(!source_creates_worktree(
+        &CreateWorkspaceSource::ExistingWorktree {
+            local_branch: "feature/adopt".to_string(),
+        }
+    ));
+    assert!(source_creates_worktree(
+        &CreateWorkspaceSource::ExistingLocalBranch {
+            local_branch: "feature/create".to_string(),
+        }
+    ));
+}
+
 fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
     let global_resource_handles = GlobalResourceHandles::mock(app);
     let active_window_id = app.read(|ctx| ctx.windows().active_window());
