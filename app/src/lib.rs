@@ -1822,6 +1822,18 @@ fn app_callbacks(is_integration_test: bool) -> warpui::platform::AppCallbacks {
                 manager.close_notebooks(ctx);
             });
 
+            // 在终止持久化线程前保存活动 terminal block。否则仍在运行的命令（例如 Claude）尚未
+            // 产生完成事件，应用下次启动后就会从历史中消失。
+            for window_id in ctx.window_ids().collect_vec() {
+                if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
+                    for workspace in workspaces {
+                        workspace.update(ctx, |workspace, ctx| {
+                            workspace.persist_active_terminal_blocks_for_shutdown(ctx);
+                        });
+                    }
+                }
+            }
+
             PersistenceWriter::handle(ctx).update(ctx, |writer, _ctx| {
                 writer.terminate();
             });

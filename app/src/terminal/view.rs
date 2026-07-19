@@ -6401,6 +6401,21 @@ impl TerminalView {
         })
     }
 
+    /// 返回应用退出时被中断命令的持久化快照。已完成 block 由正常完成事件保存，因此跳过。
+    pub(crate) fn active_block_snapshot_for_shutdown(&self) -> Option<SerializedBlock> {
+        let mut snapshot = {
+            let model = self.model.lock();
+            SerializedBlock::from(model.block_list().active_block())
+        };
+
+        if snapshot.start_ts.is_none() || snapshot.completed_ts.is_some() {
+            return None;
+        }
+
+        snapshot.finalize_for_shutdown(Local::now());
+        Some(snapshot)
+    }
+
     /// Returns the active session's launch shell, if it is specified.
     /// Returns None if there is no active session or if the current session does not
     /// have a launch shell.

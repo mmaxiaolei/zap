@@ -983,6 +983,16 @@ impl PaneGroup {
         }
     }
 
+    /// 保存应用退出时仍在运行的 terminal block。
+    pub(crate) fn persist_active_blocks_for_shutdown(&self, ctx: &AppContext) {
+        let pane_ids = self.terminal_pane_ids().collect::<Vec<_>>();
+        for pane_id in pane_ids {
+            if let Some(terminal_pane) = self.terminal_session_by_id(pane_id) {
+                terminal_pane.persist_active_block_for_shutdown(ctx);
+            }
+        }
+    }
+
     /// Executes the provided callback for each CodeView contained within
     /// this pane group.
     pub fn for_all_code_panes(

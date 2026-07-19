@@ -5,11 +5,12 @@ use std::{
 
 use warpui::{
     elements::{
-        Border, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Element, Empty, Flex,
-        Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, SavePosition,
-        Shrinkable, Text,
+        Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element,
+        Empty, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
+        Radius, SavePosition, Shrinkable, Text,
     },
     platform::Cursor,
+    text_layout::ClipConfig,
     ui_components::components::UiComponent,
     AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
@@ -235,6 +236,20 @@ fn workspace_row_is_selected(
     selected_workspace_id == Some(workspace_id)
 }
 
+fn workspace_count_label(workspace_count: usize) -> String {
+    let noun = if workspace_count == 1 {
+        "workspace"
+    } else {
+        "workspaces"
+    };
+    format!("{workspace_count} {noun}")
+}
+
+fn tab_count_label(tab_count: usize) -> String {
+    let noun = if tab_count == 1 { "tab" } else { "tabs" };
+    format!("{tab_count} {noun}")
+}
+
 fn synchronize_mouse_states<Id>(mouse_states: &mut HashMap<Id, MouseStateHandle>, ids: &HashSet<Id>)
 where
     Id: Copy + Eq + Hash,
@@ -392,7 +407,11 @@ impl ProjectTreePanel {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let icon_color = theme.sub_text_color(theme.background());
+        let icon_color = if repository.expanded {
+            theme.main_text_color(theme.background())
+        } else {
+            theme.sub_text_color(theme.background())
+        };
         let chevron = if repository.expanded {
             icons::Icon::ChevronDown
         } else {
@@ -424,6 +443,25 @@ impl ProjectTreePanel {
         let add_workspace_position_id = repository_add_workspace_position_id(repository_id);
         let add_workspace = SavePosition::new(add_workspace, &add_workspace_position_id).finish();
 
+        let repository_icon = Container::new(
+            ConstrainedBox::new(icons::Icon::Folder.to_warpui_icon(icon_color).finish())
+                .with_width(16.)
+                .with_height(16.)
+                .finish(),
+        )
+        .with_uniform_padding(4.)
+        .with_background(theme.surface_overlay_1())
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+        .finish();
+
+        let workspace_count = Text::new_inline(
+            workspace_count_label(repository.workspaces.len()),
+            appearance.ui_font_family(),
+            appearance.ui_font_footnote(),
+        )
+        .with_color(theme.sub_text_color(theme.background()).into())
+        .finish();
+
         let row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -434,14 +472,9 @@ impl ProjectTreePanel {
                     .finish(),
             )
             .with_child(
-                Container::new(
-                    ConstrainedBox::new(icons::Icon::Folder.to_warpui_icon(icon_color).finish())
-                        .with_width(16.)
-                        .with_height(16.)
-                        .finish(),
-                )
-                .with_margin_left(4.)
-                .finish(),
+                Container::new(repository_icon)
+                    .with_margin_left(4.)
+                    .finish(),
             )
             .with_child(
                 Shrinkable::new(
@@ -452,6 +485,7 @@ impl ProjectTreePanel {
                             appearance.ui_font_family(),
                             appearance.ui_font_body(),
                         )
+                        .with_clip(ClipConfig::ellipsis())
                         .with_color(theme.main_text_color(theme.background()).into())
                         .finish(),
                     )
@@ -459,6 +493,12 @@ impl ProjectTreePanel {
                     .finish(),
                 )
                 .finish(),
+            )
+            .with_child(
+                Container::new(workspace_count)
+                    .with_margin_left(12.)
+                    .with_margin_right(8.)
+                    .finish(),
             )
             .with_child(add_workspace)
             .finish();
@@ -469,7 +509,16 @@ impl ProjectTreePanel {
                 .get(&repository_id)
                 .expect("repository row mouse state should be initialized during tree refresh")
                 .clone(),
-            move |_| Container::new(row).with_uniform_padding(4.).finish(),
+            move |mouse_state| {
+                let mut container = Container::new(row)
+                    .with_horizontal_padding(8.)
+                    .with_vertical_padding(6.)
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
+                if mouse_state.is_hovered() {
+                    container = container.with_background(theme.surface_overlay_1());
+                }
+                container.finish()
+            },
         )
         .with_cursor(Cursor::PointingHand)
         .with_defer_events_to_children()
@@ -485,44 +534,79 @@ impl ProjectTreePanel {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let selected = workspace_row_is_selected(
-            self.state.selected_workspace_id(),
-            workspace.workspace_id,
-        );
-        let selection_background = theme.surface_2();
+        let selected =
+            workspace_row_is_selected(self.state.selected_workspace_id(), workspace.workspace_id);
         let selection_accent = theme.accent();
-        let label_color = if selected {
-            theme.accent().into_solid()
-        } else {
-            theme.main_text_color(theme.background()).into()
-        };
+        let label_color = theme.main_text_color(theme.background());
+        let metadata_color = theme.sub_text_color(theme.background());
         let workspace_id = workspace.workspace_id;
         let action = ProjectTreeAction::SelectWorkspace {
             workspace_id: Some(workspace_id),
         };
         let delete_action = ProjectTreeAction::DeleteWorkspace { workspace_id };
-        let subtitle = format!("{}  |  {} tabs", workspace.branch, workspace.tab_count);
+        let branch = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(3.)
+            .with_child(
+                ConstrainedBox::new(
+                    icons::Icon::GitBranch
+                        .to_warpui_icon(metadata_color)
+                        .finish(),
+                )
+                .with_width(12.)
+                .with_height(12.)
+                .finish(),
+            )
+            .with_child(
+                Shrinkable::new(
+                    1.,
+                    Text::new_inline(
+                        workspace.branch.clone(),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_footnote(),
+                    )
+                    .with_clip(ClipConfig::ellipsis())
+                    .with_color(metadata_color.into())
+                    .finish(),
+                )
+                .finish(),
+            )
+            .finish();
         let content = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_spacing(2.)
             .with_child(
                 Text::new_inline(
                     workspace.display_name.clone(),
                     appearance.ui_font_family(),
                     appearance.ui_font_body(),
                 )
-                .with_color(label_color)
+                .with_clip(ClipConfig::ellipsis())
+                .with_color(label_color.into())
                 .finish(),
             )
-            .with_child(
-                Text::new_inline(
-                    subtitle,
-                    appearance.ui_font_family(),
-                    appearance.ui_font_size(),
-                )
-                .with_color(theme.sub_text_color(theme.background()).into())
-                .finish(),
-            )
+            .with_child(branch)
             .finish();
+
+        let tab_count_background = if selected {
+            selection_accent.with_opacity(20)
+        } else {
+            theme.surface_2()
+        };
+        let tab_count = Container::new(
+            Text::new_inline(
+                tab_count_label(workspace.tab_count),
+                appearance.ui_font_family(),
+                appearance.ui_font_footnote(),
+            )
+            .with_color(metadata_color.into())
+            .finish(),
+        )
+        .with_horizontal_padding(6.)
+        .with_vertical_padding(2.)
+        .with_background(tab_count_background)
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+        .finish();
 
         let delete_tooltip = appearance
             .ui_builder()
@@ -565,37 +649,55 @@ impl ProjectTreePanel {
                     .with_main_axis_size(MainAxisSize::Max)
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_child(Shrinkable::new(1.0, content).finish())
-                    .with_child(delete)
+                    .with_child(
+                        Flex::row()
+                            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                            .with_spacing(4.)
+                            .with_child(tab_count)
+                            .with_child(delete)
+                            .finish(),
+                    )
                     .finish();
                 let mut row_container = Container::new(row_content)
-                    .with_padding_left(36.)
-                    .with_vertical_padding(4.);
+                    .with_horizontal_padding(8.)
+                    .with_vertical_padding(6.)
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
                 if selected {
-                    row_container = row_container
-                        .with_background(selection_background)
-                        .with_border(Border::all(1.).with_border_fill(selection_accent))
-                        .with_uniform_margin(-1.);
+                    row_container =
+                        row_container.with_background(selection_accent.with_opacity(10));
+                } else if mouse_state.is_hovered() {
+                    row_container = row_container.with_background(theme.surface_overlay_2());
+                } else {
+                    row_container = row_container.with_background(theme.surface_overlay_1());
                 }
 
-                if selected {
-                    Flex::row()
-                        .with_main_axis_size(MainAxisSize::Max)
-                        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                        .with_child(
-                            Container::new(
-                                ConstrainedBox::new(Empty::new().finish())
-                                    .with_width(3.)
-                                    .finish(),
-                            )
-                                .with_margin_left(-3.)
-                                .with_background(selection_accent)
+                let indicator = Container::new(
+                    ConstrainedBox::new(Empty::new().finish())
+                        .with_width(2.)
+                        .finish(),
+                );
+                let indicator = if selected {
+                    indicator
+                        .with_background(selection_accent)
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(1.)))
+                } else {
+                    indicator
+                };
+
+                Flex::row()
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                    .with_child(indicator.finish())
+                    .with_child(
+                        Shrinkable::new(
+                            1.0,
+                            Container::new(row_container.finish())
+                                .with_margin_left(4.)
                                 .finish(),
                         )
-                        .with_child(Shrinkable::new(1.0, row_container.finish()).finish())
-                        .finish()
-                } else {
-                    row_container.finish()
-                }
+                        .finish(),
+                    )
+                    .finish()
             },
         )
         .with_cursor(Cursor::PointingHand)
@@ -635,8 +737,15 @@ impl ProjectTreePanel {
             )
             .finish();
 
-        Hoverable::new(self.unclassified_mouse_state.clone(), move |_| {
-            Container::new(content).with_uniform_padding(4.).finish()
+        Hoverable::new(self.unclassified_mouse_state.clone(), move |mouse_state| {
+            let mut container = Container::new(content)
+                .with_horizontal_padding(8.)
+                .with_vertical_padding(6.)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
+            if mouse_state.is_hovered() {
+                container = container.with_background(theme.surface_overlay_1());
+            }
+            container.finish()
         })
         .with_cursor(Cursor::PointingHand)
         .on_click(move |ctx, _, _| {
@@ -692,14 +801,29 @@ impl View for ProjectTreePanel {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let mut tree = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+        let theme = appearance.theme();
+        let mut tree = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_spacing(8.);
         for repository in self.state.repositories() {
-            tree.add_child(self.render_repository_row(repository, appearance));
+            let mut repository_group = Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_child(self.render_repository_row(repository, appearance));
             if repository.expanded {
+                let mut workspaces = Flex::column()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                    .with_spacing(2.);
                 for workspace in &repository.workspaces {
-                    tree.add_child(self.render_workspace_row(workspace, appearance));
+                    workspaces.add_child(self.render_workspace_row(workspace, appearance));
                 }
+                repository_group.add_child(
+                    Container::new(workspaces.finish())
+                        .with_margin_left(22.)
+                        .with_margin_top(2.)
+                        .finish(),
+                );
             }
+            tree.add_child(repository_group.finish());
         }
 
         let body: Box<dyn Element> = if self.state.repositories().is_empty() {
@@ -720,7 +844,10 @@ impl View for ProjectTreePanel {
             .with_uniform_padding(8.)
             .finish()
         } else {
-            tree.finish()
+            Container::new(tree.finish())
+                .with_horizontal_padding(4.)
+                .with_vertical_padding(6.)
+                .finish()
         };
 
         Flex::column()
@@ -728,13 +855,16 @@ impl View for ProjectTreePanel {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(
                 Container::new(self.render_header(appearance))
-                    .with_uniform_padding(8.)
+                    .with_horizontal_padding(12.)
+                    .with_vertical_padding(10.)
+                    .with_border(Border::bottom(1.).with_border_fill(theme.surface_2()))
                     .finish(),
             )
             .with_child(Shrinkable::new(1.0, body).finish())
             .with_child(
                 Container::new(self.render_unclassified_row(appearance))
-                    .with_uniform_padding(4.)
+                    .with_uniform_padding(8.)
+                    .with_border(Border::top(1.).with_border_fill(theme.surface_2()))
                     .finish(),
             )
             .finish()

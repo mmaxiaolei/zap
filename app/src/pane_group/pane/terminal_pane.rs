@@ -1,7 +1,7 @@
 //! Implementation of terminal panes.
 #[cfg(feature = "local_fs")]
 use crate::pane_group::CodeSource;
-use std::sync::mpsc::SyncSender;
+use std::sync::{mpsc::SyncSender, Arc};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use warp_multi_agent_api as multi_agent_api;
@@ -151,6 +151,39 @@ impl TerminalPane {
                     err
                 );
             }
+        }
+    }
+
+    /// 在应用退出前将活动命令作为中断 block 保存。
+    pub(in crate::pane_group) fn persist_active_block_for_shutdown(&self, ctx: &AppContext) {
+        if !*GeneralSettings::as_ref(ctx).restore_session
+            || !AppExecutionMode::as_ref(ctx).can_save_session()
+        {
+            return;
+        }
+
+        let terminal_view = self.terminal_view(ctx);
+        let view = terminal_view.as_ref(ctx);
+        let Some(is_local) = view.active_session_is_local(ctx) else {
+            return;
+        };
+        let Some(block) = view.active_block_snapshot_for_shutdown() else {
+            return;
+        };
+        let Some(sender) = &self.model_event_sender else {
+            return;
+        };
+
+        let event = ModelEvent::SaveBlock(BlockCompleted {
+            pane_id: self.uuid.clone(),
+            block: Arc::new(block),
+            is_local,
+        });
+        if let Err(err) = sender.send(event) {
+            log::error!(
+                "Error sending active block shutdown event for terminal id {:?}: {err:?}",
+                self.uuid
+            );
         }
     }
 

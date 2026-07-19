@@ -15,7 +15,13 @@ use warpui::{
 };
 
 use crate::{
-    persistence::{model::Repository as PersistedRepository, RepositoryPersistence},
+    persistence::{
+        model::{
+            Repository as PersistedRepository,
+            RepositoryWorkspace as PersistedRepositoryWorkspace,
+        },
+        RepositoryPersistence,
+    },
     project_organization::model::ProjectOrganizationModel,
 };
 
@@ -25,9 +31,9 @@ use crate::project_organization::domain::{
 
 use super::{
     repository_add_workspace_position_id, resolved_project_organization_tab_layout,
-    should_show_workspace_delete_button, synchronize_mouse_states, workspace_row_is_selected,
-    ProjectTreeEvent, ProjectTreePanel, ProjectTreeState, RepositoryTreeNode, TabLayout,
-    WorkspaceTreeNode,
+    should_show_workspace_delete_button, synchronize_mouse_states, tab_count_label,
+    workspace_count_label, workspace_row_is_selected, ProjectTreeEvent, ProjectTreePanel,
+    ProjectTreeState, RepositoryTreeNode, TabLayout, WorkspaceTreeNode,
 };
 
 struct ProjectTreeTestHost {
@@ -223,6 +229,77 @@ fn workspace_row_selection_matches_only_the_active_workspace() {
     assert!(workspace_row_is_selected(Some(selected), selected));
     assert!(!workspace_row_is_selected(Some(selected), other));
     assert!(!workspace_row_is_selected(None, selected));
+}
+
+#[test]
+fn project_tree_count_labels_use_correct_singular_and_plural_forms() {
+    assert_eq!(workspace_count_label(0), "0 workspaces");
+    assert_eq!(workspace_count_label(1), "1 workspace");
+    assert_eq!(workspace_count_label(2), "2 workspaces");
+    assert_eq!(tab_count_label(0), "0 tabs");
+    assert_eq!(tab_count_label(1), "1 tab");
+    assert_eq!(tab_count_label(2), "2 tabs");
+}
+
+#[test]
+fn project_tree_renders_workspace_rows_with_finite_flex_constraints() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let tempdir = tempfile::tempdir().expect("temporary directory should be created");
+        let repository_path = tempdir.path().join("dip-agent");
+        let worktree_path = tempdir.path().join("feature-worktree");
+        std::fs::create_dir(&repository_path).expect("repository directory should be created");
+        std::fs::create_dir(&worktree_path).expect("worktree directory should be created");
+        let repository_id = RepositoryId(uuid::Uuid::from_u128(1));
+        let workspace_id = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));
+        let timestamp = chrono::DateTime::from_timestamp(0, 0)
+            .expect("timestamp should be valid")
+            .naive_utc();
+        app.add_singleton_model(|ctx| {
+            ProjectOrganizationModel::try_new(
+                vec![PersistedRepository {
+                    id: repository_id.to_string(),
+                    display_name: "dip-agent".to_string(),
+                    path: repository_path.to_string_lossy().to_string(),
+                    remote_url: None,
+                    source: "local".to_string(),
+                    created_at: timestamp,
+                    last_opened_at: timestamp,
+                }],
+                vec![PersistedRepositoryWorkspace {
+                    id: workspace_id.to_string(),
+                    repository_id: repository_id.to_string(),
+                    display_name: "feature-workspace".to_string(),
+                    branch: "feature/workspace".to_string(),
+                    worktree_path: worktree_path.to_string_lossy().to_string(),
+                    created_at: timestamp,
+                    last_opened_at: timestamp,
+                }],
+                RepositoryPersistence::new(None),
+                ctx,
+            )
+            .expect("project organization model should initialize")
+        });
+
+        let (window_id, host) =
+            app.add_window(WindowStyle::NotStealFocus, ProjectTreeTestHost::new);
+        let project_tree = host.read(&app, |host, _| host.project_tree.clone());
+        let root_view_id = app
+            .root_view_id(window_id)
+            .expect("window should have a root view");
+        let mut presenter = Presenter::new(window_id);
+
+        app.update(|ctx| {
+            presenter.invalidate(
+                WindowInvalidation {
+                    updated: [root_view_id, project_tree.id()].into_iter().collect(),
+                    ..Default::default()
+                },
+                ctx,
+            );
+            presenter.build_scene(vec2f(320., 240.), 1., None, ctx);
+        });
+    });
 }
 
 #[test]

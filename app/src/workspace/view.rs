@@ -4497,6 +4497,23 @@ impl Workspace {
         )
     }
 
+    /// 在持久化线程终止前保存所有 tab 中的活动 terminal block。
+    pub(crate) fn persist_active_terminal_blocks_for_shutdown(
+        &self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let pane_groups = self
+            .all_repository_workspace_tabs()
+            .map(|tab| tab.pane_group.clone())
+            .collect::<Vec<_>>();
+
+        for pane_group in pane_groups {
+            pane_group.update(ctx, |pane_group, ctx| {
+                pane_group.persist_active_blocks_for_shutdown(ctx);
+            });
+        }
+    }
+
     fn tab_data_for_active_repository_workspace(
         &self,
         pane_group: ViewHandle<PaneGroup>,
