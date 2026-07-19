@@ -885,6 +885,27 @@ fn creates_new_branch_from_remote_ref_without_tracking() {
 }
 
 #[test]
+fn creates_remote_worktree_for_nested_claimed_target() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture
+        .tempdir
+        .path()
+        .join("missing-parent")
+        .join("remote worktree");
+
+    create_from_remote(
+        &fixture.root,
+        "refs/remotes/origin/main",
+        "feature/nested-remote",
+        &worktree_path,
+    )
+    .unwrap();
+
+    assert_eq!(current_branch(&worktree_path), "feature/nested-remote");
+    assert!(worktree_path.is_dir());
+}
+
+#[test]
 fn successful_remote_creation_rejects_new_upstream() {
     let fixture = GitFixture::new();
     let path = fixture.tempdir.path().join("unexpected upstream");
@@ -992,6 +1013,22 @@ fn creates_local_worktree_for_relative_claimed_target() {
         .status()
         .unwrap();
     assert!(status.success());
+}
+
+#[test]
+fn creates_local_worktree_for_nested_claimed_target() {
+    let fixture = GitFixture::new();
+    run_git(&fixture.root, &["branch", "feature/nested-local"]);
+    let worktree_path = fixture
+        .tempdir
+        .path()
+        .join("missing-parent")
+        .join("local worktree");
+
+    create_from_local(&fixture.root, "feature/nested-local", &worktree_path).unwrap();
+
+    assert_eq!(current_branch(&worktree_path), "feature/nested-local");
+    assert!(worktree_path.is_dir());
 }
 
 #[test]

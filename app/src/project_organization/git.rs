@@ -1617,6 +1617,17 @@ struct TargetDirectoryClaim {
 
 impl TargetDirectoryClaim {
     fn acquire(path: &Path) -> Result<Self, GitWorkspaceError> {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent).map_err(|source| {
+                GitWorkspaceError::TargetClaimFailed {
+                    path: path.to_path_buf(),
+                    source,
+                }
+            })?;
+        }
         std::fs::create_dir(path).map_err(|source| match source.kind() {
             io::ErrorKind::AlreadyExists => GitWorkspaceError::TargetExists {
                 path: path.to_path_buf(),
