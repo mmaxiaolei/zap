@@ -1,18 +1,18 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use warpui::{
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
     elements::{
         ChildView, Clipped, ConstrainedBox, Container, CrossAxisAlignment, Element, Flex,
-        MainAxisAlignment, MainAxisSize, ParentElement, Shrinkable, Text,
+        MainAxisAlignment, MainAxisSize, ParentElement, Text,
     },
+    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
 use crate::project_organization::{
     domain::{RepositoryId, RepositoryWorkspaceId},
     git::{
-        BranchRef, ExistingWorktreeOption, WorktreeInfo, existing_worktree_options,
-        is_primary_worktree_path, workspace_dir_name,
+        existing_worktree_options, is_primary_worktree_path, workspace_dir_name, BranchRef,
+        ExistingWorktreeOption, WorktreeInfo,
     },
 };
 use crate::{
@@ -1045,13 +1045,9 @@ impl CreateWorkspaceModal {
     }
 
     fn constrain_editor(child: Box<dyn Element>) -> Box<dyn Element> {
-        Shrinkable::new(
-            1.0,
-            ConstrainedBox::new(Clipped::new(child).finish())
-                .with_max_width(480.)
-                .finish(),
-        )
-        .finish()
+        ConstrainedBox::new(Clipped::new(child).finish())
+            .with_max_width(480.)
+            .finish()
     }
 }
 

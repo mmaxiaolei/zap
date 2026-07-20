@@ -1,14 +1,57 @@
 use std::path::PathBuf;
 
+use pathfinder_geometry::vector::vec2f;
+use warp_core::ui::appearance::Appearance;
+use warpui::{
+    elements::{ChildView, ConstrainedBox},
+    platform::WindowStyle,
+    App, Element, Entity, Presenter, TypedActionView, View, ViewContext, ViewHandle,
+    WindowInvalidation,
+};
+
 use crate::project_organization::domain::{RepositoryId, RepositoryWorkspaceId};
 use crate::project_organization::git::{BranchRef, ExistingWorktreeOption, WorktreeInfo};
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
+use crate::test_util::settings::initialize_settings_for_tests;
 
 use super::{
-    CreateWorkspaceDefaults, CreateWorkspaceForm, CreateWorkspaceModalEvent, CreateWorkspaceMode,
-    CreateWorkspaceSource, CreateWorkspaceTarget, RemoteBranchOption, branch_ref_options,
-    default_worktree_path, existing_worktree_default_name, existing_worktree_display_label,
-    primary_worktree_error, submit_is_disabled,
+    branch_ref_options, default_worktree_path, existing_worktree_default_name,
+    existing_worktree_display_label, primary_worktree_error, submit_is_disabled,
+    CreateWorkspaceDefaults, CreateWorkspaceForm, CreateWorkspaceModal, CreateWorkspaceModalEvent,
+    CreateWorkspaceMode, CreateWorkspaceSource, CreateWorkspaceTarget, RemoteBranchOption,
 };
+
+struct CreateWorkspaceModalTestHost {
+    modal: ViewHandle<CreateWorkspaceModal>,
+}
+
+impl CreateWorkspaceModalTestHost {
+    fn new(ctx: &mut ViewContext<Self>) -> Self {
+        Self {
+            modal: ctx.add_typed_action_view(CreateWorkspaceModal::new),
+        }
+    }
+}
+
+impl Entity for CreateWorkspaceModalTestHost {
+    type Event = ();
+}
+
+impl View for CreateWorkspaceModalTestHost {
+    fn ui_name() -> &'static str {
+        "CreateWorkspaceModalTestHost"
+    }
+
+    fn render(&self, _app: &warpui::AppContext) -> Box<dyn Element> {
+        ConstrainedBox::new(ChildView::new(&self.modal).finish())
+            .with_width(520.)
+            .finish()
+    }
+}
+
+impl TypedActionView for CreateWorkspaceModalTestHost {
+    type Action = ();
+}
 
 #[test]
 fn primary_existing_worktree_uses_local_label_and_name() {
@@ -96,6 +139,48 @@ fn existing_worktree_submit_is_disabled_until_a_selection_is_available() {
         false,
         true,
     ));
+}
+
+#[test]
+fn existing_worktree_fetch_error_renders_with_finite_flex_constraints() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
+        let (window_id, host) = app.add_window(
+            WindowStyle::NotStealFocus,
+            CreateWorkspaceModalTestHost::new,
+        );
+        let modal = host.read(&app, |host, _| host.modal.clone());
+        let root_view_id = app
+            .root_view_id(window_id)
+            .expect("window should have a root view");
+        let mut presenter = Presenter::new(window_id);
+
+        modal.update(&mut app, |modal, ctx| {
+            modal.configure(
+                RepositoryId(uuid::Uuid::from_u128(1)),
+                RepositoryWorkspaceId(uuid::Uuid::from_u128(2)),
+                PathBuf::from("/repo"),
+                PathBuf::from("/Users/example"),
+                "repo".to_string(),
+                ctx,
+            );
+            modal.set_mode(CreateWorkspaceMode::ExistingWorktree, ctx);
+            modal.set_existing_worktree_fetch_error("fatal: not a git repository".to_string(), ctx);
+        });
+
+        app.update(|ctx| {
+            presenter.invalidate(
+                WindowInvalidation {
+                    updated: [root_view_id, modal.id()].into_iter().collect(),
+                    ..Default::default()
+                },
+                ctx,
+            );
+            presenter.build_scene(vec2f(520., 420.), 1., None, ctx);
+        });
+    });
 }
 
 #[test]
