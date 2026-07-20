@@ -4476,6 +4476,23 @@ impl Workspace {
         ctx.notify();
     }
 
+    fn activate_repository_workspace(
+        &mut self,
+        workspace_id: RepositoryWorkspaceId,
+        initial_directory: PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.switch_repository_workspace(Some(workspace_id), ctx);
+        self.add_tab_with_pane_layout(
+            PanesLayout::SingleTerminal(Box::new(
+                NewTerminalOptions::default().with_initial_directory(initial_directory),
+            )),
+            Arc::new(HashMap::new()),
+            None,
+            ctx,
+        );
+    }
+
     fn sync_project_tree(&mut self, ctx: &mut ViewContext<Self>) {
         if !FeatureFlag::RepositoryWorkspaces.is_enabled() {
             return;
@@ -5632,22 +5649,33 @@ impl Workspace {
             validate_repository_async(path),
             |workspace, result, ctx| match result {
                 Ok(repository) => {
+                    let repository_root = repository.root.clone();
                     let result = ProjectOrganizationModel::handle(ctx).update(ctx, |model, ctx| {
-                        model.add_local_repository_with_remote(
+                        model.add_local_repository_with_initial_workspace(
                             &repository.root,
-                            repository.remote_url,
+                            Some(repository.remote_url),
+                            repository.primary_branch,
                             ctx,
                         )
                     });
-                    if let Err(error) = result {
-                        workspace.toast_stack.update(ctx, |toast_stack, ctx| {
-                            toast_stack.add_ephemeral_toast(
-                                DismissibleToast::error(format!(
-                                    "Failed to add repository: {error}"
-                                )),
+                    match result {
+                        Ok((_, workspace_id)) => {
+                            workspace.activate_repository_workspace(
+                                workspace_id,
+                                repository_root,
                                 ctx,
                             );
-                        });
+                        }
+                        Err(error) => {
+                            workspace.toast_stack.update(ctx, |toast_stack, ctx| {
+                                toast_stack.add_ephemeral_toast(
+                                    DismissibleToast::error(format!(
+                                        "Failed to add repository: {error}"
+                                    )),
+                                    ctx,
+                                );
+                            });
+                        }
                     }
                 }
                 Err(error) => {
@@ -6179,14 +6207,9 @@ impl Workspace {
                     return;
                 }
 
-                workspace.switch_repository_workspace(Some(request.workspace_id), ctx);
-                workspace.add_tab_with_pane_layout(
-                    PanesLayout::SingleTerminal(Box::new(
-                        NewTerminalOptions::default()
-                            .with_initial_directory(request.worktree_path.clone()),
-                    )),
-                    Arc::new(HashMap::new()),
-                    None,
+                workspace.activate_repository_workspace(
+                    request.workspace_id,
+                    request.worktree_path.clone(),
                     ctx,
                 );
             }
