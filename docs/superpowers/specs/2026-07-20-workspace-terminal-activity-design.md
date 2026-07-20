@@ -16,9 +16,10 @@
 ## 目标
 
 - 在 workspace 名称旁展示当前 workspace/团队下所有窗口的 long-running terminal 数量。
+- 去掉 workspace 名称旁现有的 tab 数量统计，不再保留或美化该旧计数。
 - 使用 C3 Neon Capsule 视觉方向：圆角胶囊、弱青绿色辉光、细旋转状态环、数量 badge。
 - 只做纯展示，不提供点击、hover tooltip 或导航交互。
-- 空闲时不展示活动状态，避免标题栏长期噪声。
+- 空闲时不展示活动状态，也不展示旧 tab 数量统计，避免标题栏长期噪声。
 - 保持现有 tab indicator 语义不变：tab indicator 仍表示单 tab 状态，workspace chip 只表示 workspace 聚合状态。
 
 ## 非目标
@@ -28,6 +29,7 @@
 - 不引入新的 command lifecycle 状态。
 - 不新增 workspace 级任务管理面板或 running process 列表入口。
 - 不替换现有 tab、vertical tabs、pane header 的状态指示。
+- 不在 workspace 名称旁继续展示 tab 总数。
 
 ## 用户确认的设计选择
 
@@ -36,6 +38,7 @@
 - 统计范围：当前 workspace/团队下所有窗口的 terminal tabs。
 - 交互：纯展示，不点击、不 hover。
 - 视觉：C3 Neon Capsule，极客风但保持克制。
+- 旧 UI：移除 workspace 名称旁现有 tab 数量统计，该位置改为 running 数字 badge。
 
 ## UI 设计
 
@@ -50,9 +53,9 @@ Team Lab  ⟳  3
 - 胶囊高度约 24px，匹配标题栏控件高度。
 - 胶囊背景使用半透明深色底，边框使用低透明度青绿色。
 - spinner 使用细环旋转，颜色与胶囊边框一致。
-- 数字 badge 固定最小宽度，避免 1 位到 2 位数字造成明显跳动。
+- 数字 badge 固定最小宽度，避免 1 位到 2 位数字造成明显跳动；该数字只表示 long-running terminal 数量，不表示 tab 数量。
 - 数量 `1..=99` 显示精确值，超过 99 显示 `99+`。
-- 数量为 0 时不渲染活动状态，只保留原 workspace 名称。
+- 数量为 0 时不渲染活动状态，只保留原 workspace 名称；旧 tab 数量统计也不渲染。
 - 发光效果必须弱化，避免长期运行任务时干扰注意力。
 
 若标题栏空间不足：
@@ -106,11 +109,13 @@ workspace 归属过滤：
 - 聚合逻辑不进入渲染 helper。
 - UI helper 不直接遍历 terminal sessions。
 - 不在 terminal 输出路径中更新 workspace 状态。
+- 不复用旧 tab count 的数值含义；旧 tab count 渲染路径应被移除或绕过。
 - 不新增全局 mutable cache，除非实现时发现 render 阶段重复遍历造成明确性能问题。
 
 ## 边界情况
 
 - 空 workspace 或无 terminal sessions：不显示活动状态。
+- workspace 有多个 tabs 但没有 long-running terminal：只显示 workspace 名称，不显示 tab count。
 - 多窗口同一 workspace 有 3 个 running sessions：显示 `3`。
 - 多窗口不同 workspace 的 session：只计入当前 workspace/团队归属一致的 session。
 - read-only shared session viewer：不计入。
@@ -131,7 +136,9 @@ workspace 归属过滤：
 视图测试：
 
 - running count 为 0 时不渲染 activity chip。
+- running count 为 0 且 tab count 大于 1 时，也不渲染旧 tab 数量统计。
 - running count 大于 0 时渲染 spinner 和数量 badge。
+- running count 大于 0 时，数字 badge 显示 running count，而不是 tab count。
 - horizontal tabs 与 vertical tabs 模式下渲染入口一致。
 
 验证命令：
@@ -143,12 +150,13 @@ workspace 归属过滤：
 
 - 当前 workspace/团队归属如果是全局 singleton，而不是每个窗口独立状态，跨窗口统计应明确表示“当前选中 workspace/团队”的全局运行态。
 - C3 视觉存在感较强，实现时必须使用低透明度边框和弱辉光，避免标题栏变成常亮状态灯。
-- 标题栏挂载点必须先定位到现有 workspace 名称/chip 渲染入口；若该入口分散在 horizontal tabs 与 vertical tabs 两条路径中，应先抽出共享渲染 helper，再接入 activity 状态，避免在大型 `Workspace::render_tab_bar_contents` 中堆叠重复逻辑。
+- 标题栏挂载点必须先定位到现有 workspace 名称/tab count 渲染入口；若该入口分散在 horizontal tabs 与 vertical tabs 两条路径中，应先抽出共享渲染 helper，再移除旧 tab count 并接入 activity 状态，避免在大型 `Workspace::render_tab_bar_contents` 中堆叠重复逻辑。
 
 ## 验收标准
 
 - 当同一 workspace/团队下任意窗口有 terminal long-running command 时，当前 workspace 名称旁显示 C3 Neon Capsule。
 - 胶囊显示正确 running 数量，超过 99 时显示 `99+`。
 - 所有 long-running command 结束后，胶囊消失。
+- workspace 名称旁不再显示旧 tab 数量统计；新数字 badge 只代表 running terminal 数量。
 - 点击或 hover 胶囊没有新增交互。
 - 现有 tab indicator、pane header、running process warning 行为不变。
