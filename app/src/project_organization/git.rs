@@ -549,7 +549,7 @@ pub fn existing_worktree_options(
         .into_iter()
         .filter_map(|worktree| {
             let branch_name = worktree.branch.as_deref()?.strip_prefix("refs/heads/")?;
-            let is_primary = worktree.path == repository_root;
+            let is_primary = is_primary_worktree_path(repository_root, &worktree.path);
             (!worktree.is_bare
                 && !worktree.is_detached
                 && !worktree.is_prunable
@@ -571,6 +571,21 @@ pub fn existing_worktree_options(
             .then_with(|| left.path.cmp(&right.path))
     });
     options
+}
+
+/// 判断 worktree 路径是否指向 repository 主工作目录。
+pub(crate) fn is_primary_worktree_path(repository_root: &Path, worktree_path: &Path) -> bool {
+    if repository_root == worktree_path {
+        return true;
+    }
+
+    match (
+        dunce::canonicalize(repository_root),
+        dunce::canonicalize(worktree_path),
+    ) {
+        (Ok(repository_root), Ok(worktree_path)) => repository_root == worktree_path,
+        _ => false,
+    }
 }
 
 fn resolve_primary_branch(

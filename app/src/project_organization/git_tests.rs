@@ -563,6 +563,25 @@ fn existing_worktree_options_include_primary_before_linked_worktrees() {
 }
 
 #[test]
+fn existing_worktree_options_recognize_primary_path_aliases() {
+    let fixture = GitFixture::new();
+    let alias_parent = fixture.tempdir.path().join("repository-alias");
+    std::fs::create_dir(&alias_parent).unwrap();
+    let repository_root = alias_parent
+        .join("..")
+        .join(fixture.root.file_name().unwrap());
+    let worktrees = list_worktrees(&fixture.root).unwrap();
+
+    let options = existing_worktree_options(&repository_root, worktrees);
+
+    assert_eq!(options.first().map(|option| option.is_primary), Some(true));
+    assert_eq!(
+        options.first().map(|option| option.branch_name.as_str()),
+        Some("main")
+    );
+}
+
+#[test]
 fn validates_registered_existing_worktree_without_rejecting_dirty_contents() {
     let fixture = GitFixture::new();
     let worktree_path = fixture.add_linked_worktree("feature/adopt");
