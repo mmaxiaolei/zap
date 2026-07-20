@@ -1,18 +1,18 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use warpui::{
+    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
     elements::{
         ChildView, Clipped, ConstrainedBox, Container, CrossAxisAlignment, Element, Flex,
         MainAxisAlignment, MainAxisSize, ParentElement, Shrinkable, Text,
     },
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
 use crate::project_organization::{
     domain::{RepositoryId, RepositoryWorkspaceId},
     git::{
-        existing_worktree_options, workspace_dir_name, BranchRef, ExistingWorktreeOption,
-        WorktreeInfo,
+        BranchRef, ExistingWorktreeOption, WorktreeInfo, existing_worktree_options,
+        is_primary_worktree_path, workspace_dir_name,
     },
 };
 use crate::{
@@ -152,6 +152,44 @@ pub fn default_worktree_path(home: PathBuf, repository_name: &str, branch_name: 
         .join("worktrees")
         .join(workspace_dir_name(repository_name, ""))
         .join(workspace_dir_name(branch_name, ""))
+}
+
+fn existing_worktree_display_label(worktree: &ExistingWorktreeOption) -> String {
+    if worktree.is_primary {
+        format!("{} (local)", worktree.branch_name)
+    } else {
+        worktree.branch_name.clone()
+    }
+}
+
+fn existing_worktree_default_name(worktree: &ExistingWorktreeOption) -> &str {
+    if worktree.is_primary {
+        "local"
+    } else {
+        &worktree.branch_name
+    }
+}
+
+fn primary_worktree_error(
+    repository_root: &std::path::Path,
+    worktrees: &[WorktreeInfo],
+) -> Option<String> {
+    worktrees
+        .iter()
+        .find(|worktree| is_primary_worktree_path(repository_root, &worktree.path))
+        .filter(|worktree| {
+            worktree.is_bare
+                || worktree.is_detached
+                || worktree
+                    .branch
+                    .as_deref()
+                    .and_then(|branch| branch.strip_prefix("refs/heads/"))
+                    .is_none_or(str::is_empty)
+        })
+        .map(|_| {
+            "The repository root worktree is detached and cannot be used as the local workspace."
+                .to_string()
+        })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -369,6 +407,7 @@ pub struct CreateWorkspaceModal {
     validation_error: Option<String>,
     remote_fetch_error: Option<String>,
     existing_worktree_fetch_error: Option<String>,
+    primary_worktree_error: Option<String>,
     remote_branch_options: Vec<RemoteBranchOption>,
     local_branches: Vec<String>,
     existing_worktree_options: Vec<ExistingWorktreeOption>,
@@ -477,6 +516,7 @@ impl CreateWorkspaceModal {
             validation_error: None,
             remote_fetch_error: None,
             existing_worktree_fetch_error: None,
+            primary_worktree_error: None,
             remote_branch_options: Vec::new(),
             local_branches: Vec::new(),
             existing_worktree_options: Vec::new(),
@@ -506,6 +546,7 @@ impl CreateWorkspaceModal {
         self.form = CreateWorkspaceForm::new();
         self.defaults = Some(CreateWorkspaceDefaults::new(home, repository_name));
         self.validation_error = None;
+        self.primary_worktree_error = None;
         self.local_branches.clear();
         self.local_branch_fallback_loaded = false;
         self.selected_remote_branch = None;
@@ -528,6 +569,7 @@ impl CreateWorkspaceModal {
         self.validation_error = None;
         self.remote_fetch_error = None;
         self.existing_worktree_fetch_error = None;
+        self.primary_worktree_error = None;
         self.sync_submit_button_disabled_state(ctx);
         ctx.notify();
     }
@@ -572,6 +614,7 @@ impl CreateWorkspaceModal {
 
     pub fn begin_existing_worktree_fetch(&mut self, ctx: &mut ViewContext<Self>) {
         self.existing_worktree_fetch_error = None;
+        self.primary_worktree_error = None;
         self.existing_worktree_options.clear();
         self.selected_existing_worktree = None;
         self.existing_worktree_picker.update(ctx, |picker, ctx| {
@@ -598,6 +641,7 @@ impl CreateWorkspaceModal {
             return;
         };
         self.existing_worktree_fetch_error = None;
+        self.primary_worktree_error = primary_worktree_error(repository_root, &worktrees);
         self.existing_worktree_options = existing_worktree_options(repository_root, worktrees);
         self.selected_existing_worktree = None;
         let existing_worktree_items = self
@@ -606,7 +650,7 @@ impl CreateWorkspaceModal {
             .cloned()
             .map(|worktree| {
                 DropdownItem::new(
-                    worktree.branch_name.clone(),
+                    existing_worktree_display_label(&worktree),
                     CreateWorkspaceModalAction::SelectExistingWorktree(worktree),
                 )
             })
@@ -851,7 +895,11 @@ impl CreateWorkspaceModal {
         self.form
             .set_existing_worktree_branch(worktree.branch_name.clone());
         self.selected_existing_worktree = Some(worktree.clone());
-        self.reset_editor(&self.display_name_editor, &worktree.branch_name, ctx);
+        self.reset_editor(
+            &self.display_name_editor,
+            existing_worktree_default_name(&worktree),
+            ctx,
+        );
         self.validation_error = None;
         self.sync_submit_button_disabled_state(ctx);
         ctx.notify();
@@ -1105,6 +1153,17 @@ impl View for CreateWorkspaceModal {
             }
         }
         if is_existing_worktree {
+            if let Some(error) = &self.primary_worktree_error {
+                form.add_child(Self::constrain_editor(
+                    Text::new_inline(
+                        error.clone(),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_body(),
+                    )
+                    .with_color(theme.ui_error_color())
+                    .finish(),
+                ));
+            }
             if let Some(error) = &self.existing_worktree_fetch_error {
                 form.add_child(Self::constrain_editor(
                     Text::new_inline(

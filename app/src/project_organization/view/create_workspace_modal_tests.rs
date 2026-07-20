@@ -1,13 +1,58 @@
 use std::path::PathBuf;
 
 use crate::project_organization::domain::{RepositoryId, RepositoryWorkspaceId};
-use crate::project_organization::git::BranchRef;
+use crate::project_organization::git::{BranchRef, ExistingWorktreeOption, WorktreeInfo};
 
 use super::{
-    branch_ref_options, default_worktree_path, submit_is_disabled, CreateWorkspaceDefaults,
-    CreateWorkspaceForm, CreateWorkspaceModalEvent, CreateWorkspaceMode, CreateWorkspaceSource,
-    CreateWorkspaceTarget, RemoteBranchOption,
+    CreateWorkspaceDefaults, CreateWorkspaceForm, CreateWorkspaceModalEvent, CreateWorkspaceMode,
+    CreateWorkspaceSource, CreateWorkspaceTarget, RemoteBranchOption, branch_ref_options,
+    default_worktree_path, existing_worktree_default_name, existing_worktree_display_label,
+    primary_worktree_error, submit_is_disabled,
 };
+
+#[test]
+fn primary_existing_worktree_uses_local_label_and_name() {
+    let option = ExistingWorktreeOption::primary(PathBuf::from("/repo"), "main");
+
+    assert_eq!(existing_worktree_display_label(&option), "main (local)");
+    assert_eq!(existing_worktree_default_name(&option), "local");
+}
+
+#[test]
+fn detached_primary_worktree_warning_keeps_linked_worktree_available() {
+    let repository_root = PathBuf::from("/repo");
+    let linked_path = PathBuf::from("/repo-feature");
+    let worktrees = vec![
+        WorktreeInfo {
+            path: repository_root.clone(),
+            head: Some("a".to_string()),
+            branch: None,
+            is_bare: false,
+            is_detached: true,
+            is_locked: false,
+            locked_reason: None,
+            is_prunable: false,
+            prunable_reason: None,
+        },
+        WorktreeInfo {
+            path: linked_path.clone(),
+            head: Some("b".to_string()),
+            branch: Some("refs/heads/feature/existing".to_string()),
+            is_bare: false,
+            is_detached: false,
+            is_locked: false,
+            locked_reason: None,
+            is_prunable: false,
+            prunable_reason: None,
+        },
+    ];
+
+    assert!(primary_worktree_error(&repository_root, &worktrees).is_some());
+    assert_eq!(
+        super::existing_worktree_options(&repository_root, worktrees),
+        vec![ExistingWorktreeOption::new(linked_path, "feature/existing")],
+    );
+}
 
 #[test]
 fn remote_fetch_error_disables_submit_only_in_remote_mode() {
