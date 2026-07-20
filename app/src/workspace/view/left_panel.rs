@@ -725,6 +725,16 @@ impl LeftPanelView {
         });
     }
 
+    pub fn set_project_tree_running_workspaces(
+        &mut self,
+        running_workspace_ids: HashSet<RepositoryWorkspaceId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.project_tree_view.update(ctx, |tree, ctx| {
+            tree.set_running_workspaces(running_workspace_ids, ctx);
+        });
+    }
+
     pub fn is_warp_drive_active(&self) -> bool {
         self.active_view.get() == ToolPanelView::ZapDrive
     }

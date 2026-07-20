@@ -272,7 +272,7 @@ use crate::server::telemetry::{
     OpenedWarpAISource, WarpDriveSource,
 };
 use crate::server_time::ServerTime;
-use crate::session_management::{SessionNavigationData, SessionSource};
+use crate::session_management::{RunningSessionSummary, SessionNavigationData, SessionSource};
 use crate::settings::{
     active_theme_kind, respect_system_theme, AccessibilitySettings, AliasExpansionSettings,
     AppEditorSettings, BlockVisibilitySettings, CursorBlink, DebugSettings, FontSettings,
@@ -4500,9 +4500,11 @@ impl Workspace {
 
         let tab_counts = self.repository_workspace_tabs.tab_counts(&self.tabs);
         let active_workspace_id = self.active_repository_workspace_id();
+        let running_workspace_ids = self.repository_workspace_ids_with_long_running_terminal(ctx);
         self.left_panel_view.update(ctx, |left_panel, ctx| {
             left_panel.set_project_tree_tab_counts(tab_counts, ctx);
             left_panel.set_project_tree_active_workspace(active_workspace_id, ctx);
+            left_panel.set_project_tree_running_workspaces(running_workspace_ids, ctx);
         });
     }
 
@@ -4512,6 +4514,24 @@ impl Workspace {
                 .inactive_states()
                 .flat_map(|(_, state)| state.tabs.iter()),
         )
+    }
+
+    fn tab_has_long_running_terminal(&self, tab: &TabData, ctx: &AppContext) -> bool {
+        let pane_group = tab.pane_group.as_ref(ctx);
+        let sessions = pane_group
+            .pane_sessions(tab.pane_group.id(), tab.pane_group.window_id(ctx), ctx)
+            .collect_vec();
+        !RunningSessionSummary::new(&sessions)
+            .long_running_cmds
+            .is_empty()
+    }
+
+    fn repository_workspace_ids_with_long_running_terminal(
+        &self,
+        ctx: &AppContext,
+    ) -> HashSet<RepositoryWorkspaceId> {
+        self.repository_workspace_tabs
+            .workspace_ids_matching(&self.tabs, |tab| self.tab_has_long_running_terminal(tab, ctx))
     }
 
     /// 在持久化线程终止前保存所有 tab 中的活动 terminal block。
@@ -13383,6 +13403,7 @@ impl Workspace {
             }
             pane_group::Event::TerminalViewStateChanged => {
                 self.update_active_session(ctx);
+                self.sync_project_tree(ctx);
                 ctx.notify();
             }
             pane_group::Event::OnboardingTutorialCompleted => {
