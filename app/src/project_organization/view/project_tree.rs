@@ -93,17 +93,12 @@ impl ProjectTreeState {
         workspaces: Vec<RepositoryWorkspace>,
         tab_counts: &HashMap<RepositoryWorkspaceId, usize>,
     ) -> Self {
-        let mut workspaces_by_repository = HashMap::<RepositoryId, Vec<_>>::new();
+        let mut workspaces_by_repository = HashMap::<RepositoryId, Vec<RepositoryWorkspace>>::new();
         for workspace in workspaces {
             workspaces_by_repository
                 .entry(workspace.repository_id)
                 .or_default()
-                .push(WorkspaceTreeNode {
-                    workspace_id: workspace.id,
-                    display_name: workspace.display_name,
-                    branch: workspace.branch,
-                    tab_count: tab_counts.get(&workspace.id).copied().unwrap_or_default(),
-                });
+                .push(workspace);
         }
 
         let mut repositories = repositories;
@@ -118,7 +113,20 @@ impl ProjectTreeState {
                 let mut workspaces = workspaces_by_repository
                     .remove(&repository.id)
                     .unwrap_or_default();
-                workspaces.sort_by(|left, right| left.display_name.cmp(&right.display_name));
+                workspaces.sort_by(|left, right| {
+                    left.created_at
+                        .cmp(&right.created_at)
+                        .then_with(|| left.display_name.cmp(&right.display_name))
+                });
+                let workspaces = workspaces
+                    .into_iter()
+                    .map(|workspace| WorkspaceTreeNode {
+                        workspace_id: workspace.id,
+                        display_name: workspace.display_name,
+                        branch: workspace.branch,
+                        tab_count: tab_counts.get(&workspace.id).copied().unwrap_or_default(),
+                    })
+                    .collect();
                 RepositoryTreeNode {
                     repository_id: repository.id,
                     display_name: repository.display_name,

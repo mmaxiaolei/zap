@@ -17,8 +17,7 @@ use warpui::{
 use crate::{
     persistence::{
         model::{
-            Repository as PersistedRepository,
-            RepositoryWorkspace as PersistedRepositoryWorkspace,
+            Repository as PersistedRepository, RepositoryWorkspace as PersistedRepositoryWorkspace,
         },
         RepositoryPersistence,
     },
@@ -110,7 +109,7 @@ fn repository_workspace_mode_keeps_setting_but_uses_horizontal_tabbar() {
 }
 
 #[test]
-fn tree_sorts_repositories_by_creation_time_and_workspaces_by_name() {
+fn tree_sorts_repositories_and_workspaces_by_creation_time() {
     let repository_a = RepositoryId(uuid::Uuid::from_u128(1));
     let repository_b = RepositoryId(uuid::Uuid::from_u128(2));
     let workspace_a = RepositoryWorkspaceId(uuid::Uuid::from_u128(3));
@@ -155,8 +154,8 @@ fn tree_sorts_repositories_by_creation_time_and_workspaces_by_name() {
                 display_name: "beta".to_string(),
                 branch: "feature/beta".to_string(),
                 worktree_path: "/tmp/alpha-beta".into(),
-                created_at: earlier,
-                last_opened_at: earlier,
+                created_at: later,
+                last_opened_at: later,
             },
         ],
         &[(workspace_a, 2), (workspace_b, 1)].into_iter().collect(),
@@ -164,10 +163,10 @@ fn tree_sorts_repositories_by_creation_time_and_workspaces_by_name() {
 
     assert_eq!(state.repositories()[0].display_name, "zebra");
     assert_eq!(state.repositories()[1].display_name, "alpha");
-    assert_eq!(state.repositories()[1].workspaces[0].display_name, "beta");
-    assert_eq!(state.repositories()[1].workspaces[0].tab_count, 1);
-    assert_eq!(state.repositories()[1].workspaces[1].display_name, "zeta");
-    assert_eq!(state.repositories()[1].workspaces[1].tab_count, 2);
+    assert_eq!(state.repositories()[1].workspaces[0].display_name, "zeta");
+    assert_eq!(state.repositories()[1].workspaces[0].tab_count, 2);
+    assert_eq!(state.repositories()[1].workspaces[1].display_name, "beta");
+    assert_eq!(state.repositories()[1].workspaces[1].tab_count, 1);
 }
 
 #[test]
