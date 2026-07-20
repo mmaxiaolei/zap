@@ -4,6 +4,8 @@ use std::{
 };
 
 use warpui::{
+    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
     elements::{
         Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element,
         Empty, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
@@ -12,14 +14,12 @@ use warpui::{
     platform::Cursor,
     text_layout::ClipConfig,
     ui_components::components::UiComponent,
-    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
 };
 
 use crate::{
     appearance::Appearance,
     project_organization::model::ProjectOrganizationModel,
-    ui_components::{buttons::icon_button, icons},
+    ui_components::{buttons::icon_button, icons, spinner::SpinnerStateHandle},
     view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme},
 };
 
@@ -244,6 +244,29 @@ fn workspace_row_is_selected(
     selected_workspace_id == Some(workspace_id)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorkspaceVisualState {
+    is_selected: bool,
+    has_running_terminal: bool,
+}
+
+impl WorkspaceVisualState {
+    pub(crate) fn new(is_selected: bool, has_running_terminal: bool) -> Self {
+        Self {
+            is_selected,
+            has_running_terminal,
+        }
+    }
+
+    pub(crate) fn should_render_selection_frame(&self) -> bool {
+        self.is_selected
+    }
+
+    pub(crate) fn should_render_running_spinner(&self) -> bool {
+        self.has_running_terminal
+    }
+}
+
 fn workspace_count_label(workspace_count: usize) -> String {
     let noun = if workspace_count == 1 {
         "workspace"
@@ -253,9 +276,12 @@ fn workspace_count_label(workspace_count: usize) -> String {
     format!("{workspace_count} {noun}")
 }
 
-fn tab_count_label(tab_count: usize) -> String {
-    let noun = if tab_count == 1 { "tab" } else { "tabs" };
-    format!("{tab_count} {noun}")
+fn tab_count_badge_label(tab_count: usize) -> String {
+    if tab_count > 99 {
+        "99+".to_string()
+    } else {
+        tab_count.to_string()
+    }
 }
 
 fn synchronize_mouse_states<Id>(mouse_states: &mut HashMap<Id, MouseStateHandle>, ids: &HashSet<Id>)
@@ -276,6 +302,8 @@ pub struct ProjectTreePanel {
     project_organization_model: ModelHandle<ProjectOrganizationModel>,
     state: ProjectTreeState,
     tab_counts: HashMap<RepositoryWorkspaceId, usize>,
+    running_workspace_ids: HashSet<RepositoryWorkspaceId>,
+    workspace_spinner_states: HashMap<RepositoryWorkspaceId, SpinnerStateHandle>,
     repository_mouse_states: HashMap<RepositoryId, MouseStateHandle>,
     workspace_mouse_states: HashMap<RepositoryWorkspaceId, MouseStateHandle>,
     workspace_delete_mouse_states: HashMap<RepositoryWorkspaceId, MouseStateHandle>,
@@ -298,6 +326,8 @@ impl ProjectTreePanel {
             project_organization_model: project_organization_model.clone(),
             state: ProjectTreeState::default(),
             tab_counts: HashMap::new(),
+            running_workspace_ids: HashSet::new(),
+            workspace_spinner_states: HashMap::new(),
             repository_mouse_states: HashMap::new(),
             workspace_mouse_states: HashMap::new(),
             workspace_delete_mouse_states: HashMap::new(),
@@ -322,6 +352,18 @@ impl ProjectTreePanel {
         }
         self.tab_counts = tab_counts;
         self.refresh_tree(ctx);
+    }
+
+    pub fn set_running_workspaces(
+        &mut self,
+        running_workspace_ids: HashSet<RepositoryWorkspaceId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.running_workspace_ids == running_workspace_ids {
+            return;
+        }
+        self.running_workspace_ids = running_workspace_ids;
+        ctx.notify();
     }
 
     pub fn set_active_workspace(
@@ -387,6 +429,15 @@ impl ProjectTreePanel {
         );
         synchronize_mouse_states(&mut self.workspace_mouse_states, &workspace_ids);
         synchronize_mouse_states(&mut self.workspace_delete_mouse_states, &workspace_ids);
+        self.running_workspace_ids
+            .retain(|workspace_id| workspace_ids.contains(workspace_id));
+        self.workspace_spinner_states
+            .retain(|workspace_id, _| workspace_ids.contains(workspace_id));
+        for workspace_id in &workspace_ids {
+            self.workspace_spinner_states
+                .entry(*workspace_id)
+                .or_default();
+        }
         ctx.notify();
     }
 
@@ -603,7 +654,7 @@ impl ProjectTreePanel {
         };
         let tab_count = Container::new(
             Text::new_inline(
-                tab_count_label(workspace.tab_count),
+                tab_count_badge_label(workspace.tab_count),
                 appearance.ui_font_family(),
                 appearance.ui_font_footnote(),
             )

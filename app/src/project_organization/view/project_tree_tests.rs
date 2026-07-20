@@ -8,18 +8,18 @@ use std::{
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warpui::{
-    elements::{ChildView, MouseStateHandle, ParentElement, Stack},
-    platform::WindowStyle,
     App, Element, Entity, Event, Presenter, TypedActionView, View, ViewContext, ViewHandle,
     WindowInvalidation,
+    elements::{ChildView, MouseStateHandle, ParentElement, Stack},
+    platform::WindowStyle,
 };
 
 use crate::{
     persistence::{
+        RepositoryPersistence,
         model::{
             Repository as PersistedRepository, RepositoryWorkspace as PersistedRepositoryWorkspace,
         },
-        RepositoryPersistence,
     },
     project_organization::model::ProjectOrganizationModel,
 };
@@ -29,10 +29,11 @@ use crate::project_organization::domain::{
 };
 
 use super::{
-    repository_add_workspace_position_id, resolved_project_organization_tab_layout,
-    should_show_workspace_delete_button, synchronize_mouse_states, tab_count_label,
-    workspace_count_label, workspace_row_is_selected, ProjectTreeEvent, ProjectTreePanel,
-    ProjectTreeState, RepositoryTreeNode, TabLayout, WorkspaceTreeNode,
+    ProjectTreeEvent, ProjectTreePanel, ProjectTreeState, RepositoryTreeNode, TabLayout,
+    WorkspaceTreeNode, WorkspaceVisualState, repository_add_workspace_position_id,
+    resolved_project_organization_tab_layout, should_show_workspace_delete_button,
+    synchronize_mouse_states, tab_count_badge_label, workspace_count_label,
+    workspace_row_is_selected,
 };
 
 struct ProjectTreeTestHost {
@@ -235,9 +236,29 @@ fn project_tree_count_labels_use_correct_singular_and_plural_forms() {
     assert_eq!(workspace_count_label(0), "0 workspaces");
     assert_eq!(workspace_count_label(1), "1 workspace");
     assert_eq!(workspace_count_label(2), "2 workspaces");
-    assert_eq!(tab_count_label(0), "0 tabs");
-    assert_eq!(tab_count_label(1), "1 tab");
-    assert_eq!(tab_count_label(2), "2 tabs");
+}
+
+#[test]
+fn tab_count_badge_label_is_numeric_and_caps_large_counts() {
+    assert_eq!(tab_count_badge_label(0), "0");
+    assert_eq!(tab_count_badge_label(1), "1");
+    assert_eq!(tab_count_badge_label(99), "99");
+    assert_eq!(tab_count_badge_label(100), "99+");
+}
+
+#[test]
+fn workspace_visual_state_keeps_selection_and_running_separate() {
+    let selected_static = WorkspaceVisualState::new(true, false);
+    assert!(selected_static.should_render_selection_frame());
+    assert!(!selected_static.should_render_running_spinner());
+
+    let running_unselected = WorkspaceVisualState::new(false, true);
+    assert!(!running_unselected.should_render_selection_frame());
+    assert!(running_unselected.should_render_running_spinner());
+
+    let selected_running = WorkspaceVisualState::new(true, true);
+    assert!(selected_running.should_render_selection_frame());
+    assert!(selected_running.should_render_running_spinner());
 }
 
 #[test]
