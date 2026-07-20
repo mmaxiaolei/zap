@@ -62,6 +62,41 @@ fn tab_counts_include_active_and_inactive_workspaces() {
 }
 
 #[test]
+fn workspace_ids_matching_includes_active_and_inactive_workspaces() {
+    let workspace_a = RepositoryWorkspaceId(uuid::Uuid::from_u128(1));
+    let workspace_b = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));
+    let workspace_c = RepositoryWorkspaceId(uuid::Uuid::from_u128(3));
+    let mut sets = RepositoryWorkspaceTabSets::new(Some(workspace_a));
+    sets.insert_inactive(
+        Some(workspace_b),
+        RepositoryWorkspaceTabState::new(vec![20_u64, 21], 0),
+    );
+    sets.insert_inactive(
+        Some(workspace_c),
+        RepositoryWorkspaceTabState::new(vec![30_u64], 0),
+    );
+
+    let active_tabs = vec![10_u64, 11];
+    let matches = sets.workspace_ids_matching(&active_tabs, |tab| *tab == 11 || *tab == 20);
+
+    assert!(matches.contains(&workspace_a));
+    assert!(matches.contains(&workspace_b));
+    assert!(!matches.contains(&workspace_c));
+}
+
+#[test]
+fn workspace_ids_matching_ignores_unclassified_tabs() {
+    let workspace_a = RepositoryWorkspaceId(uuid::Uuid::from_u128(1));
+    let mut sets = RepositoryWorkspaceTabSets::new(Some(workspace_a));
+    sets.insert_inactive(None, RepositoryWorkspaceTabState::new(vec![20_u64], 0));
+
+    let active_tabs = vec![10_u64];
+    let matches = sets.workspace_ids_matching(&active_tabs, |tab| *tab == 20);
+
+    assert!(matches.is_empty());
+}
+
+#[test]
 fn taking_an_inactive_workspace_removes_only_its_tab_state() {
     let workspace_a = RepositoryWorkspaceId(uuid::Uuid::from_u128(1));
     let workspace_b = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));

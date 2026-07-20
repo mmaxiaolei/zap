@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::project_organization::domain::RepositoryWorkspaceId;
 
@@ -62,6 +62,31 @@ impl<T> RepositoryWorkspaceTabSets<T> {
                 .any(&mut contains)
                 .then_some(*workspace_id)
         })
+    }
+
+    pub(crate) fn workspace_ids_matching(
+        &self,
+        active_tabs: &[T],
+        mut matches_tab: impl FnMut(&T) -> bool,
+    ) -> HashSet<RepositoryWorkspaceId> {
+        let mut workspace_ids = HashSet::new();
+
+        if let Some(workspace_id) = self.active_workspace_id {
+            if active_tabs.iter().any(&mut matches_tab) {
+                workspace_ids.insert(workspace_id);
+            }
+        }
+
+        for (workspace_id, state) in &self.inactive {
+            let Some(workspace_id) = workspace_id else {
+                continue;
+            };
+            if state.tabs.iter().any(&mut matches_tab) {
+                workspace_ids.insert(*workspace_id);
+            }
+        }
+
+        workspace_ids
     }
 
     pub(crate) fn switch_to(
