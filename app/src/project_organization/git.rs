@@ -29,6 +29,7 @@ pub enum BranchRef {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedRepository {
     pub root: PathBuf,
+    pub primary_branch: String,
     pub remote: String,
     pub remote_url: String,
     pub default_branch: BranchRef,
@@ -48,18 +49,30 @@ pub struct WorktreeInfo {
     pub prunable_reason: Option<String>,
 }
 
-/// 可作为 repository workspace 接入的已注册 linked worktree。
+/// 可作为 repository workspace 接入的已注册 worktree。
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExistingWorktreeOption {
     pub path: PathBuf,
     pub branch_name: String,
+    pub is_primary: bool,
 }
 
 impl ExistingWorktreeOption {
+    /// 创建 linked worktree 的接入选项。
     pub fn new(path: PathBuf, branch_name: impl Into<String>) -> Self {
         Self {
             path,
             branch_name: branch_name.into(),
+            is_primary: false,
+        }
+    }
+
+    /// 创建主 worktree 的接入选项。
+    pub fn primary(path: PathBuf, branch_name: impl Into<String>) -> Self {
+        Self {
+            path,
+            branch_name: branch_name.into(),
+            is_primary: true,
         }
     }
 }
@@ -104,7 +117,9 @@ pub enum GitWorkspaceError {
         "merge target changed from `{expected}` to `{actual}` while branch deletion was locked"
     )]
     MergeTargetChanged { expected: String, actual: String },
-    #[error("ref `{full_ref}` changed while branch deletion was locked: expected {expected_oid}, found {actual_oid}")]
+    #[error(
+        "ref `{full_ref}` changed while branch deletion was locked: expected {expected_oid}, found {actual_oid}"
+    )]
     RefChanged {
         full_ref: String,
         expected_oid: String,
@@ -147,8 +162,10 @@ pub enum GitWorkspaceError {
         git_dir: PathBuf,
         common_dir: PathBuf,
     },
-    #[error("repository primary worktree `{path}` cannot be registered as a workspace")]
-    PrimaryWorktreeCannotBeWorkspace { path: PathBuf },
+    #[error(
+        "repository primary worktree `{path}` is detached or does not check out a local branch"
+    )]
+    PrimaryWorktreeDetached { path: PathBuf },
     #[error("prunable worktree `{path}` cannot be registered as a workspace")]
     PrunableWorktreeCannotBeWorkspace { path: PathBuf },
     #[error("repository `{repo}` has no configured remote")]
@@ -248,7 +265,9 @@ pub enum GitWorkspaceError {
         #[source]
         source: io::Error,
     },
-    #[error("worktree creation failed for `{branch}` at `{worktree_path}`: {create_error}; branch may remain: {branch_may_remain}; registered: {worktree_registered:?}; claimed directory removed: {claimed_directory_removed}; cleanup error: {cleanup_error:?}")]
+    #[error(
+        "worktree creation failed for `{branch}` at `{worktree_path}`: {create_error}; branch may remain: {branch_may_remain}; registered: {worktree_registered:?}; claimed directory removed: {claimed_directory_removed}; cleanup error: {cleanup_error:?}"
+    )]
     WorktreeCreationFailed {
         worktree_path: PathBuf,
         branch: String,
@@ -331,6 +350,8 @@ pub fn validate_repository(path: &Path) -> Result<ValidatedRepository, GitWorksp
         });
     }
 
+    let worktrees = list_worktrees(&root)?;
+    let primary_branch = resolve_primary_branch(&worktrees, &root)?;
     let remote = primary_remote(&root)?;
     let remote_url = output_string(
         &root,
@@ -341,6 +362,7 @@ pub fn validate_repository(path: &Path) -> Result<ValidatedRepository, GitWorksp
 
     Ok(ValidatedRepository {
         root,
+        primary_branch,
         remote,
         remote_url,
         default_branch,
@@ -518,7 +540,7 @@ pub async fn list_worktrees_async(repo: PathBuf) -> Result<Vec<WorktreeInfo>, Gi
     spawn_git_task("list repository worktrees", move || list_worktrees(&repo)).await
 }
 
-/// 将已注册 worktree 转换为可接入的 linked worktree 候选项。
+/// 将已注册 worktree 转换为可接入的 repository workspace 候选项。
 pub fn existing_worktree_options(
     repository_root: &Path,
     worktrees: impl IntoIterator<Item = WorktreeInfo>,
@@ -527,32 +549,69 @@ pub fn existing_worktree_options(
         .into_iter()
         .filter_map(|worktree| {
             let branch_name = worktree.branch.as_deref()?.strip_prefix("refs/heads/")?;
+            let is_primary = worktree.path == repository_root;
             (!worktree.is_bare
                 && !worktree.is_detached
                 && !worktree.is_prunable
-                && worktree.path != repository_root
                 && !branch_name.is_empty())
-            .then(|| ExistingWorktreeOption::new(worktree.path, branch_name))
+            .then(|| {
+                if is_primary {
+                    ExistingWorktreeOption::primary(worktree.path, branch_name)
+                } else {
+                    ExistingWorktreeOption::new(worktree.path, branch_name)
+                }
+            })
         })
         .collect::<Vec<_>>();
     options.sort_by(|left, right| {
-        (&left.branch_name, &left.path).cmp(&(&right.branch_name, &right.path))
+        right
+            .is_primary
+            .cmp(&left.is_primary)
+            .then_with(|| left.branch_name.cmp(&right.branch_name))
+            .then_with(|| left.path.cmp(&right.path))
     });
     options
 }
 
-/// 校验已注册 linked worktree 在接入 workspace 前仍存在且检出预期本地分支。
+fn resolve_primary_branch(
+    worktrees: &[WorktreeInfo],
+    repository_root: &Path,
+) -> Result<String, GitWorkspaceError> {
+    let Some(primary_worktree) = worktrees
+        .iter()
+        .find(|worktree| worktree.path == repository_root)
+    else {
+        return Err(GitWorkspaceError::PrimaryWorktreeDetached {
+            path: repository_root.to_path_buf(),
+        });
+    };
+    if primary_worktree.is_bare || primary_worktree.is_detached {
+        return Err(GitWorkspaceError::PrimaryWorktreeDetached {
+            path: repository_root.to_path_buf(),
+        });
+    }
+    let Some(branch_name) = primary_worktree
+        .branch
+        .as_deref()
+        .and_then(|branch| branch.strip_prefix("refs/heads/"))
+        .filter(|branch| !branch.is_empty())
+    else {
+        return Err(GitWorkspaceError::PrimaryWorktreeDetached {
+            path: repository_root.to_path_buf(),
+        });
+    };
+    Ok(branch_name.to_string())
+}
+
+/// 校验已注册 worktree 在接入 workspace 前仍存在且检出预期本地分支。
 pub fn validate_existing_worktree(
     repository: &Path,
     worktree_path: &Path,
     local_branch: &str,
 ) -> Result<PathBuf, GitWorkspaceError> {
     let registered_path = canonicalize(worktree_path)?;
-    if registered_path == canonicalize(repository)? {
-        return Err(GitWorkspaceError::PrimaryWorktreeCannotBeWorkspace {
-            path: registered_path,
-        });
-    }
+    let repository_root = canonicalize(repository)?;
+    let is_primary = registered_path == repository_root;
 
     let mut matches = list_worktrees(repository)?
         .into_iter()
@@ -573,6 +632,9 @@ pub fn validate_existing_worktree(
         return Err(GitWorkspaceError::PrunableWorktreeCannotBeWorkspace {
             path: registered_path,
         });
+    }
+    if is_primary {
+        resolve_primary_branch(std::slice::from_ref(&worktree), &registered_path)?;
     }
     if worktree.is_bare
         || worktree.is_detached

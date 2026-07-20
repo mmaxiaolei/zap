@@ -214,6 +214,7 @@ fn validates_repository_and_reads_remote_metadata() {
     let repository = validate_repository(&fixture.root).unwrap();
 
     assert_eq!(repository.root, fixture.root.canonicalize().unwrap());
+    assert_eq!(repository.primary_branch, "main");
     assert_eq!(repository.remote, "origin");
     assert_eq!(repository.remote_url, fixture.remote.to_str().unwrap());
     assert!(matches!(
@@ -497,7 +498,7 @@ fn parses_worktree_paths_and_full_branch_refs() {
 }
 
 #[test]
-fn existing_worktree_options_exclude_primary_detached_and_prunable_worktrees() {
+fn existing_worktree_options_include_primary_before_linked_worktrees() {
     let repository_root = PathBuf::from("/tmp/repository");
     let options = existing_worktree_options(
         &repository_root,
@@ -551,10 +552,13 @@ fn existing_worktree_options_exclude_primary_detached_and_prunable_worktrees() {
 
     assert_eq!(
         options,
-        vec![ExistingWorktreeOption::new(
-            PathBuf::from("/tmp/repository-feature"),
-            "feature/existing",
-        )],
+        vec![
+            ExistingWorktreeOption::primary(repository_root.clone(), "main"),
+            ExistingWorktreeOption::new(
+                PathBuf::from("/tmp/repository-feature"),
+                "feature/existing",
+            ),
+        ],
     );
 }
 
@@ -571,14 +575,39 @@ fn validates_registered_existing_worktree_without_rejecting_dirty_contents() {
 }
 
 #[test]
-fn rejects_repository_primary_worktree_for_existing_workspace_adoption() {
+fn validates_repository_primary_worktree_for_existing_workspace_adoption() {
     let fixture = GitFixture::new();
+
+    assert_eq!(
+        validate_existing_worktree(&fixture.root, &fixture.root, "main").unwrap(),
+        fixture.root.canonicalize().unwrap(),
+    );
+}
+
+#[test]
+fn rejects_detached_primary_worktree_during_repository_validation() {
+    let fixture = GitFixture::new();
+    run_git(&fixture.root, &["checkout", "--detach", "HEAD"]);
+
+    let error = validate_repository(&fixture.root).unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::PrimaryWorktreeDetached { path }
+            if path == fixture.root.canonicalize().unwrap()
+    ));
+}
+
+#[test]
+fn rejects_detached_primary_worktree_during_workspace_adoption() {
+    let fixture = GitFixture::new();
+    run_git(&fixture.root, &["checkout", "--detach", "HEAD"]);
 
     let error = validate_existing_worktree(&fixture.root, &fixture.root, "main").unwrap_err();
 
     assert!(matches!(
         error,
-        GitWorkspaceError::PrimaryWorktreeCannotBeWorkspace { path }
+        GitWorkspaceError::PrimaryWorktreeDetached { path }
             if path == fixture.root.canonicalize().unwrap()
     ));
 }
@@ -629,9 +658,11 @@ fn preserves_newline_worktree_path() {
 
     let worktrees = list_worktrees(&fixture.root).unwrap();
 
-    assert!(worktrees
-        .iter()
-        .any(|worktree| worktree.path == linked_path.canonicalize().unwrap()));
+    assert!(
+        worktrees
+            .iter()
+            .any(|worktree| worktree.path == linked_path.canonicalize().unwrap())
+    );
 }
 
 #[cfg(unix)]
@@ -1308,10 +1339,12 @@ fn rejects_dangling_symlink_target_without_creating_branch() {
         &fixture.root,
         "refs/heads/feature/dangling-target"
     ));
-    assert!(std::fs::symlink_metadata(path)
-        .unwrap()
-        .file_type()
-        .is_symlink());
+    assert!(
+        std::fs::symlink_metadata(path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
 }
 
 #[test]
