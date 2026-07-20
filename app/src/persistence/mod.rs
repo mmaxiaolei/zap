@@ -126,6 +126,10 @@ pub enum RepositoryPersistenceOperation {
     UpsertRepository {
         repository: model::Repository,
     },
+    UpsertRepositoryWithWorkspace {
+        repository: model::Repository,
+        workspace: model::RepositoryWorkspace,
+    },
     DeleteRepository {
         repository_id: String,
     },

@@ -984,6 +984,15 @@ fn handle_repository_persistence_operation(
         RepositoryPersistenceOperation::UpsertRepository { repository } => {
             save_repository(connection, repository).context("error upserting repository")
         }
+        RepositoryPersistenceOperation::UpsertRepositoryWithWorkspace {
+            repository,
+            workspace,
+        } => connection.immediate_transaction(|connection| {
+            save_repository(connection, repository).context("error upserting repository")?;
+            save_repository_workspace(connection, workspace)
+                .context("error upserting repository workspace")?;
+            Ok(())
+        }),
         RepositoryPersistenceOperation::DeleteRepository { repository_id } => {
             delete_repository(connection, &repository_id).context("error deleting repository")
         }

@@ -441,6 +441,107 @@ fn add_local_repository_commits_memory_after_persistence_succeeds() {
 }
 
 #[test]
+fn adding_repository_with_initial_workspace_commits_both_rows_after_persistence() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).unwrap();
+        let canonical_path = dunce::canonicalize(&repository_path).unwrap();
+        let (model, operations) = create_acknowledged_model(&mut app, vec![], vec![]);
+        let (emitted_events, _event_probe) = capture_project_organization_events(&mut app, &model);
+
+        let (repository_id, workspace_id) = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository_with_initial_workspace(
+                    &repository_path,
+                    None,
+                    "main",
+                    ctx,
+                )
+            })
+            .expect("repository and local workspace should be added");
+        let operations = operations.operations.try_iter().collect::<Vec<_>>();
+
+        assert_eq!(operations.len(), 1);
+        assert!(matches!(
+            &operations[0],
+            RepositoryPersistenceOperation::UpsertRepositoryWithWorkspace {
+                repository,
+                workspace,
+            } if repository.id == repository_id.to_string()
+                && workspace.id == workspace_id.to_string()
+                && workspace.display_name == "local"
+                && workspace.branch == "main"
+                && workspace.worktree_path == canonical_path.to_string_lossy()
+        ));
+        model.read(&app, |model, _| {
+            let repository = model
+                .repository(repository_id)
+                .expect("repository should exist");
+            assert_eq!(repository.path, canonical_path);
+            let workspace = model
+                .workspace(workspace_id)
+                .expect("workspace should exist");
+            assert_eq!(workspace.display_name, "local");
+            assert_eq!(workspace.branch, "main");
+            assert_eq!(workspace.worktree_path, canonical_path);
+        });
+        assert_eq!(
+            *emitted_events.lock().unwrap(),
+            vec![
+                ProjectOrganizationEvent::RepositoryAdded { repository_id },
+                ProjectOrganizationEvent::WorkspaceAdded { workspace_id },
+            ]
+        );
+    });
+}
+
+#[test]
+fn repository_with_initial_workspace_does_not_change_memory_when_persistence_fails() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().unwrap();
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).unwrap();
+        let canonical_path = dunce::canonicalize(&repository_path).unwrap();
+        let (persistence, harness) =
+            acknowledged_persistence(Err(RepositoryPersistenceError::Database {
+                details: "injected failure".to_string(),
+            }));
+        let model = create_model(&mut app, vec![], vec![], persistence);
+        let (emitted_events, _event_probe) = capture_project_organization_events(&mut app, &model);
+
+        let error = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository_with_initial_workspace(
+                    &repository_path,
+                    None,
+                    "main",
+                    ctx,
+                )
+            })
+            .expect_err("persistence failure should be returned");
+
+        assert_persistence_failure(error, "repository addition with initial workspace");
+        model.read(&app, |model, _| {
+            assert_eq!(model.repositories().count(), 0);
+            assert_eq!(model.workspaces().count(), 0);
+            assert!(!model.repository_ids_by_path.contains_key(&canonical_path));
+        });
+        assert!(emitted_events.lock().unwrap().is_empty());
+        let operations = harness.operations.try_iter().collect::<Vec<_>>();
+        assert_eq!(operations.len(), 1);
+        assert!(matches!(
+            &operations[0],
+            RepositoryPersistenceOperation::UpsertRepositoryWithWorkspace {
+                repository,
+                workspace,
+            } if repository.path == canonical_path.to_string_lossy()
+                && workspace.worktree_path == canonical_path.to_string_lossy()
+        ));
+    });
+}
+
+#[test]
 fn insert_repository_commits_memory_after_persistence_succeeds() {
     App::test((), |mut app| async move {
         let tempdir = TempDir::new().unwrap();

@@ -806,6 +806,109 @@ fn repository_persistence_operation_matrix_commits_before_acknowledgement() {
     handles.handle.join().expect("writer should terminate");
 }
 
+#[test]
+fn repository_and_initial_workspace_are_persisted_as_one_transaction() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let conn = setup_database(&database_path).expect("database should initialize");
+    let handles = start_writer(conn, database_path.clone()).expect("writer should start");
+    let persistence = RepositoryPersistence::new(Some(handles.sender.clone()));
+    let repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174113",
+        "/tmp/atomic-repository",
+    );
+    let workspace = repository_workspace_row(
+        "123e4567-e89b-12d3-a456-426614174114",
+        &repository.id,
+        "main",
+        "/tmp/atomic-repository",
+    );
+
+    persistence
+        .execute(
+            RepositoryPersistenceOperation::UpsertRepositoryWithWorkspace {
+                repository: repository.clone(),
+                workspace: workspace.clone(),
+            },
+        )
+        .expect("repository and workspace upsert should be acknowledged");
+
+    let mut read_conn = setup_database(&database_path).expect("read connection should initialize");
+    assert_eq!(
+        get_all_repositories(&mut read_conn).expect("repositories should load"),
+        vec![repository]
+    );
+    assert_eq!(
+        get_all_repository_workspaces(&mut read_conn).expect("workspaces should load"),
+        vec![workspace]
+    );
+    handles
+        .sender
+        .send(ModelEvent::Terminate)
+        .expect("writer should receive termination");
+    handles.handle.join().expect("writer should terminate");
+}
+
+#[test]
+fn failed_initial_workspace_upsert_rolls_back_the_new_repository() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let existing_repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174115",
+        "/tmp/atomic-existing-repository",
+    );
+    let conflicting_workspace = repository_workspace_row(
+        "123e4567-e89b-12d3-a456-426614174116",
+        &existing_repository.id,
+        "main",
+        "/tmp/atomic-conflicting-worktree",
+    );
+    save_repository(&mut conn, existing_repository.clone()).expect("repository should save");
+    save_repository_workspace(&mut conn, conflicting_workspace.clone())
+        .expect("workspace should save");
+    drop(conn);
+
+    let conn = setup_database(&database_path).expect("database should initialize");
+    let handles = start_writer(conn, database_path.clone()).expect("writer should start");
+    let persistence = RepositoryPersistence::new(Some(handles.sender.clone()));
+    let new_repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174117",
+        "/tmp/atomic-new-repository",
+    );
+    let new_workspace = repository_workspace_row(
+        "123e4567-e89b-12d3-a456-426614174118",
+        &new_repository.id,
+        "main",
+        "/tmp/atomic-conflicting-worktree",
+    );
+
+    assert!(matches!(
+        persistence.execute(
+            RepositoryPersistenceOperation::UpsertRepositoryWithWorkspace {
+                repository: new_repository.clone(),
+                workspace: new_workspace,
+            }
+        ),
+        Err(RepositoryPersistenceError::Database { .. })
+    ));
+
+    let mut read_conn = setup_database(&database_path).expect("read connection should initialize");
+    assert_eq!(
+        get_all_repositories(&mut read_conn).expect("repositories should load"),
+        vec![existing_repository]
+    );
+    assert_eq!(
+        get_all_repository_workspaces(&mut read_conn).expect("workspaces should load"),
+        vec![conflicting_workspace]
+    );
+    handles
+        .sender
+        .send(ModelEvent::Terminate)
+        .expect("writer should receive termination");
+    handles.handle.join().expect("writer should terminate");
+}
+
 fn repository_workspace_row(
     id: &str,
     repository_id: &str,

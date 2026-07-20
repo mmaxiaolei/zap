@@ -83,6 +83,83 @@ impl ProjectOrganizationModel {
         self.add_local_repository_with_optional_remote(path, Some(remote_url), ctx)
     }
 
+    /// 添加本地 repository，并原子创建其主 worktree 对应的 local workspace。
+    pub fn add_local_repository_with_initial_workspace(
+        &mut self,
+        path: impl AsRef<Path>,
+        remote_url: Option<String>,
+        primary_branch: impl Into<String>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(RepositoryId, RepositoryWorkspaceId), ProjectOrganizationError> {
+        let canonical_path = Self::canonicalize(path.as_ref())?;
+        let now = Utc::now().naive_utc();
+        let repository = Repository {
+            id: RepositoryId::from(Uuid::new_v4()),
+            display_name: canonical_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| ProjectOrganizationError::InvalidPathEncoding {
+                    path: canonical_path.clone(),
+                })?
+                .to_string(),
+            path: canonical_path.clone(),
+            remote_url,
+            source: RepositorySource::Local,
+            created_at: now,
+            last_opened_at: now,
+        };
+        self.validate_new_repository(&repository)?;
+
+        let workspace = RepositoryWorkspace {
+            id: RepositoryWorkspaceId::from(Uuid::new_v4()),
+            repository_id: repository.id,
+            display_name: "local".to_string(),
+            branch: primary_branch.into(),
+            worktree_path: canonical_path,
+            created_at: repository.created_at,
+            last_opened_at: repository.last_opened_at,
+        };
+        if self.workspaces.contains_key(&workspace.id) {
+            return Err(ProjectOrganizationError::WorkspaceIdAlreadyExists {
+                workspace_id: workspace.id,
+            });
+        }
+        if let Some(existing_workspace_id) = self
+            .workspace_ids_by_repository_branch
+            .get(&(workspace.repository_id, workspace.branch.clone()))
+        {
+            return Err(ProjectOrganizationError::WorkspaceBranchAlreadyExists {
+                repository_id: workspace.repository_id,
+                branch: workspace.branch.clone(),
+                existing_workspace_id: *existing_workspace_id,
+            });
+        }
+        if let Some(existing_workspace_id) =
+            self.workspace_ids_by_path.get(&workspace.worktree_path)
+        {
+            return Err(ProjectOrganizationError::WorkspacePathAlreadyExists {
+                existing_workspace_id: *existing_workspace_id,
+                canonical_path: workspace.worktree_path.clone(),
+            });
+        }
+
+        self.persist(
+            RepositoryPersistenceOperation::UpsertRepositoryWithWorkspace {
+                repository: Self::persisted_repository(&repository)?,
+                workspace: Self::persisted_workspace(&workspace)?,
+            },
+            "repository addition with initial workspace",
+        )?;
+        let repository_id = repository.id;
+        let workspace_id = workspace.id;
+        self.commit_repository(repository);
+        self.commit_workspace(workspace);
+        ctx.emit(ProjectOrganizationEvent::RepositoryAdded { repository_id });
+        ctx.emit(ProjectOrganizationEvent::WorkspaceAdded { workspace_id });
+        Ok((repository_id, workspace_id))
+    }
+
     fn add_local_repository_with_optional_remote(
         &mut self,
         path: impl AsRef<Path>,
