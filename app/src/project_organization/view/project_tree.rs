@@ -296,16 +296,21 @@ fn apply_workspace_selection_frame(
     selected_border_color: pathfinder_color::ColorU,
     selected_shadow_color: pathfinder_color::ColorU,
 ) -> Container {
+    let row_container = row_container.with_border(Border::all(1.).with_border_fill(
+        if visual_state.should_render_selection_frame() {
+            selected_border_color
+        } else {
+            coloru_with_opacity(selected_border_color, 0)
+        },
+    ));
     if !visual_state.should_render_selection_frame() {
         return row_container;
     }
 
-    row_container
-        .with_border(Border::all(1.).with_border_fill(selected_border_color))
-        .with_drop_shadow(
-            DropShadow::new_with_standard_offset_and_spread(selected_shadow_color)
-                .with_offset(vec2f(0., 0.)),
-        )
+    row_container.with_drop_shadow(
+        DropShadow::new_with_standard_offset_and_spread(selected_shadow_color)
+            .with_offset(vec2f(0., 0.)),
+    )
 }
 
 fn synchronize_mouse_states<Id>(mouse_states: &mut HashMap<Id, MouseStateHandle>, ids: &HashSet<Id>)
