@@ -8,18 +8,18 @@ use std::{
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warpui::{
-    App, Element, Entity, Event, Presenter, TypedActionView, View, ViewContext, ViewHandle,
-    WindowInvalidation,
     elements::{ChildView, MouseStateHandle, ParentElement, Stack},
     platform::WindowStyle,
+    App, Element, Entity, Event, Presenter, TypedActionView, View, ViewContext, ViewHandle,
+    WindowInvalidation,
 };
 
 use crate::{
     persistence::{
-        RepositoryPersistence,
         model::{
             Repository as PersistedRepository, RepositoryWorkspace as PersistedRepositoryWorkspace,
         },
+        RepositoryPersistence,
     },
     project_organization::model::ProjectOrganizationModel,
 };
@@ -29,11 +29,10 @@ use crate::project_organization::domain::{
 };
 
 use super::{
-    ProjectTreeEvent, ProjectTreePanel, ProjectTreeState, RepositoryTreeNode, TabLayout,
-    WorkspaceTreeNode, WorkspaceVisualState, repository_add_workspace_position_id,
-    resolved_project_organization_tab_layout, should_show_workspace_delete_button,
-    synchronize_mouse_states, tab_count_badge_label, workspace_count_label,
-    workspace_row_is_selected,
+    repository_add_workspace_position_id, resolved_project_organization_tab_layout,
+    should_show_workspace_delete_button, synchronize_mouse_states, tab_count_badge_label,
+    workspace_count_label, workspace_row_is_selected, ProjectTreeEvent, ProjectTreePanel,
+    ProjectTreeState, RepositoryTreeNode, TabLayout, WorkspaceTreeNode, WorkspaceVisualState,
 };
 
 struct ProjectTreeTestHost {
@@ -318,6 +317,72 @@ fn project_tree_renders_workspace_rows_with_finite_flex_constraints() {
                 ctx,
             );
             presenter.build_scene(vec2f(320., 240.), 1., None, ctx);
+        });
+    });
+}
+
+#[test]
+fn project_tree_renders_running_selected_workspace_activity_badge() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let tempdir = tempfile::tempdir().expect("temporary directory should be created");
+        let repository_path = tempdir.path().join("dip-agent");
+        let worktree_path = tempdir.path().join("feature-worktree");
+        std::fs::create_dir(&repository_path).expect("repository directory should be created");
+        std::fs::create_dir(&worktree_path).expect("worktree directory should be created");
+        let repository_id = RepositoryId(uuid::Uuid::from_u128(1));
+        let workspace_id = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));
+        let timestamp = chrono::DateTime::from_timestamp(0, 0)
+            .expect("timestamp should be valid")
+            .naive_utc();
+        app.add_singleton_model(|ctx| {
+            ProjectOrganizationModel::try_new(
+                vec![PersistedRepository {
+                    id: repository_id.to_string(),
+                    display_name: "dip-agent".to_string(),
+                    path: repository_path.to_string_lossy().to_string(),
+                    remote_url: None,
+                    source: "local".to_string(),
+                    created_at: timestamp,
+                    last_opened_at: timestamp,
+                }],
+                vec![PersistedRepositoryWorkspace {
+                    id: workspace_id.to_string(),
+                    repository_id: repository_id.to_string(),
+                    display_name: "feature-workspace".to_string(),
+                    branch: "feature/workspace".to_string(),
+                    worktree_path: worktree_path.to_string_lossy().to_string(),
+                    created_at: timestamp,
+                    last_opened_at: timestamp,
+                }],
+                RepositoryPersistence::new(None),
+                ctx,
+            )
+            .expect("project organization model should initialize")
+        });
+
+        let (window_id, host) =
+            app.add_window(WindowStyle::NotStealFocus, ProjectTreeTestHost::new);
+        let project_tree = host.read(&app, |host, _| host.project_tree.clone());
+        project_tree.update(&mut app, |project_tree, ctx| {
+            project_tree.set_tab_counts(HashMap::from([(workspace_id, 3)]), ctx);
+            project_tree.set_active_workspace(Some(workspace_id), ctx);
+            project_tree.set_running_workspaces(HashSet::from([workspace_id]), ctx);
+        });
+        let root_view_id = app
+            .root_view_id(window_id)
+            .expect("window should have a root view");
+        let mut presenter = Presenter::new(window_id);
+
+        app.update(|ctx| {
+            presenter.invalidate(
+                WindowInvalidation {
+                    updated: [root_view_id, project_tree.id()].into_iter().collect(),
+                    ..Default::default()
+                },
+                ctx,
+            );
+            presenter.build_scene(vec2f(360., 240.), 1., None, ctx);
         });
     });
 }

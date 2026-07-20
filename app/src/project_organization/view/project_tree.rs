@@ -3,23 +3,29 @@ use std::{
     hash::Hash,
 };
 
+use pathfinder_geometry::vector::vec2f;
+use warp_core::ui::color::coloru_with_opacity;
 use warpui::{
-    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
     elements::{
-        Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element,
-        Empty, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
-        Radius, SavePosition, Shrinkable, Text,
+        Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow,
+        Element, Empty, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+        ParentElement, Radius, SavePosition, Shrinkable, Text,
     },
     platform::Cursor,
     text_layout::ClipConfig,
     ui_components::components::UiComponent,
+    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
 };
 
 use crate::{
     appearance::Appearance,
     project_organization::model::ProjectOrganizationModel,
-    ui_components::{buttons::icon_button, icons, spinner::SpinnerStateHandle},
+    ui_components::{
+        buttons::icon_button,
+        icons,
+        spinner::{BrailleSpinner, SpinnerStateHandle},
+    },
     view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme},
 };
 
@@ -282,6 +288,24 @@ fn tab_count_badge_label(tab_count: usize) -> String {
     } else {
         tab_count.to_string()
     }
+}
+
+fn apply_workspace_selection_frame(
+    row_container: Container,
+    visual_state: WorkspaceVisualState,
+    selected_border_color: pathfinder_color::ColorU,
+    selected_shadow_color: pathfinder_color::ColorU,
+) -> Container {
+    if !visual_state.should_render_selection_frame() {
+        return row_container;
+    }
+
+    row_container
+        .with_border(Border::all(1.).with_border_fill(selected_border_color))
+        .with_drop_shadow(
+            DropShadow::new_with_standard_offset_and_spread(selected_shadow_color)
+                .with_offset(vec2f(0., 0.)),
+        )
 }
 
 fn synchronize_mouse_states<Id>(mouse_states: &mut HashMap<Id, MouseStateHandle>, ids: &HashSet<Id>)
@@ -587,6 +611,78 @@ impl ProjectTreePanel {
         .finish()
     }
 
+    fn render_workspace_activity_badge(
+        &self,
+        tab_count: usize,
+        visual_state: WorkspaceVisualState,
+        workspace_id: RepositoryWorkspaceId,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let metadata_color = theme.sub_text_color(theme.background());
+        let running_color: pathfinder_color::ColorU = theme.terminal_colors().normal.green.into();
+        let badge_background = if visual_state.should_render_running_spinner() {
+            coloru_with_opacity(running_color, 14).into()
+        } else {
+            theme.surface_2()
+        };
+        let border_fill = if visual_state.should_render_running_spinner() {
+            coloru_with_opacity(running_color, 42).into()
+        } else {
+            theme.surface_3()
+        };
+
+        let mut content = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(4.);
+
+        if visual_state.should_render_running_spinner() {
+            let spinner_state = self
+                .workspace_spinner_states
+                .get(&workspace_id)
+                .expect("workspace spinner state should be initialized during tree refresh")
+                .clone();
+            content.add_child(
+                ConstrainedBox::new(Box::new(BrailleSpinner::new(
+                    appearance.ui_font_family(),
+                    appearance.ui_font_footnote(),
+                    running_color,
+                    spinner_state,
+                )))
+                .with_width(10.)
+                .with_height(12.)
+                .finish(),
+            );
+        }
+
+        content.add_child(
+            Text::new_inline(
+                tab_count_badge_label(tab_count),
+                appearance.ui_font_family(),
+                appearance.ui_font_footnote(),
+            )
+            .with_color(metadata_color.into())
+            .finish(),
+        );
+
+        let mut badge = Container::new(content.finish())
+            .with_horizontal_padding(6.)
+            .with_vertical_padding(2.)
+            .with_background(badge_background)
+            .with_border(Border::all(1.).with_border_fill(border_fill))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(12.)));
+        if visual_state.should_render_running_spinner() {
+            badge = badge.with_drop_shadow(
+                DropShadow::new_with_standard_offset_and_spread(coloru_with_opacity(
+                    running_color,
+                    30,
+                ))
+                .with_offset(vec2f(0., 0.)),
+            );
+        }
+        badge.finish()
+    }
+
     fn render_workspace_row(
         &self,
         workspace: &WorkspaceTreeNode,
@@ -647,25 +743,19 @@ impl ProjectTreePanel {
             .with_child(branch)
             .finish();
 
-        let tab_count_background = if selected {
-            selection_accent.with_opacity(20)
-        } else {
-            theme.surface_2()
-        };
-        let tab_count = Container::new(
-            Text::new_inline(
-                tab_count_badge_label(workspace.tab_count),
-                appearance.ui_font_family(),
-                appearance.ui_font_footnote(),
-            )
-            .with_color(metadata_color.into())
-            .finish(),
-        )
-        .with_horizontal_padding(6.)
-        .with_vertical_padding(2.)
-        .with_background(tab_count_background)
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-        .finish();
+        let visual_state = WorkspaceVisualState::new(
+            selected,
+            self.running_workspace_ids.contains(&workspace.workspace_id),
+        );
+        let tab_count = self.render_workspace_activity_badge(
+            workspace.tab_count,
+            visual_state,
+            workspace_id,
+            appearance,
+        );
+        let selected_color: pathfinder_color::ColorU = theme.terminal_colors().normal.blue.into();
+        let selected_border_color = coloru_with_opacity(selected_color, 58);
+        let selected_shadow_color = coloru_with_opacity(selected_color, 34);
 
         let delete_tooltip = appearance
             .ui_builder()
@@ -729,6 +819,12 @@ impl ProjectTreePanel {
                 } else {
                     row_container = row_container.with_background(theme.surface_overlay_1());
                 }
+                row_container = apply_workspace_selection_frame(
+                    row_container,
+                    visual_state,
+                    selected_border_color,
+                    selected_shadow_color,
+                );
 
                 let indicator = Container::new(
                     ConstrainedBox::new(Empty::new().finish())
