@@ -19,6 +19,7 @@
 
 - 在 workspace 名称旁用新的 C3 Neon Capsule 展示 workspace tab 数量。
 - 移除 workspace 名称旁现有 tab 数量统计的旧 UI，保留其“tab count”数值语义。
+- 为选中状态的 workspace 外围增加现代化、极客风的光影效果。
 - 当当前 workspace/团队下任意窗口存在 long-running terminal 时，启用 spinner 动画、边框高亮和弱辉光。
 - 使用 C3 Neon Capsule 视觉方向：圆角胶囊、弱青绿色辉光、细旋转状态环、数量 badge。
 - 只做纯展示，不提供点击、hover tooltip 或导航交互。
@@ -44,6 +45,7 @@
 - 视觉：C3 Neon Capsule，极客风但保持克制。
 - 数字语义：表示 workspace 中的 tab 数量，不表示 long-running terminal 数量。
 - Running 状态：只控制 spinner/辉光动画，空闲时数字仍显示。
+- 选中状态：workspace 容器外围增加独立光影，不复用 running 的 spinner/绿色脉冲。
 - 旧 UI：移除 workspace 名称旁现有 tab count 的丑旧渲染，替换为新的 C3 数字 badge。
 
 ## UI 设计
@@ -64,6 +66,15 @@ Team Lab  ⟳  3
 - 空闲状态时：保留同一个数字 badge，去掉 spinner 动画，边框和背景降噪，不显示辉光。
 - 发光效果必须弱化，避免长期运行任务时干扰注意力。
 
+选中状态光影：
+
+- 选中 workspace 的整体容器外围增加静态电蓝/冷白光影，表现为细描边、内侧高光和非常弱的外发光。
+- 选中光影必须落在 workspace 容器层，不落在数字 badge 层；数字 badge 仍只负责 tab count 与 running 动画。
+- 选中效果不旋转、不闪烁、不使用绿色脉冲，避免与 long-running 状态混淆。
+- long-running 效果使用 badge 内 spinner 和青绿色弱辉光；selected 效果使用容器外围静态电蓝/冷白边缘光。
+- 当 workspace 同时 selected 且 has running terminal 时，两层效果同时存在：容器外围显示 selected 光影，数字 badge 显示 spinner/青绿色 running 状态。
+- 未选中但 has running terminal 的 workspace 不显示 selected 外围光影，只显示数字 badge 的 running 动画。
+
 若标题栏空间不足：
 
 - 保留 workspace 名称的现有截断策略。
@@ -77,6 +88,12 @@ tab count 数据：
 1. Workspace 复用现有 workspace tab 数量统计来源。
 2. 标题栏重新 render 时读取当前 workspace 的 tab count。
 3. tab count 通过新的 C3 badge 渲染；数字不读取 running terminal 数量。
+
+selected 状态：
+
+1. Workspace 渲染时读取现有 active/selected workspace 状态。
+2. 当前 workspace 被选中时，对 workspace 容器启用 selected 光影样式。
+3. selected 光影不改变 tab count 数字，也不改变 running presence 计算。
 
 running 动画状态：
 
@@ -127,7 +144,9 @@ workspace 归属过滤：
 建议新增两个小边界：
 
 - `WorkspaceTerminalActivitySummary`：负责汇总 `tab_count` 与 `has_running_terminal`。
-- `render_workspace_activity_chip(...)`：负责纯 UI 渲染，不持有业务状态。
+- `WorkspaceVisualState`：负责描述 `is_selected` 与 `has_running_terminal` 组合后的视觉状态。
+- `render_workspace_activity_chip(...)`：负责 tab count badge UI 渲染，不持有业务状态。
+- `render_workspace_selection_frame(...)` 或等价 helper：负责 selected workspace 外围光影，不持有 running 业务状态。
 
 职责约束：
 
@@ -136,12 +155,16 @@ workspace 归属过滤：
 - 不在 terminal 输出路径中更新 workspace 状态。
 - 数字必须复用旧 tab count 的数值含义；旧 tab count 的视觉渲染路径应被移除或替换。
 - `has_running_terminal` 只能控制动画/高亮，不影响数字值。
+- `is_selected` 只能控制 workspace 容器外围光影，不影响数字值，也不启停 spinner。
 - 不新增全局 mutable cache，除非实现时发现 render 阶段重复遍历造成明确性能问题。
 
 ## 边界情况
 
 - workspace 有 3 个 tabs 且没有 long-running terminal：显示静态 `3`，不显示 spinner/辉光。
 - workspace 有 3 个 tabs 且存在 1 个或多个 long-running terminals：仍显示 `3`，并启用 spinner/辉光。
+- workspace 被选中但没有 long-running terminal：显示 selected 外围光影和静态 tab count badge。
+- workspace 被选中且存在 long-running terminal：selected 外围光影与 badge running 动画同时显示，颜色和动效保持区分。
+- workspace 未选中但存在 long-running terminal：不显示 selected 外围光影，只显示 badge running 动画。
 - 多窗口同一 workspace 有 running sessions：只影响动画状态，不改变 tab count 数字。
 - 多窗口不同 workspace 的 session：只计入当前 workspace/团队归属一致的 running presence。
 - read-only shared session viewer：不计入。
@@ -163,6 +186,9 @@ workspace 归属过滤：
 
 - 没有 long-running terminal 时渲染静态 tab count badge。
 - 有 long-running terminal 时渲染同一个 tab count badge，并启用 spinner/辉光。
+- selected workspace 渲染外围光影。
+- selected workspace 的光影不启用 spinner。
+- selected 且 has running terminal 时，同时渲染外围 selected 光影和 badge running 动画。
 - tab count badge 显示 tab count，而不是 running terminal count。
 - 旧 tab count UI 不再渲染，避免同一位置出现两个数字。
 - horizontal tabs 与 vertical tabs 模式下渲染入口一致。
@@ -176,13 +202,16 @@ workspace 归属过滤：
 
 - 当前 workspace/团队归属如果是全局 singleton，而不是每个窗口独立状态，跨窗口统计应明确表示“当前选中 workspace/团队”的全局运行态。
 - C3 视觉存在感较强，实现时必须使用低透明度边框和弱辉光，避免标题栏变成常亮状态灯。
+- selected 光影和 running 光影如果使用相同颜色或相同动画，会造成语义混淆；实现时应固定 selected 为静态电蓝/冷白外围光，running 为 badge 内 spinner/青绿色弱辉光。
 - 标题栏挂载点必须先定位到现有 workspace 名称/tab count 渲染入口；若该入口分散在 horizontal tabs 与 vertical tabs 两条路径中，应先抽出共享渲染 helper，再移除旧 tab count 并接入 activity 状态，避免在大型 `Workspace::render_tab_bar_contents` 中堆叠重复逻辑。
 - 最大语义风险是把 running terminal 数量误接到数字 badge；实现时应通过类型命名区分 `tab_count` 与 `has_running_terminal`。
 
 ## 验收标准
 
 - workspace 名称旁显示新的 C3 数字 badge，数字表示 workspace tab 数量。
+- 选中的 workspace 外围显示极客风静态光影效果。
 - 当同一 workspace/团队下任意窗口有 terminal long-running command 时，同一个 badge 启用 spinner/辉光。
+- selected 光影和 long-running badge 动画在颜色、位置和动效上有明确区分。
 - 所有 long-running command 结束后，spinner/辉光消失，tab count 数字保留。
 - workspace 名称旁不再显示旧 tab 数量统计 UI；新数字 badge 只代表 tab 数量。
 - 点击或 hover 胶囊没有新增交互。
