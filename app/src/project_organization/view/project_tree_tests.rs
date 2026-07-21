@@ -31,8 +31,9 @@ use crate::project_organization::domain::{
 use super::{
     repository_add_workspace_position_id, resolved_project_organization_tab_layout,
     should_show_workspace_delete_button, synchronize_mouse_states, tab_count_badge_label,
-    workspace_count_label, workspace_row_is_selected, ProjectTreeEvent, ProjectTreePanel,
-    ProjectTreeState, RepositoryTreeNode, TabLayout, WorkspaceTreeNode, WorkspaceVisualState,
+    workspace_count_label, workspace_row_is_selected, workspace_tab_count_badge_width,
+    ProjectTreeEvent, ProjectTreePanel, ProjectTreeState, RepositoryTreeNode, TabLayout,
+    WorkspaceTreeNode, WorkspaceVisualState,
 };
 
 struct ProjectTreeTestHost {
@@ -243,6 +244,14 @@ fn tab_count_badge_label_is_numeric_and_caps_large_counts() {
     assert_eq!(tab_count_badge_label(1), "1");
     assert_eq!(tab_count_badge_label(99), "99");
     assert_eq!(tab_count_badge_label(100), "99+");
+}
+
+#[test]
+fn tab_count_badge_width_keeps_single_digit_counts_circular() {
+    assert_eq!(workspace_tab_count_badge_width(1), 24.);
+    assert_eq!(workspace_tab_count_badge_width(9), 24.);
+    assert_eq!(workspace_tab_count_badge_width(10), 30.);
+    assert_eq!(workspace_tab_count_badge_width(100), 30.);
 }
 
 #[test]

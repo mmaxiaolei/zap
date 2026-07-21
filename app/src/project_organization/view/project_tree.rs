@@ -33,6 +33,12 @@ use crate::project_organization::domain::{
     Repository, RepositoryId, RepositoryWorkspace, RepositoryWorkspaceId,
 };
 
+const WORKSPACE_TAB_COUNT_BADGE_HEIGHT: f32 = 24.;
+const WORKSPACE_TAB_COUNT_BADGE_SINGLE_DIGIT_WIDTH: f32 = 24.;
+const WORKSPACE_TAB_COUNT_BADGE_WIDE_WIDTH: f32 = 30.;
+const WORKSPACE_RUNNING_INDICATOR_SLOT_WIDTH: f32 = 16.;
+const WORKSPACE_STATUS_SLOT_GAP: f32 = 6.;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TabLayout {
     Horizontal,
@@ -287,6 +293,14 @@ fn tab_count_badge_label(tab_count: usize) -> String {
         "99+".to_string()
     } else {
         tab_count.to_string()
+    }
+}
+
+fn workspace_tab_count_badge_width(tab_count: usize) -> f32 {
+    if tab_count < 10 {
+        WORKSPACE_TAB_COUNT_BADGE_SINGLE_DIGIT_WIDTH
+    } else {
+        WORKSPACE_TAB_COUNT_BADGE_WIDE_WIDTH
     }
 }
 
@@ -637,55 +651,78 @@ impl ProjectTreePanel {
             theme.surface_3()
         };
 
-        let mut content = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(4.);
-
-        if visual_state.should_render_running_spinner() {
+        let spinner = if visual_state.should_render_running_spinner() {
             let spinner_state = self
                 .workspace_spinner_states
                 .get(&workspace_id)
                 .expect("workspace spinner state should be initialized during tree refresh")
                 .clone();
-            content.add_child(
-                ConstrainedBox::new(Box::new(BrailleSpinner::new(
-                    appearance.ui_font_family(),
-                    appearance.ui_font_footnote(),
-                    running_color,
-                    spinner_state,
-                )))
-                .with_width(10.)
-                .with_height(12.)
-                .finish(),
-            );
-        }
-
-        content.add_child(
-            Text::new_inline(
-                tab_count_badge_label(tab_count),
+            Box::new(BrailleSpinner::new(
                 appearance.ui_font_family(),
                 appearance.ui_font_footnote(),
-            )
-            .with_color(metadata_color.into())
-            .finish(),
-        );
+                running_color,
+                spinner_state,
+            )) as Box<dyn Element>
+        } else {
+            Empty::new().finish()
+        };
+        let spinner_slot = ConstrainedBox::new(spinner)
+            .with_width(WORKSPACE_RUNNING_INDICATOR_SLOT_WIDTH)
+            .with_height(WORKSPACE_TAB_COUNT_BADGE_HEIGHT)
+            .finish();
 
-        let mut badge = Container::new(content.finish())
-            .with_horizontal_padding(6.)
-            .with_vertical_padding(2.)
-            .with_background(badge_background)
-            .with_border(Border::all(1.).with_border_fill(border_fill))
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(12.)));
-        if visual_state.should_render_running_spinner() {
-            badge = badge.with_drop_shadow(
+        let count = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::Center)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(
+                Text::new_inline(
+                    tab_count_badge_label(tab_count),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_footnote(),
+                )
+                .with_color(metadata_color.into())
+                .finish(),
+            )
+            .finish();
+        let count_badge = Container::new(
+            ConstrainedBox::new(count)
+                .with_width(workspace_tab_count_badge_width(tab_count))
+                .with_height(WORKSPACE_TAB_COUNT_BADGE_HEIGHT)
+                .finish(),
+        )
+        .with_background(badge_background)
+        .with_border(Border::all(1.).with_border_fill(border_fill))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(12.)));
+        let count_badge = if visual_state.should_render_running_spinner() {
+            count_badge.with_drop_shadow(
                 DropShadow::new_with_standard_offset_and_spread(coloru_with_opacity(
                     running_color,
                     30,
                 ))
                 .with_offset(vec2f(0., 0.)),
-            );
-        }
-        badge.finish()
+            )
+        } else {
+            count_badge
+        };
+
+        ConstrainedBox::new(
+            Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::End)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(WORKSPACE_STATUS_SLOT_GAP)
+                .with_child(spinner_slot)
+                .with_child(count_badge.finish())
+                .finish(),
+        )
+        .with_width(
+            WORKSPACE_RUNNING_INDICATOR_SLOT_WIDTH
+                + WORKSPACE_STATUS_SLOT_GAP
+                + workspace_tab_count_badge_width(tab_count),
+        )
+        .with_height(WORKSPACE_TAB_COUNT_BADGE_HEIGHT)
+        .finish()
     }
 
     fn render_workspace_row(
@@ -752,7 +789,7 @@ impl ProjectTreePanel {
             selected,
             self.running_workspace_ids.contains(&workspace.workspace_id),
         );
-        let tab_count = self.render_workspace_activity_badge(
+        let activity_badge = self.render_workspace_activity_badge(
             workspace.tab_count,
             visual_state,
             workspace_id,
@@ -801,13 +838,14 @@ impl ProjectTreePanel {
                 };
                 let row_content = Flex::row()
                     .with_main_axis_size(MainAxisSize::Max)
+                    .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_child(Shrinkable::new(1.0, content).finish())
                     .with_child(
                         Flex::row()
                             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                            .with_spacing(4.)
-                            .with_child(tab_count)
+                            .with_spacing(8.)
+                            .with_child(activity_badge)
                             .with_child(delete)
                             .finish(),
                     )
