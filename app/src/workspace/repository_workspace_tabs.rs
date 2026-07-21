@@ -117,7 +117,12 @@ impl<T> RepositoryWorkspaceTabSets<T> {
 
     pub(crate) fn inactive_states(
         &self,
-    ) -> impl Iterator<Item = (&Option<RepositoryWorkspaceId>, &RepositoryWorkspaceTabState<T>)> {
+    ) -> impl Iterator<
+        Item = (
+            &Option<RepositoryWorkspaceId>,
+            &RepositoryWorkspaceTabState<T>,
+        ),
+    > {
         self.inactive.iter()
     }
 
@@ -136,5 +141,7 @@ impl<T> RepositoryWorkspaceTabSets<T> {
 }
 
 fn clamped_tab_index(index: usize, tab_count: usize) -> usize {
-    tab_count.checked_sub(1).map_or(0, |last_index| index.min(last_index))
+    tab_count
+        .checked_sub(1)
+        .map_or(0, |last_index| index.min(last_index))
 }

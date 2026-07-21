@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::migration::{classify_tab_worktree, WorktreeIdentity, WorkspaceHealth};
+use super::migration::{classify_tab_worktree, WorkspaceHealth, WorktreeIdentity};
 
 #[test]
 fn linked_worktree_tab_with_one_identity_is_classified() {

@@ -17,7 +17,9 @@ pub fn classify_tab_worktree(
 ) -> Option<WorktreeIdentity> {
     let mut identities = identities.into_iter().flatten();
     let first = identities.next()?;
-    identities.all(|identity| identity == first).then_some(first)
+    identities
+        .all(|identity| identity == first)
+        .then_some(first)
 }
 
 /// repository 或 workspace 在 Zap 外部变更后的可见健康状态。

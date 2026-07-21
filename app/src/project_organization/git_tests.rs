@@ -677,11 +677,9 @@ fn preserves_newline_worktree_path() {
 
     let worktrees = list_worktrees(&fixture.root).unwrap();
 
-    assert!(
-        worktrees
-            .iter()
-            .any(|worktree| worktree.path == linked_path.canonicalize().unwrap())
-    );
+    assert!(worktrees
+        .iter()
+        .any(|worktree| worktree.path == linked_path.canonicalize().unwrap()));
 }
 
 #[cfg(unix)]
@@ -1358,12 +1356,10 @@ fn rejects_dangling_symlink_target_without_creating_branch() {
         &fixture.root,
         "refs/heads/feature/dangling-target"
     ));
-    assert!(
-        std::fs::symlink_metadata(path)
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
+    assert!(std::fs::symlink_metadata(path)
+        .unwrap()
+        .file_type()
+        .is_symlink());
 }
 
 #[test]

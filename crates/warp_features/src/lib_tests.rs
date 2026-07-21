@@ -1,4 +1,4 @@
-use super::{DOGFOOD_FLAGS, FeatureFlag, PREVIEW_FLAGS, RELEASE_FLAGS};
+use super::{FeatureFlag, DOGFOOD_FLAGS, PREVIEW_FLAGS, RELEASE_FLAGS};
 
 #[test]
 fn repository_workspaces_is_dogfood_only() {

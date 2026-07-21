@@ -4535,10 +4535,7 @@ impl Workspace {
     }
 
     /// 在持久化线程终止前保存所有 tab 中的活动 terminal block。
-    pub(crate) fn persist_active_terminal_blocks_for_shutdown(
-        &self,
-        ctx: &mut ViewContext<Self>,
-    ) {
+    pub(crate) fn persist_active_terminal_blocks_for_shutdown(&self, ctx: &mut ViewContext<Self>) {
         let pane_groups = self
             .all_repository_workspace_tabs()
             .map(|tab| tab.pane_group.clone())
@@ -5936,12 +5933,7 @@ impl Workspace {
         };
         self.delete_workspace_dialog.view.update(ctx, |modal, ctx| {
             modal.body().update(ctx, |body, ctx| {
-                body.configure(
-                    workspace_id,
-                    workspace.display_name,
-                    workspace.branch,
-                    ctx,
-                );
+                body.configure(workspace_id, workspace.display_name, workspace.branch, ctx);
             });
         });
         self.delete_workspace_dialog.open();
@@ -6010,11 +6002,14 @@ impl Workspace {
                             .as_ref()
                             .is_some_and(|target| !target.is_merged) =>
                 {
-                    workspace_view.delete_workspace_dialog.view.update(ctx, |modal, ctx| {
-                        modal.body().update(ctx, |body, ctx| {
-                            body.require_force_confirmation(ctx);
+                    workspace_view
+                        .delete_workspace_dialog
+                        .view
+                        .update(ctx, |modal, ctx| {
+                            modal.body().update(ctx, |body, ctx| {
+                                body.require_force_confirmation(ctx);
+                            });
                         });
-                    });
                 }
                 Ok(_) => workspace_view.remove_repository_workspace(
                     workspace_id,
@@ -6107,7 +6102,8 @@ impl Workspace {
         let tabs = if self.active_repository_workspace_id() == Some(workspace_id) {
             let tabs = std::mem::take(&mut self.tabs);
             self.switch_repository_workspace(None, ctx);
-            self.repository_workspace_tabs.take_inactive(Some(workspace_id));
+            self.repository_workspace_tabs
+                .take_inactive(Some(workspace_id));
             tabs
         } else {
             self.repository_workspace_tabs

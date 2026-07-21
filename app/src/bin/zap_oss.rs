@@ -5,17 +5,23 @@
 use anyhow::Result;
 use warp_core::{
     channel::{Channel, ChannelConfig, ChannelState},
-    features::{DEBUG_FLAGS, FeatureFlag},
+    features::{FeatureFlag, DEBUG_FLAGS},
     AppId,
 };
 
-#[cfg(all(target_os = "windows", feature = "windows_high_performance_gpu_default"))]
+#[cfg(all(
+    target_os = "windows",
+    feature = "windows_high_performance_gpu_default"
+))]
 #[allow(non_upper_case_globals)]
 #[no_mangle]
 #[used]
 pub static NvOptimusEnablement: u32 = 1;
 
-#[cfg(all(target_os = "windows", feature = "windows_high_performance_gpu_default"))]
+#[cfg(all(
+    target_os = "windows",
+    feature = "windows_high_performance_gpu_default"
+))]
 #[allow(non_upper_case_globals)]
 #[no_mangle]
 #[used]

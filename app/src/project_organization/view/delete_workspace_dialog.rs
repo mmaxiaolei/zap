@@ -221,7 +221,11 @@ impl View for DeleteWorkspaceDialog {
         Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_child(Container::new(content.finish()).with_uniform_padding(20.).finish())
+            .with_child(
+                Container::new(content.finish())
+                    .with_uniform_padding(20.)
+                    .finish(),
+            )
             .with_child(Container::new(footer).with_uniform_padding(12.).finish())
             .finish()
     }
