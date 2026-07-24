@@ -44,7 +44,7 @@ fn project_tree_scrolls_when_workspace_list_overflows() {
             last_repository_id = Some(repository_id);
             repositories.push(PersistedRepository {
                 id: repository_id.to_string(),
-                display_name: format!("repository-{index}"),
+                display_name: format!("repository-{index:02}"),
                 path: repository_path.to_string_lossy().to_string(),
                 remote_url: None,
                 source: "local".to_string(),
@@ -54,8 +54,8 @@ fn project_tree_scrolls_when_workspace_list_overflows() {
             workspaces.push(PersistedRepositoryWorkspace {
                 id: workspace_id.to_string(),
                 repository_id: repository_id.to_string(),
-                display_name: format!("workspace-{index}"),
-                branch: format!("feature/workspace-{index}"),
+                display_name: format!("workspace-{index:02}"),
+                branch: format!("feature/workspace-{index:02}"),
                 worktree_path: worktree_path.to_string_lossy().to_string(),
                 created_at: timestamp,
                 last_opened_at: timestamp,
