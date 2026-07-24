@@ -345,8 +345,7 @@ fn project_tree_scrolls_when_workspace_list_overflows() {
         for index in 0..12 {
             let repository_path = tempdir.path().join(format!("repository-{index}"));
             let worktree_path = tempdir.path().join(format!("worktree-{index}"));
-            std::fs::create_dir(&repository_path)
-                .expect("repository directory should be created");
+            std::fs::create_dir(&repository_path).expect("repository directory should be created");
             std::fs::create_dir(&worktree_path).expect("worktree directory should be created");
 
             let repository_id = RepositoryId(uuid::Uuid::from_u128(index + 1));
