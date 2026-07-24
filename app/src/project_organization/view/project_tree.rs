@@ -7,9 +7,10 @@ use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::color::coloru_with_opacity;
 use warpui::{
     elements::{
-        Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow,
-        Element, Empty, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-        ParentElement, Radius, SavePosition, Shrinkable, Text,
+        Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+        CornerRadius, CrossAxisAlignment, DropShadow, Element, Empty, Fill, Flex, Hoverable,
+        MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition,
+        ScrollbarWidth, Shrinkable, Text,
     },
     platform::Cursor,
     text_layout::ClipConfig,
@@ -344,6 +345,7 @@ where
 pub struct ProjectTreePanel {
     project_organization_model: ModelHandle<ProjectOrganizationModel>,
     state: ProjectTreeState,
+    clipped_scroll_state: ClippedScrollStateHandle,
     tab_counts: HashMap<RepositoryWorkspaceId, usize>,
     running_workspace_ids: HashSet<RepositoryWorkspaceId>,
     workspace_spinner_states: HashMap<RepositoryWorkspaceId, SpinnerStateHandle>,
@@ -368,6 +370,7 @@ impl ProjectTreePanel {
         let mut panel = Self {
             project_organization_model: project_organization_model.clone(),
             state: ProjectTreeState::default(),
+            clipped_scroll_state: Default::default(),
             tab_counts: HashMap::new(),
             running_workspace_ids: HashSet::new(),
             workspace_spinner_states: HashMap::new(),
@@ -1047,6 +1050,15 @@ impl View for ProjectTreePanel {
                 .with_vertical_padding(6.)
                 .finish()
         };
+        let scrollable_body = ClippedScrollable::vertical(
+            self.clipped_scroll_state.clone(),
+            body,
+            ScrollbarWidth::Auto,
+            theme.disabled_text_color(theme.background()).into(),
+            theme.main_text_color(theme.background()).into(),
+            Fill::None,
+        )
+        .finish();
 
         Flex::column()
             .with_main_axis_size(MainAxisSize::Max)
@@ -1058,7 +1070,7 @@ impl View for ProjectTreePanel {
                     .with_border(Border::bottom(1.).with_border_fill(theme.surface_2()))
                     .finish(),
             )
-            .with_child(Shrinkable::new(1.0, body).finish())
+            .with_child(Shrinkable::new(1.0, scrollable_body).finish())
             .with_child(
                 Container::new(self.render_unclassified_row(appearance))
                     .with_uniform_padding(8.)
