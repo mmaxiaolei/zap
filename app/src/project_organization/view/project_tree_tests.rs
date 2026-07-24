@@ -331,6 +331,132 @@ fn project_tree_renders_workspace_rows_with_finite_flex_constraints() {
 }
 
 #[test]
+fn project_tree_scrolls_when_workspace_list_overflows() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let tempdir = tempfile::tempdir().expect("temporary directory should be created");
+        let timestamp = chrono::DateTime::from_timestamp(0, 0)
+            .expect("timestamp should be valid")
+            .naive_utc();
+        let mut repositories = Vec::new();
+        let mut workspaces = Vec::new();
+        let mut last_repository_id = None;
+
+        for index in 0..12 {
+            let repository_path = tempdir.path().join(format!("repository-{index}"));
+            let worktree_path = tempdir.path().join(format!("worktree-{index}"));
+            std::fs::create_dir(&repository_path)
+                .expect("repository directory should be created");
+            std::fs::create_dir(&worktree_path).expect("worktree directory should be created");
+
+            let repository_id = RepositoryId(uuid::Uuid::from_u128(index + 1));
+            let workspace_id = RepositoryWorkspaceId(uuid::Uuid::from_u128(index + 100));
+            last_repository_id = Some(repository_id);
+            repositories.push(PersistedRepository {
+                id: repository_id.to_string(),
+                display_name: format!("repository-{index:02}"),
+                path: repository_path.to_string_lossy().to_string(),
+                remote_url: None,
+                source: "local".to_string(),
+                created_at: timestamp,
+                last_opened_at: timestamp,
+            });
+            workspaces.push(PersistedRepositoryWorkspace {
+                id: workspace_id.to_string(),
+                repository_id: repository_id.to_string(),
+                display_name: format!("workspace-{index:02}"),
+                branch: format!("feature/workspace-{index:02}"),
+                worktree_path: worktree_path.to_string_lossy().to_string(),
+                created_at: timestamp,
+                last_opened_at: timestamp,
+            });
+        }
+
+        app.add_singleton_model(|ctx| {
+            ProjectOrganizationModel::try_new(
+                repositories,
+                workspaces,
+                RepositoryPersistence::new(None),
+                ctx,
+            )
+            .expect("project organization model should initialize")
+        });
+
+        let (window_id, host) =
+            app.add_window(WindowStyle::NotStealFocus, ProjectTreeTestHost::new);
+        let project_tree = host.read(&app, |host, _| host.project_tree.clone());
+        let root_view_id = app
+            .root_view_id(window_id)
+            .expect("window should have a root view");
+        let last_repository_id = last_repository_id.expect("at least one repository should exist");
+        let last_button_position_id = repository_add_workspace_position_id(last_repository_id);
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+
+        let initial_y = app.update({
+            let presenter = presenter.clone();
+            let project_tree = project_tree.clone();
+            let last_button_position_id = last_button_position_id.clone();
+            move |ctx| {
+                presenter.borrow_mut().invalidate(
+                    WindowInvalidation {
+                        updated: [root_view_id, project_tree.id()].into_iter().collect(),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                presenter
+                    .borrow_mut()
+                    .build_scene(vec2f(320., 240.), 1., None, ctx);
+                presenter
+                    .borrow()
+                    .position_cache()
+                    .get_position(&last_button_position_id)
+                    .expect("last repository button should have a saved position")
+                    .origin()
+                    .y()
+            }
+        });
+
+        app.update({
+            let presenter = presenter.clone();
+            move |ctx| {
+                ctx.simulate_window_event(
+                    Event::ScrollWheel {
+                        position: vec2f(160., 120.),
+                        delta: vec2f(0., -50.),
+                        precise: true,
+                        modifiers: Default::default(),
+                    },
+                    window_id,
+                    presenter.clone(),
+                );
+                presenter.borrow_mut().invalidate(
+                    WindowInvalidation {
+                        updated: [root_view_id, project_tree.id()].into_iter().collect(),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                presenter
+                    .borrow_mut()
+                    .build_scene(vec2f(320., 240.), 1., None, ctx);
+                let scrolled_y = presenter
+                    .borrow()
+                    .position_cache()
+                    .get_position(&last_button_position_id)
+                    .expect("last repository button should have a saved position")
+                    .origin()
+                    .y();
+                assert!(
+                    scrolled_y < initial_y,
+                    "scrolling the workspace list should move its rows upward"
+                );
+            }
+        });
+    });
+}
+
+#[test]
 fn project_tree_renders_running_selected_workspace_activity_badge() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
