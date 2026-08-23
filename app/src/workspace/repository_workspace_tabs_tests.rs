@@ -22,6 +22,21 @@ fn switching_workspaces_swaps_tabs_without_dropping_inactive_state() {
 }
 
 #[test]
+fn switching_to_workspace_without_tabs_yields_empty_active_set() {
+    let workspace_a = RepositoryWorkspaceId(uuid::Uuid::from_u128(1));
+    let workspace_b = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));
+    let mut active_tabs = vec![10_u64];
+    let mut active_tab_index = 0;
+    let mut sets = RepositoryWorkspaceTabSets::new(Some(workspace_a));
+
+    sets.switch_to(Some(workspace_b), &mut active_tabs, &mut active_tab_index);
+
+    assert!(active_tabs.is_empty());
+    assert_eq!(active_tab_index, 0);
+    assert_eq!(sets.active_workspace_id(), Some(workspace_b));
+}
+
+#[test]
 fn switching_workspaces_restores_each_workspace_active_tab_index() {
     let workspace_a = RepositoryWorkspaceId(uuid::Uuid::from_u128(1));
     let workspace_b = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));

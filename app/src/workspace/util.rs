@@ -25,6 +25,7 @@ pub(super) struct WorkspaceMouseStates {
     pub(super) new_tab_button: MouseStateHandle,
     pub(super) new_tab_menu: MouseStateHandle,
     pub(super) new_tab: MouseStateHandle,
+    pub(super) empty_workspace_new_terminal: MouseStateHandle,
     pub(super) overflow_button: MouseStateHandle,
     pub(super) banner_button: MouseStateHandle,
     pub(super) banner_secondary_button: MouseStateHandle,

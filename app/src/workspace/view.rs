@@ -386,7 +386,7 @@ use warpui::elements::{
     CacheOption, DispatchEventResult, DraggableState, DropTarget, EventHandler, Image,
     MouseInBehavior, Rect,
 };
-use warpui::ui_components::button::Button;
+use warpui::ui_components::button::{Button, ButtonVariant};
 use warpui::windowing::{StateEvent, WindowManager};
 use warpui::{elements::MouseStateHandle, fonts::Properties};
 
@@ -4157,12 +4157,18 @@ impl Workspace {
     }
 
     fn has_left_region(&self, app: &AppContext) -> bool {
-        self.active_tab_pane_group().as_ref(app).left_panel_open
+        self.try_active_tab_pane_group()
+            .map(|pane_group| pane_group.as_ref(app).left_panel_open)
+            .unwrap_or(self.left_panel_open)
     }
 
     fn has_right_region(&self, app: &AppContext) -> bool {
-        let group = self.active_tab_pane_group().as_ref(app);
-        group.right_panel_open || self.current_workspace_state.is_right_panel_open()
+        self.try_active_tab_pane_group()
+            .map(|pane_group| {
+                pane_group.as_ref(app).right_panel_open
+                    || self.current_workspace_state.is_right_panel_open()
+            })
+            .unwrap_or(self.current_workspace_state.is_right_panel_open())
     }
 
     fn focus_next_pane_in_group(&mut self, ctx: &mut ViewContext<Self>) -> bool {
@@ -4603,8 +4609,12 @@ impl Workspace {
 
     /// Returns the PaneGroup view handle for the currently active tab.
     pub fn active_tab_pane_group(&self) -> &ViewHandle<PaneGroup> {
-        self.get_pane_group_view(self.active_tab_index)
+        self.try_active_tab_pane_group()
             .expect("Active tab index entry should exist")
+    }
+
+    fn try_active_tab_pane_group(&self) -> Option<&ViewHandle<PaneGroup>> {
+        self.get_pane_group_view(self.active_tab_index)
     }
 
     /// Attempts to get selected text from the focused pane.
@@ -12552,9 +12562,8 @@ impl Workspace {
 
         // Check if any panes are being dragged (potentially into a new tab).
         let is_pane_being_dragged = self
-            .active_tab_pane_group()
-            .as_ref(app)
-            .any_pane_being_dragged(app);
+            .try_active_tab_pane_group()
+            .is_some_and(|pane_group| pane_group.as_ref(app).any_pane_being_dragged(app));
 
         let workspace_decoration_visibility = TabSettings::as_ref(app)
             .workspace_decoration_visibility
@@ -16793,7 +16802,9 @@ impl Workspace {
                     crate::t!("workspace-tools-panel-tooltip")
                 };
                 (
-                    self.active_tab_pane_group().as_ref(ctx).left_panel_open,
+                    self.try_active_tab_pane_group()
+                        .map(|pane_group| pane_group.as_ref(ctx).left_panel_open)
+                        .unwrap_or(self.left_panel_open),
                     tooltip,
                     WorkspaceAction::ToggleLeftPanel,
                     "workspace:toggle_left_panel",
@@ -16829,7 +16840,10 @@ impl Workspace {
         appearance: &Appearance,
         ctx: &AppContext,
     ) -> Box<dyn Element> {
-        let is_active = self.active_tab_pane_group().as_ref(ctx).left_panel_open;
+        let is_active = self
+            .try_active_tab_pane_group()
+            .map(|pane_group| pane_group.as_ref(ctx).left_panel_open)
+            .unwrap_or(self.left_panel_open);
 
         let tooltip_text = if self.left_panel_views.len() <= 1 {
             match self
@@ -16903,10 +16917,13 @@ impl Workspace {
         appearance: &Appearance,
         ctx: &AppContext,
     ) -> Box<dyn Element> {
-        let is_active = self.active_tab_pane_group().as_ref(ctx).right_panel_open;
-        let is_enabled = Self::should_enable_file_tree_and_global_search_for_pane_group(
-            self.active_tab_pane_group().as_ref(ctx),
-        );
+        let pane_group = self
+            .try_active_tab_pane_group()
+            .map(|pane_group| pane_group.as_ref(ctx));
+        let is_active = pane_group.is_some_and(|pane_group| pane_group.right_panel_open);
+        let is_enabled = pane_group.is_some_and(|pane_group| {
+            Self::should_enable_file_tree_and_global_search_for_pane_group(pane_group)
+        });
         let disable = !is_enabled;
 
         let theme = appearance.theme();
@@ -16927,9 +16944,8 @@ impl Workspace {
         let show_diff_stats = *TabSettings::as_ref(ctx).show_code_review_diff_stats;
 
         let line_changes = if show_diff_stats {
-            self.active_tab_pane_group()
-                .as_ref(ctx)
-                .active_session_view(ctx)
+            pane_group
+                .and_then(|pane_group| pane_group.active_session_view(ctx))
                 .and_then(|tv| tv.as_ref(ctx).current_diff_line_changes(ctx))
                 .filter(|lc| {
                     // Only show the stat badge when there are actual line-level changes
@@ -18280,6 +18296,85 @@ impl Workspace {
         }
     }
 
+    fn render_empty_workspace_content(
+        &self,
+        app: &AppContext,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let empty_state = Align::new(
+            Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_main_axis_alignment(MainAxisAlignment::Center)
+                .with_spacing(8.)
+                .with_child(
+                    Text::new_inline(
+                        crate::t!("workspace-empty-title"),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_heading_3(),
+                    )
+                    .with_color(theme.main_text_color(theme.background()).into())
+                    .finish(),
+                )
+                .with_child(
+                    Text::new_inline(
+                        crate::t!("workspace-empty-subtitle"),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_body(),
+                    )
+                    .with_color(theme.sub_text_color(theme.background()).into())
+                    .finish(),
+                )
+                .with_child(
+                    Container::new(
+                        appearance
+                            .ui_builder()
+                            .button(
+                                ButtonVariant::Accent,
+                                self.mouse_states.empty_workspace_new_terminal.clone(),
+                            )
+                            .with_text_label(crate::t!("workspace-empty-new-terminal"))
+                            .build()
+                            .on_click(|ctx, _, _| {
+                                ctx.dispatch_typed_action(WorkspaceAction::AddDefaultTab);
+                            })
+                            .with_cursor(Cursor::PointingHand)
+                            .finish(),
+                    )
+                    .with_margin_top(8.)
+                    .finish(),
+                )
+                .finish(),
+        )
+        .finish();
+
+        let config = TabSettings::as_ref(app)
+            .header_toolbar_chip_selection
+            .clone();
+        let mut main_content = Flex::row();
+        let mut prev_panel_added = false;
+        if !Self::vertical_tabs_active(app) {
+            for item in config.left_items() {
+                Self::add_panel_with_separator(
+                    &mut main_content,
+                    &mut prev_panel_added,
+                    self.render_config_panel_without_active_tab(&item, &config, app),
+                    app,
+                );
+            }
+        }
+        if prev_panel_added {
+            main_content.add_child(Self::render_panel_separator(app));
+        }
+        main_content = main_content.with_child(Shrinkable::new(1.0, empty_state).finish());
+
+        Shrinkable::new(
+            THEME_CHOOSER_RATIO,
+            SavePosition::new(main_content.finish(), TAB_CONTENT_POSITION_ID).finish(),
+        )
+        .finish()
+    }
+
     fn render_banner_and_active_tab(
         &self,
         app: &AppContext,
@@ -18893,15 +18988,25 @@ impl Workspace {
             let config = TabSettings::as_ref(app)
                 .header_toolbar_chip_selection
                 .clone();
-            let pane_group = self.active_tab_pane_group().as_ref(app);
-
-            for item in config.left_items() {
-                Self::add_panel_with_separator(
-                    &mut panels_view,
-                    &mut prev_panel_added,
-                    self.render_config_panel(&item, pane_group, &config, app),
-                    app,
-                );
+            if let Some(pane_group) = self.try_active_tab_pane_group() {
+                let pane_group = pane_group.as_ref(app);
+                for item in config.left_items() {
+                    Self::add_panel_with_separator(
+                        &mut panels_view,
+                        &mut prev_panel_added,
+                        self.render_config_panel(&item, pane_group, &config, app),
+                        app,
+                    );
+                }
+            } else {
+                for item in config.left_items() {
+                    Self::add_panel_with_separator(
+                        &mut panels_view,
+                        &mut prev_panel_added,
+                        self.render_config_panel_without_active_tab(&item, &config, app),
+                        app,
+                    );
+                }
             }
         }
 
@@ -18933,24 +19038,25 @@ impl Workspace {
             let config = TabSettings::as_ref(app)
                 .header_toolbar_chip_selection
                 .clone();
-            let pane_group = self.active_tab_pane_group().as_ref(app);
+            if let Some(pane_group) = self.try_active_tab_pane_group() {
+                let pane_group = pane_group.as_ref(app);
+                for item in config.right_items() {
+                    Self::add_panel_with_separator(
+                        &mut panels_view,
+                        &mut prev_panel_added,
+                        self.render_config_panel(&item, pane_group, &config, app),
+                        app,
+                    );
+                }
 
-            for item in config.right_items() {
-                Self::add_panel_with_separator(
-                    &mut panels_view,
-                    &mut prev_panel_added,
-                    self.render_config_panel(&item, pane_group, &config, app),
-                    app,
-                );
-            }
-
-            if pane_group.right_panel_open && pane_group.is_right_panel_maximized {
-                Self::add_panel_with_separator(
-                    &mut panels_view,
-                    &mut prev_panel_added,
-                    self.render_config_panel_maximized(pane_group, &config, app),
-                    app,
-                );
+                if pane_group.right_panel_open && pane_group.is_right_panel_maximized {
+                    Self::add_panel_with_separator(
+                        &mut panels_view,
+                        &mut prev_panel_added,
+                        self.render_config_panel_maximized(pane_group, &config, app),
+                        app,
+                    );
+                }
             }
         }
 
@@ -19051,6 +19157,40 @@ impl Workspace {
                 Some(ChildView::new(&self.right_panel_view).finish())
             }
             HeaderToolbarItemKind::AgentManagement
+            | HeaderToolbarItemKind::NotificationsMailbox => None,
+        }
+    }
+
+    fn render_config_panel_without_active_tab(
+        &self,
+        item: &HeaderToolbarItemKind,
+        config: &HeaderToolbarChipSelection,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
+        if !item.is_available(app) || !item.is_panel() {
+            return None;
+        }
+        match item {
+            HeaderToolbarItemKind::TabsPanel => {
+                if !self.vertical_tabs_panel_open {
+                    return None;
+                }
+                Some(
+                    SavePosition::new(
+                        self.render_vertical_tabs_panel(Self::tabs_panel_side(config), app),
+                        VERTICAL_TABS_PANEL_POSITION_ID,
+                    )
+                    .finish(),
+                )
+            }
+            HeaderToolbarItemKind::ToolsPanel => {
+                if !self.left_panel_open || warpui::platform::is_mobile_device() {
+                    return None;
+                }
+                Some(ChildView::new(&self.left_panel_view).finish())
+            }
+            HeaderToolbarItemKind::CodeReview
+            | HeaderToolbarItemKind::AgentManagement
             | HeaderToolbarItemKind::NotificationsMailbox => None,
         }
     }
@@ -21625,7 +21765,11 @@ impl View for Workspace {
             if tab_bar_mode == ShowTabBar::Stacked {
                 outer_column.add_child(self.render_tab_bar(self.tab_fixed_width, appearance, app));
             }
-            let content = self.render_banner_and_active_tab(app, appearance);
+            let content = if self.tabs.is_empty() {
+                self.render_empty_workspace_content(app, appearance)
+            } else {
+                self.render_banner_and_active_tab(app, appearance)
+            };
             // Hide the vertical tab rail for simplified WASM views (notebooks, shared sessions, etc.)
             let panels_row = self.render_panels(app, Shrinkable::new(1.0, content).finish(), true);
             outer_column.add_child(Shrinkable::new(1.0, panels_row).finish());
@@ -21637,7 +21781,11 @@ impl View for Workspace {
             if tab_bar_mode == ShowTabBar::Stacked {
                 outer_column.add_child(self.render_tab_bar(self.tab_fixed_width, appearance, app));
             }
-            let content = self.render_banner_and_active_tab(app, appearance);
+            let content = if self.tabs.is_empty() {
+                self.render_empty_workspace_content(app, appearance)
+            } else {
+                self.render_banner_and_active_tab(app, appearance)
+            };
             let panels_row = self.render_panels(app, Shrinkable::new(1.0, content).finish(), false);
             outer_column.add_child(Shrinkable::new(1.0, panels_row).finish());
             Container::new(outer_column.finish())
