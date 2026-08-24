@@ -97,7 +97,7 @@ Figma: none provided. 交互和布局以本规格确认过程中批准的视觉�
 
 31. 删除对话框默认选中“同时删除本地分支”。用户取消勾选时只移除 worktree 和 workspace 记录，保留本地分支。
 
-32. 当“同时删除本地分支”已选中且分支未合并到其 upstream 或 repository 默认分支时，Zap 在任何破坏性操作发生前显示第二次强制删除确认。用户取消确认后不改变任何状态。
+32. 当“同时删除本地分支”已选中且分支未合并到其 upstream 或 repository 默认分支时，Zap 在任何破坏性操作发生前显示第二次强制删除确认。用户取消确认后不改变任何状态。已配置但 remote-tracking ref 已消失的 upstream 视为没有可用 upstream，按 repository 默认分支判断合并状态，不得因此阻断删除。
 
 33. 删除确认通过后，Zap 关闭该 workspace 的全部页签和终端、移除 worktree、按选择安全或强制删除本地分支，最后移除 workspace 记录。
 

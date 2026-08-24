@@ -1089,17 +1089,15 @@ fn resolve_merge_target_ref(
     repository: &Path,
     branch_ref: &str,
 ) -> Result<String, GitWorkspaceError> {
-    match branch_upstream(repository, branch_ref)? {
-        Some(upstream) => Ok(upstream),
-        None => {
-            let remote = primary_remote(repository)?;
-            match default_branch(repository, &remote)? {
-                BranchRef::Remote { full_ref, .. } => Ok(full_ref),
-                BranchRef::Local { full_ref, .. } => {
-                    Err(GitWorkspaceError::InvalidRemoteRef { full_ref })
-                }
-            }
+    if let Some(upstream) = branch_upstream(repository, branch_ref)? {
+        if ref_exists(repository, &upstream)? {
+            return Ok(upstream);
         }
+    }
+    let remote = primary_remote(repository)?;
+    match default_branch(repository, &remote)? {
+        BranchRef::Remote { full_ref, .. } => Ok(full_ref),
+        BranchRef::Local { full_ref, .. } => Err(GitWorkspaceError::InvalidRemoteRef { full_ref }),
     }
 }
 

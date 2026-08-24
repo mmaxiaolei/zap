@@ -173,7 +173,7 @@ UI 遵循 `warp-ui-guidelines`：按钮使用现有 ActionButton/Button 主题�
 
 1. workspace 记录、worktree 路径和目标分支仍相互一致。
 2. `git status --porcelain` 为空；未跟踪文件同样阻止删除。
-3. 若选择删除分支，判断该分支是否合并到已配置 upstream；没有 upstream 时判断是否合并到 repository 默认分支。
+3. 若选择删除分支，判断该分支是否合并到已配置且仍然存在的 upstream；没有 upstream，或 remote-tracking ref 已消失（`upstream is gone`）时，判断是否合并到 repository 默认分支。
 
 删除分支时，服务通过 prepared `git update-ref --stdin` transaction 锁定待删 branch 和非强制删除的 merge target。transaction 只队列 merge target 的 `verify` 与 branch 的 `delete <expected-oid>`，不会对同一 branch 同时队列 `verify` 和 `delete`。持锁后重新检查 worktree 注册路径、branch、dirty 状态、目标选择、目标 OID 与合并关系；强制删除不读取或锁定远端 merge target。
 

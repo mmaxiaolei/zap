@@ -178,6 +178,18 @@ fn advance_remote_main(fixture: &GitFixture) {
     run_git(&fixture.root, &["update-ref", full_ref, &new_oid, &old_oid]);
 }
 
+fn set_gone_upstream(fixture: &GitFixture, branch: &str) {
+    let remote_ref = format!("refs/remotes/origin/{branch}");
+    run_git(&fixture.root, &["push", "-u", "origin", branch]);
+    assert!(ref_exists(&fixture.root, &remote_ref));
+    run_git(&fixture.root, &["update-ref", "-d", &remote_ref]);
+    assert!(!ref_exists(&fixture.root, &remote_ref));
+    assert_eq!(
+        branch_upstream(&fixture.root, branch).as_deref(),
+        Some(remote_ref.as_str())
+    );
+}
+
 fn injected_command_error(operation: &'static str) -> GitWorkspaceError {
     GitWorkspaceError::CommandFailed {
         operation,
@@ -1726,6 +1738,84 @@ fn deletion_preflight_captures_merge_target_oid() {
         ref_oid(&fixture.root, "refs/remotes/origin/main")
     );
     assert!(merge_target.is_merged);
+}
+
+#[test]
+fn gone_upstream_falls_back_to_default_branch_and_removes_merged_workspace() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/gone-upstream");
+    set_gone_upstream(&fixture, "feature/gone-upstream");
+
+    let preflight = deletion_preflight(&fixture.root, &worktree_path, true).unwrap();
+    let merge_target = preflight.merge_target.as_ref().unwrap();
+
+    assert_eq!(merge_target.full_ref, "refs/remotes/origin/main");
+    assert_eq!(
+        merge_target.oid,
+        ref_oid(&fixture.root, "refs/remotes/origin/main")
+    );
+    assert!(merge_target.is_merged);
+
+    remove_workspace(
+        &fixture.root,
+        &worktree_path,
+        "feature/gone-upstream",
+        true,
+        false,
+    )
+    .unwrap();
+
+    assert!(!worktree_path.exists());
+    assert!(!ref_exists(
+        &fixture.root,
+        "refs/heads/feature/gone-upstream"
+    ));
+}
+
+#[test]
+fn gone_upstream_unmerged_branch_blocks_deletion_against_default_branch() {
+    let fixture = GitFixture::new();
+    let worktree_path = fixture.add_linked_worktree("feature/gone-unmerged");
+    std::fs::write(worktree_path.join("feature.txt"), "feature").unwrap();
+    run_git(&worktree_path, &["add", "feature.txt"]);
+    run_git(
+        &worktree_path,
+        &[
+            "-c",
+            "user.name=Zap Tests",
+            "-c",
+            "user.email=zap@example.com",
+            "commit",
+            "-m",
+            "feature commit",
+        ],
+    );
+    set_gone_upstream(&fixture, "feature/gone-unmerged");
+
+    let preflight = deletion_preflight(&fixture.root, &worktree_path, true).unwrap();
+    let merge_target = preflight.merge_target.as_ref().unwrap();
+    assert!(!merge_target.is_merged);
+    assert_eq!(merge_target.full_ref, "refs/remotes/origin/main");
+
+    let error = remove_workspace(
+        &fixture.root,
+        &worktree_path,
+        "feature/gone-unmerged",
+        true,
+        false,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        GitWorkspaceError::BranchNotMerged { branch, merge_target }
+            if branch == "feature/gone-unmerged" && merge_target == "refs/remotes/origin/main"
+    ));
+    assert!(worktree_path.exists());
+    assert!(ref_exists(
+        &fixture.root,
+        "refs/heads/feature/gone-unmerged"
+    ));
 }
 
 #[test]
