@@ -371,6 +371,55 @@ fn repository_workspace_state_round_trips() {
 }
 
 #[test]
+fn empty_repository_workspace_window_round_trips() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174200",
+        "/tmp/empty-repository-workspace",
+    );
+    let workspace = repository_workspace_row(
+        "123e4567-e89b-12d3-a456-426614174201",
+        &repository.id,
+        "feature/empty-workspace",
+        "/tmp/empty-repository-workspace-feature",
+    );
+    let workspace_id = RepositoryWorkspaceId(
+        workspace
+            .id
+            .parse()
+            .expect("workspace fixture should have a valid UUID"),
+    );
+    save_repository(&mut conn, repository).expect("repository should save");
+    save_repository_workspace(&mut conn, workspace).expect("workspace should save");
+
+    let mut window = test_terminal_window_snapshot(false);
+    window.tabs.clear();
+    window.active_tab_index = 0;
+    window.active_repository_workspace_id = Some(workspace_id);
+    window.repository_workspace_states = Vec::new();
+    let state = AppState {
+        windows: vec![window],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    save_app_state(&mut conn, &state).expect("empty workspace window should save");
+    let restored = read_sqlite_data(&mut conn, None)
+        .expect("empty workspace window should load")
+        .app_state;
+
+    assert_eq!(restored.windows, state.windows);
+    assert!(restored.windows[0].tabs.is_empty());
+    assert_eq!(
+        restored.windows[0].active_repository_workspace_id,
+        Some(workspace_id)
+    );
+}
+
+#[test]
 fn repository_rows_round_trip() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
     let database_path = tempdir.path().join("warp.sqlite");

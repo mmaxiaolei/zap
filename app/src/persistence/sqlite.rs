@@ -1206,9 +1206,11 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                 })
                 .collect();
 
-            diesel::insert_into(schema::tabs::dsl::tabs)
-                .values(tabs)
-                .execute(conn)?;
+            if !tabs.is_empty() {
+                diesel::insert_into(schema::tabs::dsl::tabs)
+                    .values(tabs)
+                    .execute(conn)?;
+            }
 
             let workspace_window_states = window
                 .repository_workspace_states

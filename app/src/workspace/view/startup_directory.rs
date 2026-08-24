@@ -1,10 +1,13 @@
 //! Logic to determine the working directory for new terminal sessions.
 
 use super::Workspace;
+use crate::project_organization::model::ProjectOrganizationModel;
 use crate::terminal::available_shells::AvailableShell;
 #[cfg(feature = "local_tty")]
 use crate::terminal::available_shells::AvailableShells;
-use crate::terminal::session_settings::{NewSessionSource, SessionSettings};
+use crate::terminal::session_settings::{
+    NewSessionSource, SessionSettings, WorkingDirectoryMode,
+};
 use crate::terminal::ShellLaunchData;
 use std::path::PathBuf;
 use warpui::SingletonEntity;
@@ -92,7 +95,7 @@ impl Workspace {
 
         let is_same_system = same_system(prev_session_shell.as_ref(), chosen_shell, ctx);
 
-        compute_startup_directory_from_prev_session(
+        let from_settings = compute_startup_directory_from_prev_session(
             new_session_source,
             if is_same_system {
                 prev_session_working_directory
@@ -101,7 +104,26 @@ impl Workspace {
             },
             is_wsl,
             ctx,
+        );
+        let mode = SessionSettings::handle(ctx).read(ctx, |settings, _ctx| {
+            settings
+                .working_directory_config
+                .config_for_source(new_session_source)
+                .mode
+        });
+        startup_directory_with_repository_workspace_fallback(
+            from_settings,
+            mode,
+            self.active_repository_workspace_directory(ctx),
         )
+    }
+
+    fn active_repository_workspace_directory(&self, ctx: &AppContext) -> Option<PathBuf> {
+        let workspace_id = self.active_repository_workspace_id()?;
+        ProjectOrganizationModel::as_ref(ctx)
+            .workspace(workspace_id)
+            .map(|workspace| workspace.worktree_path.clone())
+            .filter(|path| path.is_dir())
     }
 }
 
@@ -168,3 +190,23 @@ fn compute_startup_directory_from_prev_session(
             )
     })
 }
+
+/// 空 repository workspace 没有可继承的会话 cwd 时,用 worktree 路径代替 home。
+/// HomeDir / CustomDir 仍按用户设置生效。
+pub(crate) fn startup_directory_with_repository_workspace_fallback(
+    from_settings: Option<PathBuf>,
+    mode: WorkingDirectoryMode,
+    worktree_path: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if from_settings.is_some() {
+        return from_settings;
+    }
+    match mode {
+        WorkingDirectoryMode::PreviousDir => worktree_path,
+        WorkingDirectoryMode::HomeDir | WorkingDirectoryMode::CustomDir => None,
+    }
+}
+
+#[cfg(test)]
+#[path = "startup_directory_tests.rs"]
+mod tests;

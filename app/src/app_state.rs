@@ -407,7 +407,7 @@ pub fn get_app_state(app: &AppContext) -> AppState {
                 quake_mode_id.map(|id| id == window_id).unwrap_or(false),
                 app,
             );
-            if !snapshot.tabs.is_empty() {
+            if should_persist_window_snapshot(&snapshot) {
                 windows.push(snapshot);
             }
         }
@@ -419,6 +419,14 @@ pub fn get_app_state(app: &AppContext) -> AppState {
         block_lists: Default::default(),
         running_mcp_servers: Vec::new(),
     }
+}
+
+/// 判断窗口快照是否值得写入会话恢复。
+///
+/// 无页签的窗口通常应跳过,以免把空窗口写进 SQLite。但选中了 repository
+/// workspace 的空窗口必须保留,重启后才能回到同一个 workspace 的空状态。
+pub(crate) fn should_persist_window_snapshot(snapshot: &WindowSnapshot) -> bool {
+    !snapshot.tabs.is_empty() || snapshot.active_repository_workspace_id.is_some()
 }
 
 #[cfg(test)]

@@ -290,11 +290,13 @@ where
         .and_then(|handle| {
             handle.update(ctx, |workspace, w_ctx| {
                 workspace
-                    .active_tab_pane_group()
-                    .update(w_ctx, |active_group, a_ctx| {
-                        active_group
-                            .active_session_view(a_ctx)
-                            .map(|terminal| terminal.update(a_ctx, update))
+                    .try_active_tab_pane_group()
+                    .and_then(|pane_group| {
+                        pane_group.update(w_ctx, |active_group, a_ctx| {
+                            active_group
+                                .active_session_view(a_ctx)
+                                .map(|terminal| terminal.update(a_ctx, update))
+                        })
                     })
             })
         })
@@ -342,9 +344,11 @@ pub fn get_context_target_terminal_view(
         .and_then(|handle| {
             handle.read(ctx, |workspace, w_ctx| {
                 workspace
-                    .active_tab_pane_group()
-                    .read(w_ctx, |active_group, a_ctx| {
-                        active_group.active_session_view(a_ctx)
+                    .try_active_tab_pane_group()
+                    .and_then(|pane_group| {
+                        pane_group.read(w_ctx, |active_group, a_ctx| {
+                            active_group.active_session_view(a_ctx)
+                        })
                     })
             })
         })

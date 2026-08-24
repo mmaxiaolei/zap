@@ -20726,6 +20726,15 @@ impl TerminalView {
             .map(|path| path.to_string_lossy().into_owned())
     }
 
+    /// 写入会话快照的 cwd:优先用本地 session 校验过的路径,否则回退到 block metadata。
+    pub fn persistable_cwd(&self, ctx: &AppContext) -> Option<String> {
+        persistable_local_cwd(
+            self.pwd_if_local(ctx),
+            self.active_session_is_local(ctx),
+            self.pwd(),
+        )
+    }
+
     pub fn shell_launch_data_if_local(&self, ctx: &AppContext) -> Option<ShellLaunchData> {
         if !FeatureFlag::ShellSelector.is_enabled() {
             return None;
@@ -25776,6 +25785,27 @@ fn is_rich_input_chip_in_cli_toolbar(app: &AppContext) -> bool {
         .any(|item| matches!(item, AgentToolbarItemKind::RichInput))
 }
 
+/// 选择写入会话快照的本地 cwd。
+/// 优先使用经过本地 session 校验的路径;session 尚未就绪或校验失败时,
+/// 回退到 block metadata 中的 pwd,避免退出时把 cwd 存成 NULL。
+pub(crate) fn persistable_local_cwd(
+    verified_local_path: Option<String>,
+    is_local_session: Option<bool>,
+    metadata_pwd: Option<String>,
+) -> Option<String> {
+    if let Some(path) = verified_local_path {
+        return Some(path);
+    }
+    match is_local_session {
+        Some(false) => None,
+        Some(true) | None => metadata_pwd,
+    }
+}
+
 #[cfg(test)]
 #[path = "view_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "persistable_cwd_tests.rs"]
+mod persistable_cwd_tests;

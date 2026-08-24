@@ -1834,6 +1834,9 @@ fn app_callbacks(is_integration_test: bool) -> warpui::platform::AppCallbacks {
                 }
             }
 
+            // save_app 有 250ms debounce。退出前同步 flush,否则最后一次页签/工作区变更不会落盘。
+            crate::workspace::flush_app_snapshot(ctx);
+
             PersistenceWriter::handle(ctx).update(ctx, |writer, _ctx| {
                 writer.terminate();
             });

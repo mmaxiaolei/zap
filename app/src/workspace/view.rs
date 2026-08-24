@@ -3901,9 +3901,8 @@ impl Workspace {
 
     // Returns true if the focused pane is the viewer of a shared session
     pub fn is_shared_session_viewer_focused(&self, app: &AppContext) -> bool {
-        self.active_tab_pane_group()
-            .as_ref(app)
-            .active_session_view(app)
+        self.try_active_tab_pane_group()
+            .and_then(|pane_group| pane_group.as_ref(app).active_session_view(app))
             .is_some_and(|view| {
                 view.as_ref(app)
                     .model
@@ -3914,9 +3913,8 @@ impl Workspace {
     }
 
     pub fn is_conversation_transcript_viewer_focused(&self, app: &AppContext) -> bool {
-        self.active_tab_pane_group()
-            .as_ref(app)
-            .active_session_view(app)
+        self.try_active_tab_pane_group()
+            .and_then(|pane_group| pane_group.as_ref(app).active_session_view(app))
             .is_some_and(|view| {
                 view.as_ref(app)
                     .model
@@ -4136,7 +4134,10 @@ impl Workspace {
 
     fn current_focus_region(&self, ctx: &mut ViewContext<Self>) -> FocusRegion {
         let app = ctx;
-        if self.active_tab_pane_group().is_self_or_child_focused(app) {
+        if self
+            .try_active_tab_pane_group()
+            .is_some_and(|pane_group| pane_group.is_self_or_child_focused(app))
+        {
             return FocusRegion::PaneGroup;
         }
 
@@ -4172,22 +4173,30 @@ impl Workspace {
     }
 
     fn focus_next_pane_in_group(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        let handle = self.active_tab_pane_group().clone();
+        let Some(handle) = self.try_active_tab_pane_group().cloned() else {
+            return false;
+        };
         handle.update(ctx, |pane_group, ctx| pane_group.try_navigate_next(ctx))
     }
 
     fn focus_prev_pane_in_group(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        let handle = self.active_tab_pane_group().clone();
+        let Some(handle) = self.try_active_tab_pane_group().cloned() else {
+            return false;
+        };
         handle.update(ctx, |pane_group, ctx| pane_group.try_navigate_prev(ctx))
     }
 
     fn focus_first_visible_pane_in_group(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        let handle = self.active_tab_pane_group().clone();
+        let Some(handle) = self.try_active_tab_pane_group().cloned() else {
+            return false;
+        };
         handle.update(ctx, |pane_group, ctx| pane_group.focus_first_pane(ctx))
     }
 
     fn focus_last_visible_pane_in_group(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        let handle = self.active_tab_pane_group().clone();
+        let Some(handle) = self.try_active_tab_pane_group().cloned() else {
+            return false;
+        };
         handle.update(ctx, |pane_group, ctx| pane_group.focus_last_pane(ctx))
     }
 
@@ -4200,8 +4209,10 @@ impl Workspace {
     }
 
     fn focus_right_region_entry(&mut self, ctx: &mut ViewContext<Self>) {
-        let group = self.active_tab_pane_group().as_ref(ctx);
-        if group.right_panel_open {
+        if self
+            .try_active_tab_pane_group()
+            .is_some_and(|pane_group| pane_group.as_ref(ctx).right_panel_open)
+        {
             ctx.focus(&self.right_panel_view);
             return;
         }
@@ -4329,7 +4340,9 @@ impl Workspace {
     fn set_pane_dimming_for_region(&mut self, region: FocusRegion, ctx: &mut ViewContext<Self>) {
         let dim_even_if_focused =
             matches!(region, FocusRegion::LeftPanel | FocusRegion::RightPanel);
-        let handle = self.active_tab_pane_group().clone();
+        let Some(handle) = self.try_active_tab_pane_group().cloned() else {
+            return;
+        };
         handle.update(ctx, |pane_group, ctx| {
             pane_group.set_dim_even_if_focused_for_all_panes(dim_even_if_focused, ctx);
         });
@@ -4479,6 +4492,7 @@ impl Workspace {
         );
         self.hovered_tab_index = None;
         self.sync_project_tree(ctx);
+        ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
     }
 
@@ -4613,7 +4627,7 @@ impl Workspace {
             .expect("Active tab index entry should exist")
     }
 
-    fn try_active_tab_pane_group(&self) -> Option<&ViewHandle<PaneGroup>> {
+    pub(crate) fn try_active_tab_pane_group(&self) -> Option<&ViewHandle<PaneGroup>> {
         self.get_pane_group_view(self.active_tab_index)
     }
 
@@ -8580,10 +8594,11 @@ impl Workspace {
     fn open_left_panel(&mut self, ctx: &mut ViewContext<Self>) {
         self.left_panel_open = true;
 
-        let active_pane_group = self.active_tab_pane_group().clone();
-        active_pane_group.update(ctx, |pane_group, ctx| {
-            pane_group.set_left_panel_open(true, ctx);
-        });
+        if let Some(active_pane_group) = self.try_active_tab_pane_group().cloned() {
+            active_pane_group.update(ctx, |pane_group, ctx| {
+                pane_group.set_left_panel_open(true, ctx);
+            });
+        }
 
         ctx.notify();
     }
@@ -8604,16 +8619,21 @@ impl Workspace {
         }
 
         // Only auto-open on terminal tabs, not on settings or other non-terminal tabs
-        let has_terminal = self
-            .active_tab_pane_group()
-            .as_ref(ctx)
-            .has_terminal_panes();
+        let (has_terminal, left_panel_open) = {
+            let Some(active_pane_group) = self.try_active_tab_pane_group() else {
+                return;
+            };
+            (
+                active_pane_group.as_ref(ctx).has_terminal_panes(),
+                active_pane_group.as_ref(ctx).left_panel_open,
+            )
+        };
         if !has_terminal {
             return;
         }
 
         // For first-time-users, auto-open the conversation list for discoverability
-        if !self.active_tab_pane_group().as_ref(ctx).left_panel_open {
+        if !left_panel_open {
             self.open_left_panel(ctx);
         }
         self.left_panel_view.update(ctx, |lp, ctx| {
@@ -8631,10 +8651,11 @@ impl Workspace {
     fn close_left_panel(&mut self, ctx: &mut ViewContext<Self>) {
         self.left_panel_open = false;
 
-        let active_pane_group = self.active_tab_pane_group().clone();
-        active_pane_group.update(ctx, |pane_group, ctx| {
-            pane_group.set_left_panel_open(false, ctx);
-        });
+        if let Some(active_pane_group) = self.try_active_tab_pane_group().cloned() {
+            active_pane_group.update(ctx, |pane_group, ctx| {
+                pane_group.set_left_panel_open(false, ctx);
+            });
+        }
 
         ctx.notify();
     }
@@ -8657,9 +8678,7 @@ impl Workspace {
     fn set_is_agent_management_view_open(&mut self, _is_open: bool, _ctx: &mut ViewContext<Self>) {}
 
     fn toggle_left_panel(&mut self, ctx: &mut ViewContext<Self>) {
-        let active_pane_group = self.active_tab_pane_group().clone();
-
-        let was_open = active_pane_group.read(ctx, |pane_group, _| pane_group.left_panel_open);
+        let was_open = self.is_left_panel_open(ctx);
         let new_state = !was_open;
 
         if new_state {
@@ -8685,8 +8704,13 @@ impl Workspace {
                     // Only recompute default if the current width is at the default value
                     // This preserves the width from the most recent tab
                     if current_width == DEFAULT_LEFT_PANEL_WIDTH {
-                        let has_horizontal_split = active_pane_group
-                            .read(ctx, |pane_group, _| pane_group.has_horizontal_split());
+                        let has_horizontal_split = self
+                            .try_active_tab_pane_group()
+                            .is_some_and(|pane_group| {
+                                pane_group.read(ctx, |pane_group, _| {
+                                    pane_group.has_horizontal_split()
+                                })
+                            });
                         let (left_width, _right_width) =
                             compute_default_panel_widths(ctx, window_id, has_horizontal_split);
                         state.set_size(left_width);
@@ -13164,14 +13188,15 @@ impl Workspace {
     }
 
     pub fn is_left_panel_open(&self, ctx: &AppContext) -> bool {
-        self.active_tab_pane_group().as_ref(ctx).left_panel_open
+        self.try_active_tab_pane_group()
+            .map(|pane_group| pane_group.as_ref(ctx).left_panel_open)
+            .unwrap_or(self.left_panel_open)
     }
 
     fn is_readonly_shared_session_active(&self, ctx: &mut ViewContext<Self>) -> bool {
         let active_terminal_view = self
-            .active_tab_pane_group()
-            .as_ref(ctx)
-            .active_session_view(ctx);
+            .try_active_tab_pane_group()
+            .and_then(|pane_group| pane_group.as_ref(ctx).active_session_view(ctx));
 
         active_terminal_view.is_some_and(|view| {
             view.as_ref(ctx)
@@ -14563,7 +14588,8 @@ impl Workspace {
     }
 
     fn get_active_input_view_handle(&self, app: &AppContext) -> Option<ViewHandle<Input>> {
-        app.view(self.active_tab_pane_group())
+        let pane_group = self.try_active_tab_pane_group()?;
+        app.view(pane_group)
             .active_session_view(app)
             .map(|terminal_view_handle| app.view(&terminal_view_handle).input().clone())
     }
@@ -14572,7 +14598,7 @@ impl Workspace {
         &self,
         app: &AppContext,
     ) -> Option<Arc<FairMutex<TerminalModel>>> {
-        self.active_tab_pane_group()
+        self.try_active_tab_pane_group()?
             .as_ref(app)
             .active_session_terminal_model(app)
     }
@@ -16376,9 +16402,12 @@ impl Workspace {
     }
 
     pub(crate) fn focus_active_tab(&mut self, ctx: &mut ViewContext<Self>) {
-        self.active_tab_pane_group().update(ctx, |tab, ctx| {
+        let Some(pane_group) = self.try_active_tab_pane_group().cloned() else {
+            return;
+        };
+        pane_group.update(ctx, |tab, ctx| {
             tab.focus(ctx);
-        })
+        });
     }
 
     fn focus_theme_chooser(&self, ctx: &mut ViewContext<Self>) {
@@ -19634,9 +19663,8 @@ impl Workspace {
         // If there is no active terminal (like when all Zap windows are
         // minimized), return an event to start syncing.
         let sync_event = self
-            .active_tab_pane_group()
-            .as_ref(ctx)
-            .active_session_view(ctx)
+            .try_active_tab_pane_group()
+            .and_then(|pane_group| pane_group.as_ref(ctx).active_session_view(ctx))
             .map_or(
                 SyncEvent {
                     source_view_id: ctx.view_id(),
@@ -19685,11 +19713,11 @@ impl Workspace {
     }
 
     fn open_left_panel_view(&mut self, action: &LeftPanelAction, ctx: &mut ViewContext<Self>) {
-        if !self.active_tab_pane_group().as_ref(ctx).left_panel_open {
+        if !self.is_left_panel_open(ctx) {
             self.toggle_left_panel(ctx);
         }
 
-        if self.active_tab_pane_group().as_ref(ctx).left_panel_open {
+        if self.is_left_panel_open(ctx) {
             self.left_panel_view.update(ctx, |left_panel, ctx| {
                 left_panel.handle_action_with_force_open(action, false, ctx);
                 left_panel.focus_active_view_on_entry(ctx);
@@ -21579,21 +21607,20 @@ impl View for Workspace {
         }
 
         if self
-            .active_tab_pane_group()
-            .as_ref(app)
-            .any_pane_being_dragged(app)
+            .try_active_tab_pane_group()
+            .is_some_and(|pane_group| pane_group.as_ref(app).any_pane_being_dragged(app))
         {
             context.set.insert("Workspace_PaneDragging");
         }
 
         // TODO: This is temporary. We currently check if any code pane is open where it should
         // really be whether the code pane is opened and focused.
-        if self
-            .active_tab_pane_group()
-            .as_ref(app)
-            .pane_ids()
-            .any(|id| id.is_code_pane())
-        {
+        if self.try_active_tab_pane_group().is_some_and(|pane_group| {
+            pane_group
+                .as_ref(app)
+                .pane_ids()
+                .any(|id| id.is_code_pane())
+        }) {
             context.set.insert("Workspace_TextOpen");
         }
 
@@ -21616,9 +21643,7 @@ impl View for Workspace {
         }
 
         match self.tab_count() {
-            0 => {
-                debug_assert!(false, "Should always be at least one tab");
-            }
+            0 => {}
             1 => {
                 context.set.insert("Workspace_SingleTab");
             }
@@ -21659,9 +21684,9 @@ impl View for Workspace {
 
         if sync_state.is_syncing_all_inputs(self.window_id) {
             context.set.insert(flags::SYNC_ALL_TABS_FLAG);
-        } else if sync_state
-            .is_syncing_all_panes_in_pane_group(self.window_id, self.active_tab_pane_group().id())
-        {
+        } else if self.try_active_tab_pane_group().is_some_and(|pane_group| {
+            sync_state.is_syncing_all_panes_in_pane_group(self.window_id, pane_group.id())
+        }) {
             context.set.insert(flags::SYNC_ALL_PANES_IN_CURRENT_TAB);
         }
 
@@ -21712,9 +21737,8 @@ impl View for Workspace {
         }
 
         if let Some(terminal_view) = self
-            .active_tab_pane_group()
-            .as_ref(app)
-            .focused_session_view(app)
+            .try_active_tab_pane_group()
+            .and_then(|pane_group| pane_group.as_ref(app).focused_session_view(app))
         {
             let terminal_view = terminal_view.as_ref(app);
             if terminal_view.is_long_running() {
