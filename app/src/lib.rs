@@ -727,6 +727,12 @@ fn init_common(launch_mode: &LaunchMode, timer: Option<&mut IntervalTimer>) -> R
     // rlimits.
     resource_limits::adjust_resource_limits();
 
+    // Zap GUI 若从 agent/CI 终端启动,会继承 NO_COLOR=1 / FORCE_COLOR=0。
+    // terminal-server 和 PTY shell 都会接着遗传;chalk/ink (Claude Code 等)
+    // 看到这些变量就把 TUI 画成灰阶。必须在 fork 子进程之前清掉。
+    #[cfg(not(target_family = "wasm"))]
+    sanitize_inherited_tty_color_env();
+
     // Configure rustls to use its default crypto provider.  This MUST be called
     // before making any network requests that use TLS, otherwise rustls will
     // panic.
@@ -736,6 +742,22 @@ fn init_common(launch_mode: &LaunchMode, timer: Option<&mut IntervalTimer>) -> R
         .expect("must be able to initialize crypto provider for TLS support");
 
     Ok(())
+}
+
+/// Drop color-killer env vars inherited from agent/CI terminals before we spawn
+/// the terminal-server or any PTY shells.
+#[cfg(not(target_family = "wasm"))]
+fn sanitize_inherited_tty_color_env() {
+    std::env::remove_var("NO_COLOR");
+    std::env::remove_var("NODE_DISABLE_COLORS");
+    match std::env::var("FORCE_COLOR").ok().as_deref() {
+        Some("0") | Some("false") => std::env::remove_var("FORCE_COLOR"),
+        _ => {}
+    }
+    match std::env::var("CLICOLOR_FORCE").ok().as_deref() {
+        Some("0") | Some("false") => std::env::remove_var("CLICOLOR_FORCE"),
+        _ => {}
+    }
 }
 
 /// Runs the app.

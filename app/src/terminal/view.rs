@@ -237,9 +237,9 @@ use crate::settings::import::view::{SettingsImportEvent, SettingsImportView};
 use crate::settings::{
     AISettings, AISettingsChangedEvent, AliasExpansionSettings, AppEditorSettings,
     BlockVisibilitySettings, BlockVisibilitySettingsChangedEvent, DebugSettings,
-    DebugSettingsChangedEvent, EmacsBindingsSettings, FontSettings, FontSettingsChangedEvent,
-    InputModeSettings, InputModeSettingsChangedEvent, InputSettings, PaneSettings,
-    PaneSettingsChangedEvent, PrivacySettings, SelectionSettings, VimBannerSettings,
+    DebugSettingsChangedEvent, EmacsBindingsSettings, EnforceMinimumContrast, FontSettings,
+    FontSettingsChangedEvent, InputModeSettings, InputModeSettingsChangedEvent, InputSettings,
+    PaneSettings, PaneSettingsChangedEvent, PrivacySettings, SelectionSettings, VimBannerSettings,
 };
 use crate::settings_view::flags;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
@@ -21291,7 +21291,9 @@ impl TerminalView {
         // SizeInfo that reflects the lack of padding on the AltScreenElement directly
         let render_context = self.get_terminal_view_render_context(model, app);
 
-        let enforce_minimum_contrast = *FontSettings::as_ref(app).enforce_minimum_contrast;
+        // 全屏 TUI(vim/claude 等)自己设计调色;对比度校正会把 16 色 ANSI 冲成灰,
+        // 导致 iTerm2 里鲜艳的界面在 Zap 中看起来没有颜色。
+        let enforce_minimum_contrast = EnforceMinimumContrast::Never;
         // Zap:alt-screen 渲染 cli subagent 浮窗的判定从原 `is_agent_in_control()`
         // 放宽到 `is_agent_in_control_or_tagged_in()`。原来的判定只考虑 handoff 路径
         // (agent 拿走 LRC 控制权),漏掉了用户主动 tag-in 路径(`SetInputModeAgent` →
@@ -21485,7 +21487,9 @@ impl TerminalView {
         let terminal_spacing =
             TerminalSettings::as_ref(app).terminal_spacing(appearance.line_height_ratio(), app);
 
-        let enforce_minimum_contrast = *FontSettings::as_ref(app).enforce_minimum_contrast;
+        // claude/vim 等 TUI 多数不进 alt-screen,而是画在 command block 里。
+        // 对比度校正会把 16 色 ANSI(包括 Claude 吉祥物的橙色)冲成接近前景灰白。
+        let enforce_minimum_contrast = EnforceMinimumContrast::Never;
 
         let mut element = BlockListElement::new(
             self.model.clone(),
