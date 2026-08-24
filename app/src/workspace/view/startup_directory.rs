@@ -9,7 +9,7 @@ use crate::terminal::session_settings::{
     NewSessionSource, SessionSettings, WorkingDirectoryMode,
 };
 use crate::terminal::ShellLaunchData;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use warpui::SingletonEntity;
 use warpui::{AppContext, ViewContext, WindowId};
 
@@ -191,20 +191,32 @@ fn compute_startup_directory_from_prev_session(
     })
 }
 
-/// 空 repository workspace 没有可继承的会话 cwd 时,用 worktree 路径代替 home。
-/// HomeDir / CustomDir 仍按用户设置生效。
+/// repository workspace 中新建终端的启动目录。
+///
+/// PreviousDir 仅在上一会话 cwd 位于 worktree 内时继承;否则(包括空 workspace、
+/// 或从 ~ 继承而来的页签)使用 worktree 路径。CustomDir 有值时仍尊重用户设置。
 pub(crate) fn startup_directory_with_repository_workspace_fallback(
     from_settings: Option<PathBuf>,
     mode: WorkingDirectoryMode,
     worktree_path: Option<PathBuf>,
 ) -> Option<PathBuf> {
-    if from_settings.is_some() {
+    let Some(worktree_path) = worktree_path else {
         return from_settings;
-    }
+    };
     match mode {
-        WorkingDirectoryMode::PreviousDir => worktree_path,
-        WorkingDirectoryMode::HomeDir | WorkingDirectoryMode::CustomDir => None,
+        WorkingDirectoryMode::CustomDir => from_settings.or(Some(worktree_path)),
+        WorkingDirectoryMode::PreviousDir | WorkingDirectoryMode::HomeDir => {
+            if cwd_is_inside_worktree(from_settings.as_deref(), &worktree_path) {
+                from_settings
+            } else {
+                Some(worktree_path)
+            }
+        }
     }
+}
+
+fn cwd_is_inside_worktree(cwd: Option<&Path>, worktree: &Path) -> bool {
+    cwd.is_some_and(|cwd| cwd.starts_with(worktree))
 }
 
 #[cfg(test)]
