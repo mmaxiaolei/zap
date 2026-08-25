@@ -28,7 +28,9 @@ use crate::{
     server::ids::ClientId,
     server_time::ServerTimestamp,
     tab::SelectedTabColor,
+    terminal::cli_agent_resume::CliAgentResumeSnapshot,
     terminal::model::block::SerializedBlock,
+    terminal::CLIAgent,
     terminal::ShellLaunchData,
 };
 
@@ -263,6 +265,7 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
                     active_profile_id: None,
                     conversation_ids_to_restore: vec![],
                     active_conversation_id: None,
+                    cli_agent_resume: None,
                 }),
             }),
             default_directory_color: None,
@@ -1335,6 +1338,7 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
                         active_profile_id: None,
                         conversation_ids_to_restore: vec![],
                         active_conversation_id: None,
+                        cli_agent_resume: None,
                     }),
                 }),
                 default_directory_color: None,
@@ -1380,6 +1384,90 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
     assert_eq!(
         custom_vertical_tabs_title.as_deref(),
         Some("Production API")
+    );
+}
+
+#[test]
+fn test_sqlite_round_trips_cli_agent_resume() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let resume = CliAgentResumeSnapshot {
+        agent: CLIAgent::Claude,
+        session_id: Some("abc-123".to_owned()),
+        original_command: Some("claude --dangerously-skip-permissions".to_owned()),
+    };
+    let app_state = AppState {
+        windows: vec![WindowSnapshot {
+            tabs: vec![TabSnapshot {
+                repository_workspace_id: None,
+                custom_title: None,
+                root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+                    is_focused: true,
+                    custom_vertical_tabs_title: None,
+                    contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                        uuid: vec![7],
+                        cwd: Some("/tmp/proj".to_string()),
+                        shell_launch_data: None,
+                        is_active: true,
+                        is_read_only: false,
+                        input_config: None,
+                        llm_model_override: None,
+                        active_profile_id: None,
+                        conversation_ids_to_restore: vec![],
+                        active_conversation_id: None,
+                        cli_agent_resume: Some(resume.clone()),
+                    }),
+                }),
+                default_directory_color: None,
+                selected_color: SelectedTabColor::default(),
+                left_panel: None,
+                right_panel: None,
+            }],
+            active_tab_index: 0,
+            active_repository_workspace_id: None,
+            repository_workspace_states: Vec::new(),
+            bounds: None,
+            fullscreen_state: Default::default(),
+            quake_mode: false,
+            universal_search_width: None,
+            warp_ai_width: None,
+            voltron_width: None,
+            warp_drive_index_width: None,
+            left_panel_open: false,
+            vertical_tabs_panel_open: false,
+            left_panel_width: None,
+            right_panel_width: None,
+            agent_management_filters: None,
+            theme_override: None,
+        }],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    let restored = read_sqlite_data(&mut conn, None)
+        .expect("app state should load")
+        .app_state;
+
+    let PaneNodeSnapshot::Leaf(LeafSnapshot {
+        contents: LeafContents::Terminal(terminal),
+        ..
+    }) = &restored.windows[0].tabs[0].root
+    else {
+        panic!("Expected terminal pane leaf");
+    };
+    assert_eq!(terminal.cli_agent_resume.as_ref(), Some(&resume));
+    assert_eq!(
+        terminal
+            .cli_agent_resume
+            .as_ref()
+            .and_then(|snapshot| snapshot.resume_command())
+            .as_deref(),
+        Some("claude --dangerously-skip-permissions --resume abc-123"),
     );
 }
 

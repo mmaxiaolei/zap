@@ -19,6 +19,7 @@ use crate::root_view::quake_mode_window_id;
 use crate::server::ids::SyncId;
 use crate::settings_view::SettingsSection;
 use crate::tab::SelectedTabColor;
+use crate::terminal::cli_agent_resume::CliAgentResumeSnapshot;
 use crate::terminal::ShellLaunchData;
 use crate::themes::theme::{AnsiColorIdentifier, ThemeKind};
 use crate::workspace::view::left_panel::ToolPanelView;
@@ -236,6 +237,8 @@ pub struct TerminalPaneSnapshot {
     /// The active conversation ID if the agent view was open in fullscreen mode.
     /// When `Some`, the agent view should be restored to fullscreen for this conversation.
     pub active_conversation_id: Option<AIConversationId>,
+    /// 退出时仍在跑的 CLI agent 会话,重启后用来自动 resume。
+    pub cli_agent_resume: Option<CliAgentResumeSnapshot>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

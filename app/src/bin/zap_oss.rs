@@ -43,7 +43,10 @@ fn main() -> Result<()> {
     }
     // zap-oss 是本地人工测试入口; 显式启用仍处于 Dogfood 阶段的项目组织功能。
     // 其他发布通道继续只由其各自的 feature flag 列表决定是否开放。
-    state = state.with_additional_features(&[FeatureFlag::RepositoryWorkspaces]);
+    state = state.with_additional_features(&[
+        FeatureFlag::RepositoryWorkspaces,
+        FeatureFlag::CliAgentSessionResume,
+    ]);
     // 始终启用 IME marked-text 渲染:winit 的 IME 路径在 macOS / Windows 都支持,
     // 但若不在此处显式开启,Zap 会把 preedit / 输入合成更新整体丢弃,只剩 OS 的候选窗
     // 可见 —— 在 Windows 上对日文 / 中文 / 韩文输入都属于实质性损坏。
