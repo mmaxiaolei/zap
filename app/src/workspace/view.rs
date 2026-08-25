@@ -4,6 +4,7 @@ pub mod conversation_list;
 mod crash_recovery;
 pub mod global_search;
 pub(crate) mod launch_modal;
+pub(crate) mod full_height_left_panel_chrome;
 pub(crate) mod left_panel;
 pub(crate) mod onboarding;
 pub(crate) mod right_panel;
@@ -518,7 +519,7 @@ pub const TAB_BAR_HEIGHT: f32 = 34.;
 pub const PANEL_HEADER_HEIGHT: f32 = TAB_BAR_HEIGHT;
 /// The hover area height for states where the tab bar is revealed on hover.
 const TAB_BAR_HOVER_HEIGHT: f32 = 12.;
-const TAB_BAR_PADDING_LEFT: f32 = 4.;
+pub(crate) const TAB_BAR_PADDING_LEFT: f32 = 4.;
 const TAB_BAR_PADDING_RIGHT: f32 = 8.;
 const TITLE_BAR_SEARCH_BAR_MAX_WIDTH: f32 = 320.;
 const TITLE_BAR_SEARCH_BAR_SLOT_PADDING: f32 = 8.;
