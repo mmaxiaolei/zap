@@ -2476,5 +2476,44 @@ fn compute_tab_bar_left_padding_omits_macos_traffic_lights_when_repository_chrom
     });
 }
 
+#[test]
+fn handle_window_state_change_resyncs_left_panel_titlebar_inset_on_fullscreen() {
+    let _flag = FeatureFlag::RepositoryWorkspaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_left_panel(ctx);
+            let expected_inset = workspace
+                .left_panel_view
+                .as_ref(ctx)
+                .titlebar_leading_inset();
+            workspace.left_panel_view.update(ctx, |left_panel, ctx| {
+                left_panel.set_titlebar_leading_inset(expected_inset + 64., ctx);
+            });
+
+            let mut previous = WindowManager::as_ref(ctx).state().clone();
+            let mut current = previous.clone();
+            previous.is_active_window_fullscreen = Some(false);
+            current.is_active_window_fullscreen = Some(true);
+            workspace.handle_window_state_change(
+                &StateEvent::ValueChanged { current, previous },
+                ctx,
+            );
+
+            assert_eq!(
+                workspace
+                    .left_panel_view
+                    .as_ref(ctx)
+                    .titlebar_leading_inset(),
+                expected_inset,
+                "fullscreen change should rewrite the left panel titlebar inset"
+            );
+        });
+    });
+}
+
 // 已删:test_open_ambient_agent_setup_guide_action_opens_management_view_and_is_idempotent
 // agent_management_view 字段连同 agent setup guide 整片功能在 Phase 2c 已删。

@@ -16159,6 +16159,8 @@ impl Workspace {
             StateEvent::ValueChanged { current, previous } => {
                 // Re-render if fullscreen state for active window has changed.
                 if current.is_active_window_fullscreen != previous.is_active_window_fullscreen {
+                    // 全屏进出后红绿灯避让从 TabBar 转到侧栏头（或反过来），必须重写 inset。
+                    self.sync_left_panel_titlebar_inset(ctx);
                     ctx.notify();
                 } else if WindowManager::did_window_change_focus(self.window_id, current, previous)
                 {
