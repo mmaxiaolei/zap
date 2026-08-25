@@ -2518,6 +2518,47 @@ fn handle_window_state_change_resyncs_left_panel_titlebar_inset_on_fullscreen() 
     });
 }
 
+fn layout_workspace_scene(
+    app: &mut App,
+    workspace: &ViewHandle<Workspace>,
+    window_id: WindowId,
+) -> (
+    pathfinder_geometry::rect::RectF,
+    Option<pathfinder_geometry::rect::RectF>,
+) {
+    let root_view_id = app
+        .root_view_id(window_id)
+        .expect("window should have a root view");
+    // Presenter 只 layout `updated` 里的 View；LeftPanel 是 ChildView，不加入则尺寸为 0。
+    let left_panel_view_id = workspace.read(app, |workspace, _| workspace.left_panel_view.id());
+    let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+    app.update({
+        let presenter = presenter.clone();
+        let workspace = workspace.clone();
+        move |ctx| {
+            presenter.borrow_mut().invalidate(
+                WindowInvalidation {
+                    updated: [root_view_id, workspace.id(), left_panel_view_id]
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
+                },
+                ctx,
+            );
+            presenter
+                .borrow_mut()
+                .build_scene(vec2f(1200., 800.), 1., None, ctx);
+        }
+    });
+    let cache = presenter.borrow();
+    let cache = cache.position_cache();
+    let tab_bar = cache
+        .get_position(TAB_BAR_POSITION_ID)
+        .expect("tab bar should have a saved position");
+    let left_panel = cache.get_position(LEFT_PANEL_POSITION_ID);
+    (tab_bar, left_panel)
+}
+
 #[test]
 fn full_height_left_panel_places_tab_bar_in_the_content_column() {
     let _flag = FeatureFlag::RepositoryWorkspaces.override_enabled(true);
@@ -2526,53 +2567,88 @@ fn full_height_left_panel_places_tab_bar_in_the_content_column() {
         initialize_app(&mut app);
         let workspace = mock_workspace(&mut app);
         let window_id = workspace.read(&app, |workspace, _| workspace.window_id);
-        let root_view_id = app
-            .root_view_id(window_id)
-            .expect("window should have a root view");
 
         workspace.update(&mut app, |workspace, ctx| {
             workspace.open_left_panel(ctx);
         });
 
-        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
-        app.update({
-            let presenter = presenter.clone();
-            let workspace = workspace.clone();
-            move |ctx| {
-                presenter.borrow_mut().invalidate(
-                    WindowInvalidation {
-                        updated: [root_view_id, workspace.id()].into_iter().collect(),
-                        ..Default::default()
-                    },
-                    ctx,
-                );
-                presenter
-                    .borrow_mut()
-                    .build_scene(vec2f(1200., 800.), 1., None, ctx);
+        let (tab_bar, left_panel) = layout_workspace_scene(&mut app, &workspace, window_id);
+        let left_panel = left_panel.expect("left panel should have a saved position");
 
-                let tab_bar = presenter
-                    .borrow()
-                    .position_cache()
-                    .get_position(TAB_BAR_POSITION_ID)
-                    .expect("tab bar should have a saved position");
-                let left_panel = presenter
-                    .borrow()
-                    .position_cache()
-                    .get_position(LEFT_PANEL_POSITION_ID)
-                    .expect("left panel should have a saved position");
+        assert!(
+            tab_bar.min_x() >= left_panel.max_x() - 2.,
+            "tab bar should sit to the right of the full-height left panel, tab_bar={tab_bar:?} left_panel={left_panel:?}"
+        );
+        assert!(
+            (tab_bar.min_y() - left_panel.min_y()).abs() < 2.,
+            "tab bar and left panel should share the window top, tab_bar_y={} left_panel_y={}",
+            tab_bar.min_y(),
+            left_panel.min_y()
+        );
+    });
+}
 
-                assert!(
-                    tab_bar.min_x() >= left_panel.max_x() - 2.,
-                    "tab bar should sit to the right of the full-height left panel, tab_bar={tab_bar:?} left_panel={left_panel:?}"
-                );
-                assert!(
-                    (tab_bar.min_y() - left_panel.min_y()).abs() < 2.,
-                    "tab bar and left panel should share the window top, tab_bar_y={} left_panel_y={}",
-                    tab_bar.min_y(),
-                    left_panel.min_y()
-                );
-            }
+#[test]
+fn full_height_chrome_keeps_content_column_tab_bar_when_workspace_has_no_tabs() {
+    let _flag = FeatureFlag::RepositoryWorkspaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let window_id = workspace.read(&app, |workspace, _| workspace.window_id);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_left_panel(ctx);
+            // close_tab 在最后一页且 CloseWindow 关闭时会拒绝关闭，测试直接清空集合以走到空态渲染。
+            workspace.tabs.clear();
+            workspace.active_tab_index = 0;
         });
+
+        let (tab_bar, left_panel) = layout_workspace_scene(&mut app, &workspace, window_id);
+        let left_panel = left_panel.expect("left panel should stay full-height with no tabs");
+        assert!(
+            tab_bar.min_x() >= left_panel.max_x() - 2.,
+            "empty workspace should still keep the tab bar in the content column"
+        );
+    });
+}
+
+#[test]
+fn closing_left_panel_restores_full_width_tab_bar() {
+    let _flag = FeatureFlag::RepositoryWorkspaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let window_id = workspace.read(&app, |workspace, _| workspace.window_id);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_left_panel(ctx);
+        });
+        let (open_tab_bar, open_left) = layout_workspace_scene(&mut app, &workspace, window_id);
+        assert!(
+            open_left.is_some(),
+            "open left panel should publish LEFT_PANEL_POSITION_ID"
+        );
+        assert!(
+            open_tab_bar.min_x() > 40.,
+            "open chrome should push the tab bar rightward"
+        );
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.close_left_panel(ctx);
+        });
+        let (closed_tab_bar, closed_left) = layout_workspace_scene(&mut app, &workspace, window_id);
+        assert!(
+            closed_left.is_none(),
+            "closed left panel should not keep the lifted SavePosition"
+        );
+        assert!(
+            closed_tab_bar.min_x() < open_tab_bar.min_x(),
+            "closing the left panel should restore a full-width tab bar, open_x={} closed_x={}",
+            open_tab_bar.min_x(),
+            closed_tab_bar.min_x()
+        );
     });
 }
 
