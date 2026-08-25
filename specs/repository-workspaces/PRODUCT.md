@@ -35,7 +35,7 @@ Figma: none provided. 交互和布局以本规格确认过程中批准的视觉�
 
 ## Behavior
 
-1. 当 `RepositoryWorkspaces` Feature Flag 启用时，主窗口左侧显示 repository → workspace 双层树；右侧继续使用顶部现有 TabBar。项目组织模式不显示 Vertical Tabs，也不修改用户原有的 Vertical Tabs 设置值。
+1. 当 `RepositoryWorkspaces` Feature Flag 启用时，主窗口左侧显示 repository → workspace 双层树。左侧 ToolsPanel 打开时，侧栏通顶，TabBar 只出现在右侧内容列；侧栏收起时 TabBar 恢复整窗通栏。项目组织模式不显示 Vertical Tabs，也不修改用户原有的 Vertical Tabs 设置值。
 
 2. 当 Feature Flag 关闭时，用户继续看到原有项目和页签体验。关闭 Flag 不删除已经保存的 repository、workspace 或页签归属数据。
 

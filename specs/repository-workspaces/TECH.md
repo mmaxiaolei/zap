@@ -153,6 +153,22 @@ active_repository_workspace_id: Option<RepositoryWorkspaceId>
 
 `WindowSnapshot` 扩展为包含各 workspace 的有序 TabSnapshot 集合和活动索引。SQLite 保存时扁平写入 tabs 行，并直接写 `repository_workspace_id`；恢复时按该字段重新分组。不得建立引用重建 tab id 的长期绑定表。
 
+### 6a. 窗口 chrome 装配
+
+`FeatureFlag::RepositoryWorkspaces` 开启且 `Workspace::is_left_panel_open` 为真、且不是简化 WASM 标题栏 / vertical tabs / mobile overlay 时，`Workspace::render` 使用：
+
+```
+row
+  ├── ToolsPanel（通顶，SavePosition `LEFT_PANEL_POSITION_ID`）
+  └── column
+        ├── TabBar（`TAB_BAR_POSITION_ID`）
+        └── 其余 panels（header items 已去掉 ToolsPanel）
+```
+
+判断与 padding 公式在 `app/src/workspace/view/full_height_left_panel_chrome.rs`。macOS 红绿灯避让从 TabBar 改到 `LeftPanelView.titlebar_leading_inset`；Windows/Linux 右侧红绿灯仍由 TabBar 右侧 padding 承担。`titlebar_height` 仍是整窗顶带 `TOTAL_TAB_BAR_HEIGHT`。
+
+侧栏收起或 Flag 关闭时恢复 `column(TabBar, panels)`。
+
 ### 6. 左侧树与弹窗
 
 项目组织面板复用现有可调整宽度的左侧区域。Flag 启用时不渲染 Vertical Tabs，但不修改 `TabSettings::use_vertical_tabs` 的持久值；Flag 关闭后用户原设置恢复生效。
