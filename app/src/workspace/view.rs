@@ -544,6 +544,9 @@ const THEME_CHOOSER_RATIO: f32 = 3.5;
 /// Save position for the tab bar.
 pub(crate) const TAB_BAR_POSITION_ID: &str = "workspace_view:tab_bar";
 
+/// Save position for the full-height left tools panel.
+pub(crate) const LEFT_PANEL_POSITION_ID: &str = "workspace_view:left_panel";
+
 /// Save position for the vertical tabs panel.
 /// HOA onboarding callouts anchor relative to this position, so whichever code
 /// path renders the vertical tabs panel must wrap it in a `SavePosition` with
@@ -21853,20 +21856,52 @@ impl View for Workspace {
                 .with_background(util::get_terminal_background_fill(self.window_id, app))
                 .finish()
         } else {
-            let mut outer_column = Flex::column();
-            if tab_bar_mode == ShowTabBar::Stacked {
-                outer_column.add_child(self.render_tab_bar(self.tab_fixed_width, appearance, app));
-            }
             let content = if self.tabs.is_empty() {
                 self.render_empty_workspace_content(app, appearance)
             } else {
                 self.render_banner_and_active_tab(app, appearance)
             };
             let panels_row = self.render_panels(app, Shrinkable::new(1.0, content).finish(), false);
-            outer_column.add_child(Shrinkable::new(1.0, panels_row).finish());
-            Container::new(outer_column.finish())
-                .with_background(util::get_terminal_background_fill(self.window_id, app))
+            let tab_bar = if tab_bar_mode == ShowTabBar::Stacked {
+                Some(self.render_tab_bar(self.tab_fixed_width, appearance, app))
+            } else {
+                None
+            };
+            let background = util::get_terminal_background_fill(self.window_id, app);
+
+            if self.use_full_height_left_panel_chrome(app) {
+                let mut content_column = Flex::column().with_main_axis_size(MainAxisSize::Max);
+                if let Some(tab_bar) = tab_bar {
+                    content_column.add_child(tab_bar);
+                }
+                content_column.add_child(Shrinkable::new(1.0, panels_row).finish());
+
+                let left_panel = SavePosition::new(
+                    ChildView::new(&self.left_panel_view).finish(),
+                    LEFT_PANEL_POSITION_ID,
+                )
+                .finish();
+
+                Container::new(
+                    Flex::row()
+                        .with_main_axis_size(MainAxisSize::Max)
+                        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                        .with_child(left_panel)
+                        .with_child(Shrinkable::new(1.0, content_column.finish()).finish())
+                        .finish(),
+                )
+                .with_background(background)
                 .finish()
+            } else {
+                let mut outer_column = Flex::column();
+                if let Some(tab_bar) = tab_bar {
+                    outer_column.add_child(tab_bar);
+                }
+                outer_column.add_child(Shrinkable::new(1.0, panels_row).finish());
+                Container::new(outer_column.finish())
+                    .with_background(background)
+                    .finish()
+            }
         };
         let mut stack = Stack::new();
 

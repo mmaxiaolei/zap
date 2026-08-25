@@ -29,7 +29,9 @@ use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 use watcher::HomeDirectoryWatcher;
 
@@ -71,9 +73,10 @@ use crate::{experiments, workspace, GlobalResourceHandlesProvider};
 use crate::terminal::shared_session::protocol::SessionId;
 use ai::project_context::model::ProjectContextModel;
 use pane_group::{NotebookPane, PaneState, SplitPaneState, TerminalPaneId};
+use pathfinder_geometry::vector::vec2f;
 use terminal::view::ActiveSessionState;
 use warpui::AddSingletonModel;
-use warpui::{platform::WindowStyle, App, ViewHandle};
+use warpui::{platform::WindowStyle, App, Presenter, ViewHandle, WindowInvalidation};
 
 fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
@@ -2511,6 +2514,64 @@ fn handle_window_state_change_resyncs_left_panel_titlebar_inset_on_fullscreen() 
                 expected_inset,
                 "fullscreen change should rewrite the left panel titlebar inset"
             );
+        });
+    });
+}
+
+#[test]
+fn full_height_left_panel_places_tab_bar_in_the_content_column() {
+    let _flag = FeatureFlag::RepositoryWorkspaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let window_id = workspace.read(&app, |workspace, _| workspace.window_id);
+        let root_view_id = app
+            .root_view_id(window_id)
+            .expect("window should have a root view");
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_left_panel(ctx);
+        });
+
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+        app.update({
+            let presenter = presenter.clone();
+            let workspace = workspace.clone();
+            move |ctx| {
+                presenter.borrow_mut().invalidate(
+                    WindowInvalidation {
+                        updated: [root_view_id, workspace.id()].into_iter().collect(),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                presenter
+                    .borrow_mut()
+                    .build_scene(vec2f(1200., 800.), 1., None, ctx);
+
+                let tab_bar = presenter
+                    .borrow()
+                    .position_cache()
+                    .get_position(TAB_BAR_POSITION_ID)
+                    .expect("tab bar should have a saved position");
+                let left_panel = presenter
+                    .borrow()
+                    .position_cache()
+                    .get_position(LEFT_PANEL_POSITION_ID)
+                    .expect("left panel should have a saved position");
+
+                assert!(
+                    tab_bar.min_x() >= left_panel.max_x() - 2.,
+                    "tab bar should sit to the right of the full-height left panel, tab_bar={tab_bar:?} left_panel={left_panel:?}"
+                );
+                assert!(
+                    (tab_bar.min_y() - left_panel.min_y()).abs() < 2.,
+                    "tab bar and left panel should share the window top, tab_bar_y={} left_panel_y={}",
+                    tab_bar.min_y(),
+                    left_panel.min_y()
+                );
+            }
         });
     });
 }
