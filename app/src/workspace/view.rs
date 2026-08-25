@@ -1061,6 +1061,54 @@ impl Workspace {
         )
     }
 
+    fn use_full_height_left_panel_chrome(&self, app: &AppContext) -> bool {
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                let simplified_wasm_tab_bar =
+                    self.get_simplified_wasm_tab_bar_content(app).is_some();
+            } else {
+                let simplified_wasm_tab_bar = false;
+            }
+        }
+
+        full_height_left_panel_chrome::use_full_height_left_panel_chrome(
+            FeatureFlag::RepositoryWorkspaces.is_enabled(),
+            self.is_left_panel_open(app),
+            simplified_wasm_tab_bar,
+            Self::vertical_tabs_active(app),
+            warpui::platform::is_mobile_device(),
+        )
+    }
+
+    fn left_traffic_light_width(&self, ctx: &AppContext) -> f32 {
+        let zoom_factor = WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor();
+        traffic_light_data(ctx, self.window_id)
+            .as_ref()
+            .filter(|data| data.side == TrafficLightSide::Left)
+            .map(|data| data.width(zoom_factor))
+            .unwrap_or(0.)
+    }
+
+    fn is_macos_fullscreen(&self, ctx: &AppContext) -> bool {
+        let is_window_fullscreen = ctx
+            .windows()
+            .platform_window(self.window_id)
+            .map(|window| window.fullscreen_state() == FullscreenState::Fullscreen)
+            .unwrap_or(false);
+        is_window_fullscreen && cfg!(target_os = "macos")
+    }
+
+    fn sync_left_panel_titlebar_inset(&self, ctx: &mut ViewContext<Self>) {
+        let inset = full_height_left_panel_chrome::left_panel_titlebar_leading_inset(
+            self.use_full_height_left_panel_chrome(ctx),
+            self.is_macos_fullscreen(ctx),
+            self.left_traffic_light_width(ctx),
+        );
+        self.left_panel_view.update(ctx, |left_panel, ctx| {
+            left_panel.set_titlebar_leading_inset(inset, ctx);
+        });
+    }
+
     fn tab_rename_editor_font_size(ctx: &AppContext, appearance: &Appearance) -> f32 {
         if Self::vertical_tabs_active(ctx) {
             match *TabSettings::as_ref(ctx)
@@ -8601,6 +8649,7 @@ impl Workspace {
             });
         }
 
+        self.sync_left_panel_titlebar_inset(ctx);
         ctx.notify();
     }
 
@@ -8658,6 +8707,7 @@ impl Workspace {
             });
         }
 
+        self.sync_left_panel_titlebar_inset(ctx);
         ctx.notify();
     }
 
@@ -12645,6 +12695,8 @@ impl Workspace {
                 .as_ref()
                 .set_titlebar_height(scaled_tab_bar_height);
         }
+
+        self.sync_left_panel_titlebar_inset(ctx);
     }
 
     fn request_notification_permissions_if_needed(&mut self, ctx: &mut ViewContext<Self>) {
@@ -17754,26 +17806,12 @@ impl Workspace {
     }
 
     fn compute_tab_bar_left_padding(&self, ctx: &AppContext) -> f32 {
-        let zoom_factor = WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor();
-        let traffic_light_data = traffic_light_data(ctx, self.window_id);
-        let is_window_fullscreen = ctx
-            .windows()
-            .platform_window(self.window_id)
-            .map(|window| window.fullscreen_state() == FullscreenState::Fullscreen)
-            .unwrap_or(false);
-        if self.current_workspace_state.is_left_panel_open() {
-            0.
-        } else if is_window_fullscreen && cfg!(target_os = "macos") {
-            // Full-screen mode on MacOS does not need as much padding (traffic lights are hidden).
-            TAB_BAR_PADDING_LEFT
-        } else {
-            traffic_light_data
-                .as_ref()
-                .filter(|data| data.side == TrafficLightSide::Left)
-                .map(|data| data.width(zoom_factor))
-                .unwrap_or(0.)
-                + 16.
-        }
+        full_height_left_panel_chrome::tab_bar_leading_padding(
+            self.use_full_height_left_panel_chrome(ctx),
+            self.current_workspace_state.is_left_panel_open(),
+            self.is_macos_fullscreen(ctx),
+            self.left_traffic_light_width(ctx),
+        )
     }
 
     /// Renders the tab bar contents, wrapped in hover and drag-drop behaviors.
@@ -18384,7 +18422,11 @@ impl Workspace {
         let mut main_content = Flex::row();
         let mut prev_panel_added = false;
         if !Self::vertical_tabs_active(app) {
-            for item in config.left_items() {
+            let full_height_chrome = self.use_full_height_left_panel_chrome(app);
+            for item in full_height_left_panel_chrome::header_items_excluding_lifted_tools_panel(
+                config.left_items(),
+                full_height_chrome,
+            ) {
                 Self::add_panel_with_separator(
                     &mut main_content,
                     &mut prev_panel_added,
@@ -18437,7 +18479,11 @@ impl Workspace {
                 .header_toolbar_chip_selection
                 .clone();
             let mut prev_panel_added = false;
-            for item in config.left_items() {
+            let full_height_chrome = self.use_full_height_left_panel_chrome(app);
+            for item in full_height_left_panel_chrome::header_items_excluding_lifted_tools_panel(
+                config.left_items(),
+                full_height_chrome,
+            ) {
                 Self::add_panel_with_separator(
                     &mut main_content,
                     &mut prev_panel_added,
@@ -18455,7 +18501,10 @@ impl Workspace {
                 prev_panel_added = true;
             }
 
-            for item in config.right_items() {
+            for item in full_height_left_panel_chrome::header_items_excluding_lifted_tools_panel(
+                config.right_items(),
+                full_height_chrome,
+            ) {
                 Self::add_panel_with_separator(
                     &mut main_content,
                     &mut prev_panel_added,

@@ -77,6 +77,17 @@ use warpui::{platform::WindowStyle, App, ViewHandle};
 
 fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
+    crate::settings::language::LanguageSettings::register(app);
+    crate::settings::network::NetworkSettings::register(app);
+    crate::settings::AutoupdateSettings::register(app);
+    crate::settings::WarpDrivePrivacySettings::register(app);
+    crate::settings::app_installation_detection::UserAppInstallDetectionSettings::register(app);
+    crate::settings::CloudSyncSettings::register(app);
+    crate::workflows::aliases::WorkflowAliases::register(app);
+    let temp_ssh_db = std::env::temp_dir().join("warp_workspace_view_test.sqlite");
+    let _ = warp_ssh_manager::set_database_path(temp_ssh_db);
+    app.add_singleton_model(crate::settings::network_secrets::ProxyCredentials::new);
+    app.add_singleton_model(crate::settings::CloudSyncTokenStore::new);
 
     // Add the necessary singleton models to the App
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
@@ -114,7 +125,9 @@ fn initialize_app(app: &mut App) {
     // Zap(本地化,Phase 5):`PreferencesSyncer` 已物理删除,test singleton 不再需要。
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+    app.add_singleton_model(crate::terminal::cli_agent::CLIAgentInstallModel::new);
     app.add_singleton_model(AgentConversationsModel::new);
+    app.add_singleton_model(crate::ai::agent_providers::AgentProviderSecrets::new);
     app.add_singleton_model(LLMPreferences::new);
     app.add_singleton_model(|_| SettingsPaneManager::new());
     app.add_singleton_model(|_| AIFactManager::new());
@@ -145,6 +158,15 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(DefaultTerminal::new);
     app.add_singleton_model(|_| IgnoredSuggestionsModel::new(vec![]));
     app.add_singleton_model(|_| crate::code_review::git_status_update::GitStatusUpdateModel::new());
+    app.add_singleton_model(|ctx| {
+        crate::project_organization::model::ProjectOrganizationModel::try_new(
+            vec![],
+            vec![],
+            RepositoryPersistence::new(None),
+            ctx,
+        )
+        .expect("project organization model should initialize")
+    });
     app.add_singleton_model(remote_server::manager::RemoteServerManager::new);
 
     #[cfg(feature = "local_fs")]
@@ -2428,6 +2450,28 @@ fn test_standard_tab_context_menu_shows_hover_only_tab_bar() {
                 Some((0, TabContextMenuAnchor::Pointer(Vector2F::zero())));
 
             assert_eq!(workspace.tab_bar_mode(ctx), ShowTabBar::Stacked);
+        });
+    });
+}
+
+#[test]
+fn compute_tab_bar_left_padding_omits_macos_traffic_lights_when_repository_chrome_is_on() {
+    let _flag = FeatureFlag::RepositoryWorkspaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_left_panel(ctx);
+            assert!(
+                workspace.use_full_height_left_panel_chrome(ctx),
+                "repository workspaces with an open left panel should use full-height chrome"
+            );
+            assert_eq!(
+                workspace.compute_tab_bar_left_padding(ctx),
+                super::TAB_BAR_PADDING_LEFT
+            );
         });
     });
 }

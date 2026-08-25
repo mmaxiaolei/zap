@@ -231,6 +231,7 @@ pub struct LeftPanelView {
     working_directories_model: ModelHandle<WorkingDirectoriesModel>,
     is_agent_management_view_open: bool,
     panel_position: super::PanelPosition,
+    titlebar_leading_inset: f32,
 }
 
 fn toolbelt_tooltip_keybinding(binding_names: &[&'static str], app: &AppContext) -> Option<String> {
@@ -422,10 +423,22 @@ impl LeftPanelView {
             working_directories_model,
             is_agent_management_view_open: false,
             panel_position: super::PanelPosition::Left,
+            titlebar_leading_inset: 0.,
         };
         view.update_button_active_states();
 
         view
+    }
+
+    pub fn set_titlebar_leading_inset(&mut self, inset: f32, ctx: &mut ViewContext<Self>) {
+        if (self.titlebar_leading_inset - inset).abs() > f32::EPSILON {
+            self.titlebar_leading_inset = inset;
+            ctx.notify();
+        }
+    }
+
+    pub fn titlebar_leading_inset(&self) -> f32 {
+        self.titlebar_leading_inset
     }
 
     pub fn set_agent_management_view_open(&mut self, is_open: bool, ctx: &mut ViewContext<Self>) {
@@ -1473,7 +1486,7 @@ impl View for LeftPanelView {
                 .with_height(PANE_HEADER_HEIGHT)
                 .finish(),
             )
-            .with_padding_left(10.)
+            .with_padding_left(10. + self.titlebar_leading_inset)
             .with_padding_right(HEADER_EDGE_PADDING)
             .finish();
 
