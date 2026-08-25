@@ -1,4 +1,13 @@
+use crate::project_organization::view::project_tree::{
+    resolved_project_organization_tab_layout, TabLayout,
+};
+use crate::util::traffic_lights::{traffic_light_data, TrafficLightSide};
+use crate::window_settings::WindowSettings;
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
+use crate::workspace::tab_settings::TabSettings;
+use warp_core::features::FeatureFlag;
+use warpui::platform::FullscreenState;
+use warpui::{AppContext, SingletonEntity, WindowId};
 
 use super::TAB_BAR_PADDING_LEFT;
 
@@ -55,6 +64,57 @@ pub(crate) fn left_panel_titlebar_leading_inset(
     } else {
         0.
     }
+}
+
+fn vertical_tabs_layout_active(app: &AppContext) -> bool {
+    matches!(
+        resolved_project_organization_tab_layout(
+            FeatureFlag::RepositoryWorkspaces.is_enabled(),
+            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(app).use_vertical_tabs,
+        ),
+        TabLayout::Vertical
+    )
+}
+
+fn left_traffic_light_width(app: &AppContext, window_id: WindowId) -> f32 {
+    let zoom_factor = WindowSettings::as_ref(app).zoom_level.as_zoom_factor();
+    traffic_light_data(app, window_id)
+        .as_ref()
+        .filter(|data| data.side == TrafficLightSide::Left)
+        .map(|data| data.width(zoom_factor))
+        .unwrap_or(0.)
+}
+
+fn is_macos_fullscreen(app: &AppContext, window_id: WindowId) -> bool {
+    let is_window_fullscreen = app
+        .windows()
+        .platform_window(window_id)
+        .map(|window| window.fullscreen_state() == FullscreenState::Fullscreen)
+        .unwrap_or(false);
+    is_window_fullscreen && cfg!(target_os = "macos")
+}
+
+/// 与 Workspace 相同的 chrome 谓词，从 AppContext 当场计算侧栏头 inset。
+///
+/// `left_panel_showing` 表示本侧栏当前正在显示（`LeftPanelView::render` 里为 true）。
+pub(crate) fn left_panel_titlebar_leading_inset_from_app(
+    app: &AppContext,
+    left_panel_showing: bool,
+    simplified_wasm_tab_bar: bool,
+    window_id: WindowId,
+) -> f32 {
+    let full_height_chrome = use_full_height_left_panel_chrome(
+        FeatureFlag::RepositoryWorkspaces.is_enabled(),
+        left_panel_showing,
+        simplified_wasm_tab_bar,
+        vertical_tabs_layout_active(app),
+        warpui::platform::is_mobile_device(),
+    );
+    left_panel_titlebar_leading_inset(
+        full_height_chrome,
+        is_macos_fullscreen(app, window_id),
+        left_traffic_light_width(app, window_id),
+    )
 }
 
 #[cfg(test)]

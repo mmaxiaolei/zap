@@ -14,7 +14,7 @@ use warpui::{
     platform::Cursor,
     ui_components::components::{Coords, UiComponent, UiComponentStyles},
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle, WeakViewHandle,
+    ViewContext, ViewHandle, WeakViewHandle, WindowId,
 };
 
 use crate::ai::agent::conversation::AIConversationId;
@@ -231,6 +231,8 @@ pub struct LeftPanelView {
     working_directories_model: ModelHandle<WorkingDirectoriesModel>,
     is_agent_management_view_open: bool,
     panel_position: super::PanelPosition,
+    window_id: WindowId,
+    /// 事件路径缓存的 inset；header padding 在 render 时按 chrome helper 重算，不读此字段。
     titlebar_leading_inset: f32,
 }
 
@@ -423,6 +425,7 @@ impl LeftPanelView {
             working_directories_model,
             is_agent_management_view_open: false,
             panel_position: super::PanelPosition::Left,
+            window_id: ctx.window_id(),
             titlebar_leading_inset: 0.,
         };
         view.update_button_active_states();
@@ -439,6 +442,17 @@ impl LeftPanelView {
 
     pub fn titlebar_leading_inset(&self) -> f32 {
         self.titlebar_leading_inset
+    }
+
+    /// 按 Workspace 同一 chrome 谓词当场计算侧栏头 inset，不依赖缓存字段。
+    pub(crate) fn titlebar_leading_inset_for_render(&self, app: &AppContext) -> f32 {
+        super::full_height_left_panel_chrome::left_panel_titlebar_leading_inset_from_app(
+            app,
+            true,
+            // 通顶 chrome 不会把本 view 放到 simplified WASM 标题栏路径里。
+            false,
+            self.window_id,
+        )
     }
 
     pub fn set_agent_management_view_open(&mut self, is_open: bool, ctx: &mut ViewContext<Self>) {
@@ -1360,6 +1374,7 @@ impl View for LeftPanelView {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
+        let titlebar_leading_inset = self.titlebar_leading_inset_for_render(app);
 
         let mouse_state_handles = vec![
             self.mouse_state_handles.project_tree_button.clone(),
@@ -1486,7 +1501,7 @@ impl View for LeftPanelView {
                 .with_height(PANE_HEADER_HEIGHT)
                 .finish(),
             )
-            .with_padding_left(10. + self.titlebar_leading_inset)
+            .with_padding_left(10. + titlebar_leading_inset)
             .with_padding_right(HEADER_EDGE_PADDING)
             .finish();
 

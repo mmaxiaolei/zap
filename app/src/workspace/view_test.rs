@@ -2480,6 +2480,48 @@ fn compute_tab_bar_left_padding_omits_macos_traffic_lights_when_repository_chrom
 }
 
 #[test]
+fn left_panel_titlebar_leading_inset_is_computed_at_render_time_not_from_cache() {
+    let _flag = FeatureFlag::RepositoryWorkspaces.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_left_panel(ctx);
+            assert!(
+                workspace.use_full_height_left_panel_chrome(ctx),
+                "repository workspaces with an open left panel should use full-height chrome"
+            );
+            let expected = super::full_height_left_panel_chrome::left_panel_titlebar_leading_inset(
+                true,
+                workspace.is_macos_fullscreen(ctx),
+                workspace.left_traffic_light_width(ctx),
+            );
+            workspace.left_panel_view.update(ctx, |left_panel, ctx| {
+                left_panel.set_titlebar_leading_inset(expected + 64., ctx);
+            });
+            assert_eq!(
+                workspace
+                    .left_panel_view
+                    .as_ref(ctx)
+                    .titlebar_leading_inset(),
+                expected + 64.,
+                "cached field was forced stale"
+            );
+            assert_eq!(
+                workspace
+                    .left_panel_view
+                    .as_ref(ctx)
+                    .titlebar_leading_inset_for_render(ctx),
+                expected,
+                "render-time inset must follow the chrome helper, not the cached field"
+            );
+        });
+    });
+}
+
+#[test]
 fn handle_window_state_change_resyncs_left_panel_titlebar_inset_on_fullscreen() {
     let _flag = FeatureFlag::RepositoryWorkspaces.override_enabled(true);
 
@@ -2559,6 +2601,30 @@ fn layout_workspace_scene(
     (tab_bar, left_panel)
 }
 
+fn assert_lifted_left_panel_geometry(
+    tab_bar: pathfinder_geometry::rect::RectF,
+    left_panel: pathfinder_geometry::rect::RectF,
+) {
+    const SCENE_HEIGHT: f32 = 800.;
+    let expected_max_y = SCENE_HEIGHT - super::WORKSPACE_PADDING;
+    assert!(
+        tab_bar.min_x() >= left_panel.max_x() - 2.,
+        "tab bar should sit to the right of the full-height left panel, tab_bar={tab_bar:?} left_panel={left_panel:?}"
+    );
+    assert!(
+        (tab_bar.min_y() - left_panel.min_y()).abs() < 2.,
+        "tab bar and left panel should share the window top, tab_bar_y={} left_panel_y={}",
+        tab_bar.min_y(),
+        left_panel.min_y()
+    );
+    assert!(
+        (left_panel.max_y() - expected_max_y).abs() < 2.,
+        "left panel should stretch toward the window bottom, max_y={} expected={}",
+        left_panel.max_y(),
+        expected_max_y
+    );
+}
+
 #[test]
 fn full_height_left_panel_places_tab_bar_in_the_content_column() {
     let _flag = FeatureFlag::RepositoryWorkspaces.override_enabled(true);
@@ -2574,17 +2640,7 @@ fn full_height_left_panel_places_tab_bar_in_the_content_column() {
 
         let (tab_bar, left_panel) = layout_workspace_scene(&mut app, &workspace, window_id);
         let left_panel = left_panel.expect("left panel should have a saved position");
-
-        assert!(
-            tab_bar.min_x() >= left_panel.max_x() - 2.,
-            "tab bar should sit to the right of the full-height left panel, tab_bar={tab_bar:?} left_panel={left_panel:?}"
-        );
-        assert!(
-            (tab_bar.min_y() - left_panel.min_y()).abs() < 2.,
-            "tab bar and left panel should share the window top, tab_bar_y={} left_panel_y={}",
-            tab_bar.min_y(),
-            left_panel.min_y()
-        );
+        assert_lifted_left_panel_geometry(tab_bar, left_panel);
     });
 }
 
@@ -2606,10 +2662,7 @@ fn full_height_chrome_keeps_content_column_tab_bar_when_workspace_has_no_tabs() 
 
         let (tab_bar, left_panel) = layout_workspace_scene(&mut app, &workspace, window_id);
         let left_panel = left_panel.expect("left panel should stay full-height with no tabs");
-        assert!(
-            tab_bar.min_x() >= left_panel.max_x() - 2.,
-            "empty workspace should still keep the tab bar in the content column"
-        );
+        assert_lifted_left_panel_geometry(tab_bar, left_panel);
     });
 }
 
