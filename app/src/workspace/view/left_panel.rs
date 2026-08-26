@@ -61,6 +61,7 @@ use crate::{
     pane_group::{self},
     project_organization::domain::RepositoryWorkspaceId,
     project_organization::view::project_tree::{ProjectTreeEvent, ProjectTreePanel},
+    project_organization::workspace_agent_activity::WorkspaceAgentActivity,
     terminal::resizable_data::{ModalType, ResizableData},
     ui_components::{
         buttons::{icon_button, icon_button_with_color},
@@ -759,6 +760,16 @@ impl LeftPanelView {
     ) {
         self.project_tree_view.update(ctx, |tree, ctx| {
             tree.set_running_workspaces(running_workspace_ids, ctx);
+        });
+    }
+
+    pub fn set_project_tree_agent_activities(
+        &mut self,
+        agent_activities: HashMap<RepositoryWorkspaceId, WorkspaceAgentActivity>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.project_tree_view.update(ctx, |tree, ctx| {
+            tree.set_agent_activities(agent_activities, ctx);
         });
     }
 

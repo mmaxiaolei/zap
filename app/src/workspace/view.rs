@@ -89,6 +89,10 @@ use crate::project_organization::view::delete_workspace_dialog::{
 use crate::project_organization::view::project_tree::{
     resolved_project_organization_tab_layout, ProjectTreeEvent, TabLayout,
 };
+use crate::project_organization::workspace_agent_activity::{
+    activities_from_terminal_sources, last_agent_activity, OzConversationSource,
+    WorkspaceAgentActivity,
+};
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
 use crate::terminal::session_settings::SessionSettings;
@@ -3201,6 +3205,7 @@ impl Workspace {
             event,
             BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
         ) {
+            self.sync_project_tree(ctx);
             ctx.notify();
         }
 
@@ -3253,9 +3258,12 @@ impl Workspace {
                 | CLIAgentSessionsModelEvent::StatusChanged { .. }
                 | CLIAgentSessionsModelEvent::Ended { .. }
                 | CLIAgentSessionsModelEvent::SessionUpdated { .. }
-        ) && self.workspace_contains_terminal_view(event.terminal_view_id(), ctx)
-        {
-            ctx.notify();
+        ) {
+            // 非活动 workspace 的 grok/CLI 会话不在 self.tabs 内, map_last_matching 仍会扫描。
+            self.sync_project_tree(ctx);
+            if self.workspace_contains_terminal_view(event.terminal_view_id(), ctx) {
+                ctx.notify();
+            }
         }
     }
 
@@ -4579,10 +4587,12 @@ impl Workspace {
         let tab_counts = self.repository_workspace_tabs.tab_counts(&self.tabs);
         let active_workspace_id = self.active_repository_workspace_id();
         let running_workspace_ids = self.repository_workspace_ids_with_long_running_terminal(ctx);
+        let agent_activities = self.repository_workspace_agent_activities(ctx);
         self.left_panel_view.update(ctx, |left_panel, ctx| {
             left_panel.set_project_tree_tab_counts(tab_counts, ctx);
             left_panel.set_project_tree_active_workspace(active_workspace_id, ctx);
             left_panel.set_project_tree_running_workspaces(running_workspace_ids, ctx);
+            left_panel.set_project_tree_agent_activities(agent_activities, ctx);
         });
     }
 
@@ -4612,6 +4622,59 @@ impl Workspace {
             .workspace_ids_matching(&self.tabs, |tab| {
                 self.tab_has_long_running_terminal(tab, ctx)
             })
+    }
+
+    fn repository_workspace_agent_activities(
+        &self,
+        ctx: &AppContext,
+    ) -> HashMap<RepositoryWorkspaceId, WorkspaceAgentActivity> {
+        self.repository_workspace_tabs
+            .map_last_matching(&self.tabs, |tab| self.tab_agent_activity(tab, ctx))
+    }
+
+    fn tab_agent_activity(
+        &self,
+        tab: &TabData,
+        ctx: &AppContext,
+    ) -> Option<WorkspaceAgentActivity> {
+        let pane_group = tab.pane_group.as_ref(ctx);
+        // pane_sessions 借用 pane_group, 先收集再查 terminal_view, 避免双重借用。
+        let sessions = pane_group
+            .pane_sessions(tab.pane_group.id(), tab.pane_group.window_id(ctx), ctx)
+            .collect_vec();
+        let mut activities = Vec::new();
+        for session in sessions {
+            let Some(terminal_view) =
+                pane_group.terminal_view_from_pane_id(session.pane_view_locator().pane_id, ctx)
+            else {
+                continue;
+            };
+            let terminal_view_id = terminal_view.id();
+            let terminal_view = terminal_view.as_ref(ctx);
+            if terminal_view.is_read_only() {
+                continue;
+            }
+
+            let cli = CLIAgentSessionsModel::as_ref(ctx)
+                .session(terminal_view_id)
+                .map(|session| (session.agent, session.status.clone()));
+            let oz = BlocklistAIHistoryModel::as_ref(ctx)
+                .active_conversation(terminal_view_id)
+                .map(|conversation| OzConversationSource {
+                    status: conversation.status().clone(),
+                    is_empty: conversation.is_empty(),
+                    is_entirely_passive: conversation.is_entirely_passive(),
+                });
+            // is_read_only 已释放 TerminalModel 锁后再读 ambient, 禁止嵌套加锁。
+            let ambient_in_progress = terminal_view.is_shared_ambient_agent_session();
+
+            activities.extend(activities_from_terminal_sources(
+                cli,
+                oz,
+                ambient_in_progress,
+            ));
+        }
+        last_agent_activity(activities)
     }
 
     /// 在持久化线程终止前保存所有 tab 中的活动 terminal block。
