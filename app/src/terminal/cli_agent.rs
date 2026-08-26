@@ -253,7 +253,7 @@ impl CLIAgent {
             CLIAgent::DeepSeek => Some(Icon::DeepSeekLogo),
             CLIAgent::Antigravity => Some(Icon::AntigravityLogo),
             CLIAgent::Omp => Some(Icon::OmpLogo),
-            CLIAgent::Grok => None,
+            CLIAgent::Grok => Some(Icon::GrokLogo),
             CLIAgent::Unknown => None,
         }
     }
