@@ -3,14 +3,17 @@ use std::{
     hash::Hash,
 };
 
+use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::color::coloru_with_opacity;
+use warp_core::ui::icons::Icon as WarpIcon;
+use warp_core::ui::theme::WarpTheme;
 use warpui::{
     elements::{
         Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
         CornerRadius, CrossAxisAlignment, DropShadow, Element, Empty, Fill, Flex, Hoverable,
         MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition,
-        ScrollbarWidth, Shrinkable, Text,
+        ScrollbarWidth, Shrinkable, Stack, Text,
     },
     platform::Cursor,
     text_layout::ClipConfig,
@@ -21,8 +24,21 @@ use warpui::{
 
 use crate::{
     appearance::Appearance,
-    project_organization::model::ProjectOrganizationModel,
-    ui_components::{buttons::icon_button, icons},
+    project_organization::{
+        model::ProjectOrganizationModel,
+        workspace_agent_activity::{
+            workspace_activity_slot, WorkspaceActivitySlot, WorkspaceAgentActivity,
+            WorkspaceAgentIdentity, WorkspaceAgentPhase,
+        },
+    },
+    ui_components::{
+        breathing_ring::{
+            breathing_opacity, BreathingStateHandle, BreathingTicker, BREATHING_PERIOD,
+        },
+        buttons::icon_button,
+        icon_with_status::{render_icon_with_status, IconWithStatusSizing, IconWithStatusVariant},
+        icons,
+    },
     view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme},
 };
 
@@ -31,9 +47,20 @@ use crate::project_organization::domain::{
 };
 
 const WORKSPACE_RUNNING_DOT_SIZE: f32 = 6.;
+const WORKSPACE_ACTIVITY_SLOT_SIZE: f32 = 16.;
 const WORKSPACE_TREE_RAIL_WIDTH: f32 = 2.;
 const WORKSPACE_GROUP_INDENT: f32 = 16.;
 const REPOSITORY_GROUP_SPACING: f32 = 10.;
+const WORKSPACE_AGENT_RING_WIDTH: f32 = 1.5;
+
+const WORKSPACE_AGENT_ICON_SIZING: IconWithStatusSizing = IconWithStatusSizing {
+    icon_size: 10.,
+    padding: 3.,
+    badge_icon_size: 8.,
+    badge_padding: 1.,
+    overall_size_override: Some(16.),
+    badge_offset: (0., 0.),
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TabLayout {
@@ -256,13 +283,19 @@ fn workspace_row_is_selected(
 pub(crate) struct WorkspaceVisualState {
     is_selected: bool,
     has_running_terminal: bool,
+    agent_activity: Option<WorkspaceAgentActivity>,
 }
 
 impl WorkspaceVisualState {
-    pub(crate) fn new(is_selected: bool, has_running_terminal: bool) -> Self {
+    pub(crate) fn new(
+        is_selected: bool,
+        has_running_terminal: bool,
+        agent_activity: Option<WorkspaceAgentActivity>,
+    ) -> Self {
         Self {
             is_selected,
             has_running_terminal,
+            agent_activity,
         }
     }
 
@@ -274,13 +307,73 @@ impl WorkspaceVisualState {
         self.is_selected
     }
 
+    /// 活动槽类型: agent 在场时绿点让位给头像。
+    pub(crate) fn activity_slot(&self) -> WorkspaceActivitySlot {
+        workspace_activity_slot(self.agent_activity, self.has_running_terminal)
+    }
+
     pub(crate) fn should_render_running_indicator(&self) -> bool {
-        self.has_running_terminal
+        matches!(self.activity_slot(), WorkspaceActivitySlot::RunningDot)
+    }
+
+    pub(crate) fn should_breathe_agent_ring(&self) -> bool {
+        self.agent_activity
+            .is_some_and(WorkspaceAgentActivity::should_breathe)
     }
 
     pub(crate) fn should_fill_idle_row(&self) -> bool {
         false
     }
+}
+
+/// 活动槽呼吸环颜色: Blocked 为黄, InProgress CLI 用 brand, Oz 用 accent。
+fn agent_activity_ring_color(activity: WorkspaceAgentActivity, theme: &WarpTheme) -> ColorU {
+    match activity.phase {
+        WorkspaceAgentPhase::Blocked => theme.ansi_fg_yellow(),
+        WorkspaceAgentPhase::InProgress => match activity.identity {
+            WorkspaceAgentIdentity::Cli(agent) => agent
+                .brand_color()
+                .unwrap_or_else(|| theme.accent().into_solid_bias_right_color()),
+            WorkspaceAgentIdentity::Oz { ambient: _ } => {
+                theme.accent().into_solid_bias_right_color()
+            }
+        },
+    }
+}
+
+fn agent_activity_icon_variant(
+    identity: WorkspaceAgentIdentity,
+    theme: &WarpTheme,
+) -> IconWithStatusVariant {
+    match identity {
+        WorkspaceAgentIdentity::Oz { ambient } => IconWithStatusVariant::OzAgent {
+            status: None,
+            is_ambient: ambient,
+        },
+        WorkspaceAgentIdentity::Cli(agent) => match agent.brand_color() {
+            Some(_) => IconWithStatusVariant::CLIAgent {
+                agent,
+                status: None,
+            },
+            None => IconWithStatusVariant::Neutral {
+                icon: WarpIcon::Terminal,
+                icon_color: theme.sub_text_color(theme.background()),
+            },
+        },
+    }
+}
+
+fn sized_activity_slot(child: Box<dyn Element>) -> Box<dyn Element> {
+    ConstrainedBox::new(
+        Flex::row()
+            .with_main_axis_alignment(MainAxisAlignment::Center)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(child)
+            .finish(),
+    )
+    .with_width(WORKSPACE_ACTIVITY_SLOT_SIZE)
+    .with_height(WORKSPACE_ACTIVITY_SLOT_SIZE)
+    .finish()
 }
 
 /// 显示名与真实分支相同时不再重复第二行; 分支信息仍由显示名本身承担。
@@ -320,6 +413,8 @@ pub struct ProjectTreePanel {
     clipped_scroll_state: ClippedScrollStateHandle,
     tab_counts: HashMap<RepositoryWorkspaceId, usize>,
     running_workspace_ids: HashSet<RepositoryWorkspaceId>,
+    agent_activities: HashMap<RepositoryWorkspaceId, WorkspaceAgentActivity>,
+    workspace_breathing_states: HashMap<RepositoryWorkspaceId, BreathingStateHandle>,
     repository_mouse_states: HashMap<RepositoryId, MouseStateHandle>,
     workspace_mouse_states: HashMap<RepositoryWorkspaceId, MouseStateHandle>,
     workspace_delete_mouse_states: HashMap<RepositoryWorkspaceId, MouseStateHandle>,
@@ -344,6 +439,8 @@ impl ProjectTreePanel {
             clipped_scroll_state: Default::default(),
             tab_counts: HashMap::new(),
             running_workspace_ids: HashSet::new(),
+            agent_activities: HashMap::new(),
+            workspace_breathing_states: HashMap::new(),
             repository_mouse_states: HashMap::new(),
             workspace_mouse_states: HashMap::new(),
             workspace_delete_mouse_states: HashMap::new(),
@@ -380,6 +477,33 @@ impl ProjectTreePanel {
         }
         self.running_workspace_ids = running_workspace_ids;
         ctx.notify();
+    }
+
+    /// 设置各 workspace 的 agent 活动,并同步呼吸环状态。
+    pub fn set_agent_activities(
+        &mut self,
+        agent_activities: HashMap<RepositoryWorkspaceId, WorkspaceAgentActivity>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.agent_activities == agent_activities {
+            return;
+        }
+        self.agent_activities = agent_activities;
+        self.sync_breathing_states();
+        ctx.notify();
+    }
+
+    fn sync_breathing_states(&mut self) {
+        self.workspace_breathing_states.retain(|id, _| {
+            self.agent_activities
+                .get(id)
+                .is_some_and(|activity| activity.should_breathe())
+        });
+        for (id, activity) in &self.agent_activities {
+            if activity.should_breathe() {
+                self.workspace_breathing_states.entry(*id).or_default();
+            }
+        }
     }
 
     pub fn set_active_workspace(
@@ -447,6 +571,9 @@ impl ProjectTreePanel {
         synchronize_mouse_states(&mut self.workspace_delete_mouse_states, &workspace_ids);
         self.running_workspace_ids
             .retain(|workspace_id| workspace_ids.contains(workspace_id));
+        self.agent_activities
+            .retain(|id, _| workspace_ids.contains(id));
+        self.sync_breathing_states();
         ctx.notify();
     }
 
@@ -628,6 +755,72 @@ impl ProjectTreePanel {
         .finish()
     }
 
+    fn render_workspace_activity_slot(
+        &self,
+        workspace_id: RepositoryWorkspaceId,
+        visual_state: WorkspaceVisualState,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        match visual_state.activity_slot() {
+            WorkspaceActivitySlot::Empty => sized_activity_slot(Empty::new().finish()),
+            WorkspaceActivitySlot::RunningDot => {
+                sized_activity_slot(Self::render_workspace_running_dot(visual_state, appearance))
+            }
+            WorkspaceActivitySlot::Agent(activity) => {
+                self.render_workspace_agent_avatar(workspace_id, activity, appearance)
+            }
+        }
+    }
+
+    fn render_workspace_agent_avatar(
+        &self,
+        workspace_id: RepositoryWorkspaceId,
+        activity: WorkspaceAgentActivity,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let avatar = render_icon_with_status(
+            agent_activity_icon_variant(activity.identity, theme),
+            &WORKSPACE_AGENT_ICON_SIZING,
+            theme,
+            theme.background(),
+        );
+        let ring_color = agent_activity_ring_color(activity, theme);
+        let (opacity, ticker) = match activity.phase {
+            WorkspaceAgentPhase::InProgress => {
+                let handle = self
+                    .workspace_breathing_states
+                    .get(&workspace_id)
+                    .expect("InProgress agent 必须先由 sync_breathing_states 插入呼吸环 handle");
+                (
+                    breathing_opacity(handle.elapsed(), BREATHING_PERIOD),
+                    Some(BreathingTicker::new(handle.clone())),
+                )
+            }
+            WorkspaceAgentPhase::Blocked => (255, None),
+        };
+        // breathing_opacity 返回 0-255 alpha; coloru_with_opacity 按 0-100 百分比缩放,不能直接套用。
+        let ringed_avatar = Container::new(avatar)
+            .with_border(
+                Border::all(WORKSPACE_AGENT_RING_WIDTH).with_border_fill(ColorU::new(
+                    ring_color.r,
+                    ring_color.g,
+                    ring_color.b,
+                    opacity,
+                )),
+            )
+            .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
+            .finish();
+        let content = match ticker {
+            Some(ticker) => Stack::new()
+                .with_child(ringed_avatar)
+                .with_child(Box::new(ticker))
+                .finish(),
+            None => ringed_avatar,
+        };
+        sized_activity_slot(content)
+    }
+
     fn render_workspace_tab_count(
         tab_count: usize,
         visual_state: WorkspaceVisualState,
@@ -728,14 +921,16 @@ impl ProjectTreePanel {
         let visual_state = WorkspaceVisualState::new(
             selected,
             self.running_workspace_ids.contains(&workspace.workspace_id),
+            self.agent_activities.get(&workspace.workspace_id).copied(),
         );
-        let running_dot = Self::render_workspace_running_dot(visual_state, appearance);
+        let activity_slot =
+            self.render_workspace_activity_slot(workspace.workspace_id, visual_state, appearance);
         let tab_count =
             Self::render_workspace_tab_count(workspace.tab_count, visual_state, appearance);
         let labeled_content = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(8.)
-            .with_child(running_dot)
+            .with_child(activity_slot)
             .with_child(Shrinkable::new(1.0, content).finish())
             .finish();
 

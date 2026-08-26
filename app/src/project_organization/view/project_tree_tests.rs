@@ -21,7 +21,14 @@ use crate::{
         },
         RepositoryPersistence,
     },
-    project_organization::model::ProjectOrganizationModel,
+    project_organization::{
+        model::ProjectOrganizationModel,
+        workspace_agent_activity::{
+            WorkspaceActivitySlot, WorkspaceAgentActivity, WorkspaceAgentIdentity,
+            WorkspaceAgentPhase,
+        },
+    },
+    terminal::CLIAgent,
 };
 
 use crate::project_organization::domain::{
@@ -258,24 +265,54 @@ fn tab_count_badge_label_is_numeric_and_caps_large_counts() {
 
 #[test]
 fn workspace_visual_state_keeps_selection_and_running_separate() {
-    let selected_static = WorkspaceVisualState::new(true, false);
+    let selected_static = WorkspaceVisualState::new(true, false, None);
     assert!(selected_static.should_render_selection_accent());
     assert!(!selected_static.should_render_selection_frame());
     assert!(!selected_static.should_render_running_indicator());
 
-    let running_unselected = WorkspaceVisualState::new(false, true);
+    let running_unselected = WorkspaceVisualState::new(false, true, None);
     assert!(!running_unselected.should_render_selection_accent());
     assert!(!running_unselected.should_render_selection_frame());
     assert!(running_unselected.should_render_running_indicator());
 
-    let selected_running = WorkspaceVisualState::new(true, true);
+    let selected_running = WorkspaceVisualState::new(true, true, None);
     assert!(selected_running.should_render_selection_accent());
     assert!(!selected_running.should_render_selection_frame());
     assert!(selected_running.should_render_running_indicator());
 
-    let idle = WorkspaceVisualState::new(false, false);
+    let idle = WorkspaceVisualState::new(false, false, None);
     assert!(!idle.should_render_selection_accent());
     assert!(!idle.should_fill_idle_row());
+}
+
+#[test]
+fn workspace_visual_state_hides_running_dot_when_agent_is_present() {
+    let activity = WorkspaceAgentActivity {
+        identity: WorkspaceAgentIdentity::Cli(CLIAgent::Grok),
+        phase: WorkspaceAgentPhase::InProgress,
+    };
+    let visual_state = WorkspaceVisualState::new(true, true, Some(activity));
+    assert!(visual_state.should_render_selection_accent());
+    assert!(!visual_state.should_render_running_indicator());
+    assert_eq!(
+        visual_state.activity_slot(),
+        WorkspaceActivitySlot::Agent(activity)
+    );
+    assert!(visual_state.should_breathe_agent_ring());
+}
+
+#[test]
+fn workspace_visual_state_blocked_agent_does_not_breathe() {
+    let activity = WorkspaceAgentActivity {
+        identity: WorkspaceAgentIdentity::Oz { ambient: false },
+        phase: WorkspaceAgentPhase::Blocked,
+    };
+    let visual_state = WorkspaceVisualState::new(false, false, Some(activity));
+    assert!(!visual_state.should_breathe_agent_ring());
+    assert_eq!(
+        visual_state.activity_slot(),
+        WorkspaceActivitySlot::Agent(activity)
+    );
 }
 
 #[test]
@@ -511,6 +548,82 @@ fn project_tree_renders_running_selected_workspace_activity_badge() {
             project_tree.set_tab_counts(HashMap::from([(workspace_id, 3)]), ctx);
             project_tree.set_active_workspace(Some(workspace_id), ctx);
             project_tree.set_running_workspaces(HashSet::from([workspace_id]), ctx);
+        });
+        let root_view_id = app
+            .root_view_id(window_id)
+            .expect("window should have a root view");
+        let mut presenter = Presenter::new(window_id);
+
+        app.update(|ctx| {
+            presenter.invalidate(
+                WindowInvalidation {
+                    updated: [root_view_id, project_tree.id()].into_iter().collect(),
+                    ..Default::default()
+                },
+                ctx,
+            );
+            presenter.build_scene(vec2f(360., 240.), 1., None, ctx);
+        });
+    });
+}
+
+#[test]
+fn project_tree_renders_running_grok_agent_avatar() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let tempdir = tempfile::tempdir().expect("temporary directory should be created");
+        let repository_path = tempdir.path().join("dip-agent");
+        let worktree_path = tempdir.path().join("feature-worktree");
+        std::fs::create_dir(&repository_path).expect("repository directory should be created");
+        std::fs::create_dir(&worktree_path).expect("worktree directory should be created");
+        let repository_id = RepositoryId(uuid::Uuid::from_u128(1));
+        let workspace_id = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));
+        let timestamp = chrono::DateTime::from_timestamp(0, 0)
+            .expect("timestamp should be valid")
+            .naive_utc();
+        app.add_singleton_model(|ctx| {
+            ProjectOrganizationModel::try_new(
+                vec![PersistedRepository {
+                    id: repository_id.to_string(),
+                    display_name: "dip-agent".to_string(),
+                    path: repository_path.to_string_lossy().to_string(),
+                    remote_url: None,
+                    source: "local".to_string(),
+                    created_at: timestamp,
+                    last_opened_at: timestamp,
+                }],
+                vec![PersistedRepositoryWorkspace {
+                    id: workspace_id.to_string(),
+                    repository_id: repository_id.to_string(),
+                    display_name: "feature-workspace".to_string(),
+                    branch: "feature/workspace".to_string(),
+                    worktree_path: worktree_path.to_string_lossy().to_string(),
+                    created_at: timestamp,
+                    last_opened_at: timestamp,
+                }],
+                RepositoryPersistence::new(None),
+                ctx,
+            )
+            .expect("project organization model should initialize")
+        });
+
+        let (window_id, host) =
+            app.add_window(WindowStyle::NotStealFocus, ProjectTreeTestHost::new);
+        let project_tree = host.read(&app, |host, _| host.project_tree.clone());
+        project_tree.update(&mut app, |project_tree, ctx| {
+            project_tree.set_tab_counts(HashMap::from([(workspace_id, 3)]), ctx);
+            project_tree.set_active_workspace(Some(workspace_id), ctx);
+            project_tree.set_running_workspaces(HashSet::from([workspace_id]), ctx);
+            project_tree.set_agent_activities(
+                HashMap::from([(
+                    workspace_id,
+                    WorkspaceAgentActivity {
+                        identity: WorkspaceAgentIdentity::Cli(CLIAgent::Grok),
+                        phase: WorkspaceAgentPhase::InProgress,
+                    },
+                )]),
+                ctx,
+            );
         });
         let root_view_id = app
             .root_view_id(window_id)
