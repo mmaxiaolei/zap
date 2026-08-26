@@ -3204,9 +3204,12 @@ impl Workspace {
         if matches!(
             event,
             BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
+                | BlocklistAIHistoryEvent::SetActiveConversation { .. }
+                | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
+                | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
+                | BlocklistAIHistoryEvent::StartedNewConversation { .. }
         ) {
             self.sync_project_tree(ctx);
-            ctx.notify();
         }
 
         if self.agent_conversation_event_affects_vertical_tabs(event, ctx) {
