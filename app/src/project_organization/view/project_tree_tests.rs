@@ -40,7 +40,8 @@ use super::{
     should_show_workspace_delete_button, synchronize_mouse_states, tab_count_badge_label,
     workspace_count_pill_label, workspace_row_is_selected, workspace_shows_branch_subtitle,
     ProjectTreeEvent, ProjectTreePanel, ProjectTreeState, RepositoryTreeNode, TabLayout,
-    WorkspaceTreeNode, WorkspaceVisualState,
+    WorkspaceTreeNode, WorkspaceVisualState, WORKSPACE_ACTIVITY_SLOT_SIZE,
+    WORKSPACE_AGENT_ICON_SIZING, WORKSPACE_AGENT_RING_WIDTH,
 };
 
 struct ProjectTreeTestHost {
@@ -299,6 +300,14 @@ fn workspace_visual_state_hides_running_dot_when_agent_is_present() {
         WorkspaceActivitySlot::Agent(activity)
     );
     assert!(visual_state.should_breathe_agent_ring());
+}
+
+#[test]
+fn workspace_agent_avatar_inner_plus_ring_fits_activity_slot() {
+    let inner =
+        WORKSPACE_AGENT_ICON_SIZING.icon_size + WORKSPACE_AGENT_ICON_SIZING.padding * 2.;
+    let ring = WORKSPACE_AGENT_RING_WIDTH * 2.;
+    assert_eq!(inner + ring, WORKSPACE_ACTIVITY_SLOT_SIZE);
 }
 
 #[test]

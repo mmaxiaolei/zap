@@ -54,11 +54,11 @@ const REPOSITORY_GROUP_SPACING: f32 = 10.;
 const WORKSPACE_AGENT_RING_WIDTH: f32 = 1.5;
 
 const WORKSPACE_AGENT_ICON_SIZING: IconWithStatusSizing = IconWithStatusSizing {
-    icon_size: 10.,
-    padding: 3.,
+    icon_size: 8.,
+    padding: 2.5,
     badge_icon_size: 8.,
     badge_padding: 1.,
-    overall_size_override: Some(16.),
+    overall_size_override: Some(13.),
     badge_offset: (0., 0.),
 };
 
@@ -334,7 +334,10 @@ fn agent_activity_ring_color(activity: WorkspaceAgentActivity, theme: &WarpTheme
             WorkspaceAgentIdentity::Cli(agent) => agent
                 .brand_color()
                 .unwrap_or_else(|| theme.accent().into_solid_bias_right_color()),
-            WorkspaceAgentIdentity::Oz { ambient: _ } => {
+            WorkspaceAgentIdentity::Oz {
+                ambient: true,
+            }
+            | WorkspaceAgentIdentity::Oz { ambient: false } => {
                 theme.accent().into_solid_bias_right_color()
             }
         },
@@ -363,6 +366,7 @@ fn agent_activity_icon_variant(
     }
 }
 
+/// 绿点/空槽需要 Flex 居中。Agent 头像禁止走这条路径: Flex 会把子节点主轴 max 放开,带边框的 Container 会超出 16px。
 fn sized_activity_slot(child: Box<dyn Element>) -> Box<dyn Element> {
     ConstrainedBox::new(
         Flex::row()
@@ -818,7 +822,11 @@ impl ProjectTreePanel {
                 .finish(),
             None => ringed_avatar,
         };
-        sized_activity_slot(content)
+        // 直接把 max=16 传给带边框 Container; 不能包 Flex, 否则主轴 max 变无限,槽宽会变成 19。
+        ConstrainedBox::new(content)
+            .with_width(WORKSPACE_ACTIVITY_SLOT_SIZE)
+            .with_height(WORKSPACE_ACTIVITY_SLOT_SIZE)
+            .finish()
     }
 
     fn render_workspace_tab_count(
