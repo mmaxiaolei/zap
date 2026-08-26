@@ -146,3 +146,34 @@ fn finds_inactive_workspace_containing_target_tab() {
     );
     assert_eq!(sets.find_inactive_workspace(|tab| *tab == 10), None);
 }
+
+#[test]
+fn map_last_matching_keeps_later_tab_in_the_same_workspace() {
+    let workspace_a = RepositoryWorkspaceId(uuid::Uuid::from_u128(1));
+    let workspace_b = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));
+    let mut sets = RepositoryWorkspaceTabSets::new(Some(workspace_a));
+    sets.insert_inactive(
+        Some(workspace_b),
+        RepositoryWorkspaceTabState::new(vec![20_u64, 21, 22], 0),
+    );
+
+    let active_tabs = vec![10_u64, 11, 12];
+    let matches = sets.map_last_matching(&active_tabs, |tab| match tab {
+        11 | 12 => Some(*tab),
+        20 | 22 => Some(*tab),
+        _ => None,
+    });
+
+    assert_eq!(matches.get(&workspace_a), Some(&12));
+    assert_eq!(matches.get(&workspace_b), Some(&22));
+}
+
+#[test]
+fn map_last_matching_ignores_unclassified_tabs() {
+    let workspace_a = RepositoryWorkspaceId(uuid::Uuid::from_u128(1));
+    let mut sets = RepositoryWorkspaceTabSets::new(Some(workspace_a));
+    sets.insert_inactive(None, RepositoryWorkspaceTabState::new(vec![20_u64], 0));
+
+    let matches = sets.map_last_matching(&[10_u64], |tab| (*tab == 20).then_some(*tab));
+    assert!(matches.is_empty());
+}

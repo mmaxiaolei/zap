@@ -89,6 +89,44 @@ impl<T> RepositoryWorkspaceTabSets<T> {
         workspace_ids
     }
 
+    /// 每个 workspace 按页签从左到右扫描，保留最后一个 Some。未归类（workspace_id 为 None）不计。
+    pub(crate) fn map_last_matching<U>(
+        &self,
+        active_tabs: &[T],
+        mut map_tab: impl FnMut(&T) -> Option<U>,
+    ) -> HashMap<RepositoryWorkspaceId, U> {
+        let mut matches = HashMap::new();
+
+        if let Some(workspace_id) = self.active_workspace_id {
+            let mut last = None;
+            for tab in active_tabs {
+                if let Some(value) = map_tab(tab) {
+                    last = Some(value);
+                }
+            }
+            if let Some(value) = last {
+                matches.insert(workspace_id, value);
+            }
+        }
+
+        for (workspace_id, state) in &self.inactive {
+            let Some(workspace_id) = workspace_id else {
+                continue;
+            };
+            let mut last = None;
+            for tab in &state.tabs {
+                if let Some(value) = map_tab(tab) {
+                    last = Some(value);
+                }
+            }
+            if let Some(value) = last {
+                matches.insert(*workspace_id, value);
+            }
+        }
+
+        matches
+    }
+
     pub(crate) fn switch_to(
         &mut self,
         workspace_id: Option<RepositoryWorkspaceId>,
