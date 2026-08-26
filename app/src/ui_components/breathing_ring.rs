@@ -1,11 +1,18 @@
-//! 呼吸环透明度与零尺寸 ticker Element,用于 Agent 头像进行中状态的周期动画。
+//! 呼吸环 Element:在 paint 中按 elapsed 更新边框透明度,并 `repaint_after` 驱动下一帧。
+//!
+//! `repaint_after` 只重跑已有 element 树的 layout/paint,不会调用 View::render。
+//! 因此环的透明度必须在本 Element 的 paint 里计算,不能在 View 里写死到 Container。
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use instant::Instant;
-use pathfinder_geometry::vector::Vector2F;
-use warpui::elements::{Element, Point};
+use pathfinder_color::ColorU;
+use pathfinder_geometry::{
+    rect::RectF,
+    vector::{vec2f, Vector2F},
+};
+use warpui::elements::{Border, CornerRadius, Element, Fill, Point, Radius};
 use warpui::event::DispatchedEvent;
 use warpui::{
     AfterLayoutContext, AppContext, EventContext, LayoutContext, PaintContext, SizeConstraint,
@@ -40,41 +47,93 @@ pub(crate) fn breathing_opacity(elapsed: Duration, period: Duration) -> u8 {
     ((0.4 + 0.6 * wave) * 255.0).round() as u8
 }
 
-pub(crate) struct BreathingTicker {
+/// 在 child 外画圆形描边。`animate` 为 true 时每帧更新透明度并预约重绘。
+pub(crate) struct BreathingRing {
+    child: Box<dyn Element>,
+    color: ColorU,
+    border_width: f32,
+    animate: bool,
     state: BreathingStateHandle,
     origin: Option<Point>,
     size: Option<Vector2F>,
 }
 
-impl BreathingTicker {
-    pub(crate) fn new(state: BreathingStateHandle) -> Self {
+impl BreathingRing {
+    pub(crate) fn new(
+        child: Box<dyn Element>,
+        color: ColorU,
+        border_width: f32,
+        animate: bool,
+        state: BreathingStateHandle,
+    ) -> Self {
         Self {
+            child,
+            color,
+            border_width,
+            animate,
             state,
             origin: None,
             size: None,
         }
     }
+
+    fn border_buffer(&self) -> Vector2F {
+        vec2f(self.border_width * 2., self.border_width * 2.)
+    }
 }
 
-impl Element for BreathingTicker {
+impl Element for BreathingRing {
     fn layout(
         &mut self,
-        _constraint: SizeConstraint,
-        _ctx: &mut LayoutContext,
-        _app: &AppContext,
+        constraint: SizeConstraint,
+        ctx: &mut LayoutContext,
+        app: &AppContext,
     ) -> Vector2F {
-        let size = Vector2F::zero();
+        let buffer = self.border_buffer();
+        let child_constraint = SizeConstraint {
+            min: (constraint.min - buffer).max(Vector2F::zero()),
+            max: (constraint.max - buffer).max(Vector2F::zero()),
+        };
+        let child_size = self.child.layout(child_constraint, ctx, app);
+        let size = child_size + buffer;
         self.size = Some(size);
         size
     }
 
-    fn after_layout(&mut self, _ctx: &mut AfterLayoutContext, _app: &AppContext) {}
+    fn after_layout(&mut self, ctx: &mut AfterLayoutContext, app: &AppContext) {
+        self.child.after_layout(ctx, app);
+    }
 
-    fn paint(&mut self, origin: Vector2F, ctx: &mut PaintContext, _app: &AppContext) {
+    fn paint(&mut self, origin: Vector2F, ctx: &mut PaintContext, app: &AppContext) {
         self.origin = Some(Point::from_vec2f(origin, ctx.scene.z_index()));
-        // 持有 state 跨帧存活; 实际 elapsed 由父级 render 消费。
-        let _elapsed = self.state.elapsed();
-        ctx.repaint_after(REPAINT_INTERVAL);
+        let Some(size) = self.size else {
+            return;
+        };
+        let opacity = if self.animate {
+            breathing_opacity(self.state.elapsed(), BREATHING_PERIOD)
+        } else {
+            255
+        };
+        ctx.scene
+            .draw_rect_with_hit_recording(RectF::new(origin, size))
+            .with_background(Fill::None)
+            .with_border(
+                Border::all(self.border_width).with_border_fill(ColorU::new(
+                    self.color.r,
+                    self.color.g,
+                    self.color.b,
+                    opacity,
+                )),
+            )
+            .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)));
+        self.child.paint(
+            origin + vec2f(self.border_width, self.border_width),
+            ctx,
+            app,
+        );
+        if self.animate {
+            ctx.repaint_after(REPAINT_INTERVAL);
+        }
     }
 
     fn size(&self) -> Option<Vector2F> {
@@ -87,11 +146,11 @@ impl Element for BreathingTicker {
 
     fn dispatch_event(
         &mut self,
-        _: &DispatchedEvent,
-        _: &mut EventContext,
-        _: &AppContext,
+        event: &DispatchedEvent,
+        ctx: &mut EventContext,
+        app: &AppContext,
     ) -> bool {
-        false
+        self.child.dispatch_event(event, ctx, app)
     }
 }
 

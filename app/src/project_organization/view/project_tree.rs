@@ -13,7 +13,7 @@ use warpui::{
         Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
         CornerRadius, CrossAxisAlignment, DropShadow, Element, Empty, Fill, Flex, Hoverable,
         MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition,
-        ScrollbarWidth, Shrinkable, Stack, Text,
+        ScrollbarWidth, Shrinkable, Text,
     },
     platform::Cursor,
     text_layout::ClipConfig,
@@ -32,9 +32,7 @@ use crate::{
         },
     },
     ui_components::{
-        breathing_ring::{
-            breathing_opacity, BreathingStateHandle, BreathingTicker, BREATHING_PERIOD,
-        },
+        breathing_ring::{BreathingRing, BreathingStateHandle},
         buttons::icon_button,
         icon_with_status::{render_icon_with_status, IconWithStatusSizing, IconWithStatusVariant},
         icons,
@@ -807,40 +805,26 @@ impl ProjectTreePanel {
             theme.background(),
         );
         let ring_color = agent_activity_ring_color(activity, theme);
-        let (opacity, ticker) = match activity.phase {
-            WorkspaceAgentPhase::InProgress => {
-                let handle = self
-                    .workspace_breathing_states
-                    .get(&workspace_id)
-                    .expect("InProgress agent 必须先由 sync_breathing_states 插入呼吸环 handle");
-                (
-                    breathing_opacity(handle.elapsed(), BREATHING_PERIOD),
-                    Some(BreathingTicker::new(handle.clone())),
-                )
-            }
-            WorkspaceAgentPhase::Blocked => (255, None),
+        let animate = activity.should_breathe();
+        let handle = if animate {
+            self.workspace_breathing_states
+                .get(&workspace_id)
+                .expect("InProgress agent 必须先由 sync_breathing_states 插入呼吸环 handle")
+                .clone()
+        } else {
+            BreathingStateHandle::default()
         };
-        // breathing_opacity 返回 0-255 alpha; coloru_with_opacity 按 0-100 百分比缩放,不能直接套用。
-        let ringed_avatar = Container::new(avatar)
-            .with_border(
-                Border::all(WORKSPACE_AGENT_RING_WIDTH).with_border_fill(ColorU::new(
-                    ring_color.r,
-                    ring_color.g,
-                    ring_color.b,
-                    opacity,
-                )),
-            )
-            .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
-            .finish();
-        let content = match ticker {
-            Some(ticker) => Stack::new()
-                .with_child(ringed_avatar)
-                .with_child(Box::new(ticker))
-                .finish(),
-            None => ringed_avatar,
-        };
-        // 直接把 max=16 传给带边框 Container; 不能包 Flex, 否则主轴 max 变无限,槽宽会变成 19。
-        ConstrainedBox::new(content)
+        // 透明度在 BreathingRing::paint 里按 elapsed 更新。
+        // repaint_after 不会重跑 View::render,不能把 alpha 写死在 Container 上。
+        let ringed_avatar = Box::new(BreathingRing::new(
+            avatar,
+            ring_color,
+            WORKSPACE_AGENT_RING_WIDTH,
+            animate,
+            handle,
+        ));
+        // 直接把 max=16 传给带边框环; 不能包 Flex, 否则主轴 max 变无限,槽宽会变成 19。
+        ConstrainedBox::new(ringed_avatar)
             .with_width(WORKSPACE_ACTIVITY_SLOT_SIZE)
             .with_height(WORKSPACE_ACTIVITY_SLOT_SIZE)
             .finish()
