@@ -29,7 +29,11 @@
 - `model.rs`: repository/workspace 集合、活动操作状态、CRUD 事件和持久化事件桥接。
 - `git.rs`: repository 校验、clone、fetch、ref 解析、worktree 创建、状态检查和删除。
 - `migration.rs`: 旧 projects 与现有 Tab 快照的首次迁移和启动一致性检查。
+- `workspace_agent_activity.rs`: workspace 行活动槽类型、CLI/Oz 身份与绿点互斥决胜。
 - `view/project_tree.rs`: 左侧双层树和空态/错误态。
+
+Workspace 行左侧活动槽由 `Workspace::sync_project_tree` 下发两组互斥信号：`running_workspace_ids`（shell 长任务绿点）和 `HashMap<RepositoryWorkspaceId, WorkspaceAgentActivity>`（CLI/Oz InProgress 或 Blocked 的品牌头像）。聚合在 `Workspace`（`map_last_matching` + `tab_agent_activity`），渲染在 `ProjectTreePanel`，槽宽固定 16px。Agent 在场时不画绿点。身份跟页签 agent 走，不跟底层模型。详情见 `docs/superpowers/specs/2026-08-26-workspace-agent-activity-design.md`。
+
 - `view/add_repository_modal.rs`: 本地目录与 Git URL 两种添加流程。
 - `view/create_workspace_modal.rs`: 远端基线新建分支与本地分支关联流程。
 - `view/delete_workspace_dialog.rs`: 安全删除、复选框和二次确认。
