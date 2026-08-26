@@ -2705,5 +2705,13 @@ fn closing_left_panel_restores_full_width_tab_bar() {
     });
 }
 
+#[test]
+fn workspace_configuration_allows_empty_tabs_when_repository_workspaces_are_enabled() {
+    assert!(super::workspace_configuration_is_valid(0, true));
+    assert!(!super::workspace_configuration_is_valid(0, false));
+    assert!(super::workspace_configuration_is_valid(1, false));
+    assert!(super::workspace_configuration_is_valid(2, true));
+}
+
 // 已删:test_open_ambient_agent_setup_guide_action_opens_management_view_and_is_idempotent
 // agent_management_view 字段连同 agent setup guide 整片功能在 Phase 2c 已删。

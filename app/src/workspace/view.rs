@@ -2,9 +2,9 @@ pub(crate) mod codex_modal;
 pub mod conversation_list;
 #[cfg(enable_crash_recovery)]
 mod crash_recovery;
+pub(crate) mod full_height_left_panel_chrome;
 pub mod global_search;
 pub(crate) mod launch_modal;
-pub(crate) mod full_height_left_panel_chrome;
 pub(crate) mod left_panel;
 pub(crate) mod onboarding;
 pub(crate) mod right_panel;
@@ -3667,19 +3667,12 @@ impl Workspace {
         };
 
         debug_assert!(
-            self.tab_count() > 0,
+            workspace_configuration_is_valid(
+                self.tab_count(),
+                FeatureFlag::RepositoryWorkspaces.is_enabled(),
+            ),
             "Workspace should have at least one tab upon configuration"
         );
-
-        if self.left_panel_visibility_across_tabs_enabled(ctx) {
-            self.reconcile_left_panel_open_for_active_tab(ctx);
-        }
-
-        let active_pane_group = self.active_tab_pane_group().clone();
-        let working_directories_model = self.working_directories_model.clone();
-        self.left_panel_view.update(ctx, |left_panel, ctx| {
-            left_panel.set_active_pane_group(active_pane_group, &working_directories_model, ctx);
-        });
 
         if FeatureFlag::RepositoryWorkspaces.is_enabled() {
             self.open_left_panel(ctx);
@@ -3687,6 +3680,19 @@ impl Workspace {
                 left_panel.restore_active_view_from_snapshot(ToolPanelView::ProjectTree, ctx);
             });
         }
+
+        let Some(active_pane_group) = self.try_active_tab_pane_group().cloned() else {
+            return;
+        };
+
+        if self.left_panel_visibility_across_tabs_enabled(ctx) {
+            self.reconcile_left_panel_open_for_active_tab(ctx);
+        }
+
+        let working_directories_model = self.working_directories_model.clone();
+        self.left_panel_view.update(ctx, |left_panel, ctx| {
+            left_panel.set_active_pane_group(active_pane_group, &working_directories_model, ctx);
+        });
     }
 
     fn initial_vertical_tabs_panel_open(
@@ -4603,7 +4609,9 @@ impl Workspace {
         ctx: &AppContext,
     ) -> HashSet<RepositoryWorkspaceId> {
         self.repository_workspace_tabs
-            .workspace_ids_matching(&self.tabs, |tab| self.tab_has_long_running_terminal(tab, ctx))
+            .workspace_ids_matching(&self.tabs, |tab| {
+                self.tab_has_long_running_terminal(tab, ctx)
+            })
     }
 
     /// 在持久化线程终止前保存所有 tab 中的活动 terminal block。
@@ -8758,12 +8766,10 @@ impl Workspace {
                     // Only recompute default if the current width is at the default value
                     // This preserves the width from the most recent tab
                     if current_width == DEFAULT_LEFT_PANEL_WIDTH {
-                        let has_horizontal_split = self
-                            .try_active_tab_pane_group()
-                            .is_some_and(|pane_group| {
-                                pane_group.read(ctx, |pane_group, _| {
-                                    pane_group.has_horizontal_split()
-                                })
+                        let has_horizontal_split =
+                            self.try_active_tab_pane_group().is_some_and(|pane_group| {
+                                pane_group
+                                    .read(ctx, |pane_group, _| pane_group.has_horizontal_split())
                             });
                         let (left_width, _right_width) =
                             compute_default_panel_widths(ctx, window_id, has_horizontal_split);
@@ -11494,33 +11500,34 @@ impl Workspace {
             pane_group
         });
 
-        ctx.subscribe_to_view(&new_pane_group, move |me, pane_group, event, ctx| {
-            me.handle_file_tree_event(pane_group, event, ctx)
-        });
-
         let new_tab_placement_setting = TabSettings::as_ref(ctx).new_tab_placement;
 
         match new_tab_placement_setting {
             NewTabPlacement::AfterAllTabs => {
                 self.tabs
-                    .push(self.tab_data_for_active_repository_workspace(new_pane_group));
+                    .push(self.tab_data_for_active_repository_workspace(new_pane_group.clone()));
                 self.activate_tab_internal(self.tab_count() - 1, ctx);
             }
             // Add tab after current tab
             _ => {
                 if self.tab_count() == 0 {
-                    self.tabs
-                        .push(self.tab_data_for_active_repository_workspace(new_pane_group));
+                    self.tabs.push(
+                        self.tab_data_for_active_repository_workspace(new_pane_group.clone()),
+                    );
                     self.activate_tab_internal(self.tab_count() - 1, ctx);
                 } else {
                     self.tabs.insert(
                         self.active_tab_index + 1,
-                        self.tab_data_for_active_repository_workspace(new_pane_group),
+                        self.tab_data_for_active_repository_workspace(new_pane_group.clone()),
                     );
                     self.activate_tab_internal(self.active_tab_index + 1, ctx);
                 }
             }
         }
+
+        ctx.subscribe_to_view(&new_pane_group, move |me, pane_group, event, ctx| {
+            me.handle_file_tree_event(pane_group, event, ctx)
+        });
 
         if !is_restoration {
             if *TabSettings::as_ref(ctx).preserve_active_tab_color.value() {
@@ -11575,21 +11582,22 @@ impl Workspace {
                 ctx,
             )
         });
-        ctx.subscribe_to_view(&new_pane_group, move |me, pane_group, event, ctx| {
-            me.handle_file_tree_event(pane_group, event, ctx)
-        });
 
         if self.tab_count() == 0 {
             self.tabs
-                .push(self.tab_data_for_active_repository_workspace(new_pane_group));
+                .push(self.tab_data_for_active_repository_workspace(new_pane_group.clone()));
             self.activate_tab_internal(self.tab_count() - 1, ctx);
         } else {
             self.tabs.insert(
                 new_idx,
-                self.tab_data_for_active_repository_workspace(new_pane_group),
+                self.tab_data_for_active_repository_workspace(new_pane_group.clone()),
             );
             self.activate_tab_internal(new_idx, ctx);
         }
+
+        ctx.subscribe_to_view(&new_pane_group, move |me, pane_group, event, ctx| {
+            me.handle_file_tree_event(pane_group, event, ctx)
+        });
         self.sync_project_tree(ctx);
     }
 
@@ -13377,6 +13385,11 @@ impl Workspace {
         event: &pane_group::Event,
         ctx: &mut ViewContext<Self>,
     ) {
+        // 空 repository workspace 恢复、或新 tab 尚未插入时, PaneGroup 仍可能同步发事件。
+        if self.try_active_tab_pane_group().is_none() {
+            return;
+        }
+
         match event {
             pane_group::Event::AppStateChanged => {
                 ctx.dispatch_global_action("workspace:save_app", ());
@@ -23827,4 +23840,12 @@ fn set_opencode_warp_plugin(new_entry: &str) -> String {
         },
         Err(e) => format!("Failed to serialize opencode.json: {e}"),
     }
+}
+
+/// 空 repository workspace 是合法会话状态, 配置完成后可以没有页签。
+pub(crate) fn workspace_configuration_is_valid(
+    tab_count: usize,
+    repository_workspaces_enabled: bool,
+) -> bool {
+    tab_count > 0 || repository_workspaces_enabled
 }
