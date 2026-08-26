@@ -110,3 +110,5 @@ Figma: none provided. 交互和布局以本规格确认过程中批准的视觉�
 37. 双层树、创建弹窗和删除确认支持键盘焦点、方向键导航、Enter 确认和 Escape 取消。图标按钮提供可访问名称或 Tooltip，文本和状态在浅色、深色主题下均使用现有主题色。
 
 38. repository 和 workspace 的路径、分支和页签归属仅在本机持久化，不上传到云端，也不在其他设备自动创建或恢复。
+
+39. 当某个 workspace 的页签（含切走后仍挂在后台的页签）中有 agent 处于 InProgress 或 Blocked 时，该 workspace 行左侧活动槽显示对应 agent 的圆形品牌图标：CLI 会话用该 CLI 的品牌图标，原生 Oz / Warp Agent 用 Oz 图标。InProgress 时图标外圈以品牌色做缓慢呼吸；Blocked 时外圈改为静态警告黄。同一 workspace 有多个命中时只显示最近进入该状态的那个。会话结束、取消或出错后图标立即消失。没有 agent 活动但存在 shell 长任务时，活动槽回退为现有绿点。活动槽为纯展示，点击行仍只切换 workspace。详情见 `docs/superpowers/specs/2026-08-26-workspace-agent-activity-design.md`。
