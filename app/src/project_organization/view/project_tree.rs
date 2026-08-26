@@ -22,11 +22,7 @@ use warpui::{
 use crate::{
     appearance::Appearance,
     project_organization::model::ProjectOrganizationModel,
-    ui_components::{
-        buttons::icon_button,
-        icons,
-        spinner::{BrailleSpinner, SpinnerStateHandle},
-    },
+    ui_components::{buttons::icon_button, icons},
     view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme},
 };
 
@@ -34,11 +30,10 @@ use crate::project_organization::domain::{
     Repository, RepositoryId, RepositoryWorkspace, RepositoryWorkspaceId,
 };
 
-const WORKSPACE_TAB_COUNT_BADGE_HEIGHT: f32 = 24.;
-const WORKSPACE_TAB_COUNT_BADGE_SINGLE_DIGIT_WIDTH: f32 = 24.;
-const WORKSPACE_TAB_COUNT_BADGE_WIDE_WIDTH: f32 = 30.;
-const WORKSPACE_RUNNING_INDICATOR_SLOT_WIDTH: f32 = 16.;
-const WORKSPACE_STATUS_SLOT_GAP: f32 = 6.;
+const WORKSPACE_RUNNING_DOT_SIZE: f32 = 6.;
+const WORKSPACE_TREE_RAIL_WIDTH: f32 = 2.;
+const WORKSPACE_GROUP_INDENT: f32 = 16.;
+const REPOSITORY_GROUP_SPACING: f32 = 10.;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TabLayout {
@@ -272,21 +267,29 @@ impl WorkspaceVisualState {
     }
 
     pub(crate) fn should_render_selection_frame(&self) -> bool {
+        false
+    }
+
+    pub(crate) fn should_render_selection_accent(&self) -> bool {
         self.is_selected
     }
 
-    pub(crate) fn should_render_running_spinner(&self) -> bool {
+    pub(crate) fn should_render_running_indicator(&self) -> bool {
         self.has_running_terminal
+    }
+
+    pub(crate) fn should_fill_idle_row(&self) -> bool {
+        false
     }
 }
 
-fn workspace_count_label(workspace_count: usize) -> String {
-    let noun = if workspace_count == 1 {
-        "workspace"
-    } else {
-        "workspaces"
-    };
-    format!("{workspace_count} {noun}")
+/// 显示名与真实分支相同时不再重复第二行; 分支信息仍由显示名本身承担。
+fn workspace_shows_branch_subtitle(display_name: &str, branch: &str) -> bool {
+    display_name != branch
+}
+
+fn workspace_count_pill_label(workspace_count: usize) -> String {
+    workspace_count.to_string()
 }
 
 fn tab_count_badge_label(tab_count: usize) -> String {
@@ -295,37 +298,6 @@ fn tab_count_badge_label(tab_count: usize) -> String {
     } else {
         tab_count.to_string()
     }
-}
-
-fn workspace_tab_count_badge_width(tab_count: usize) -> f32 {
-    if tab_count < 10 {
-        WORKSPACE_TAB_COUNT_BADGE_SINGLE_DIGIT_WIDTH
-    } else {
-        WORKSPACE_TAB_COUNT_BADGE_WIDE_WIDTH
-    }
-}
-
-fn apply_workspace_selection_frame(
-    row_container: Container,
-    visual_state: WorkspaceVisualState,
-    selected_border_color: pathfinder_color::ColorU,
-    selected_shadow_color: pathfinder_color::ColorU,
-) -> Container {
-    let row_container = row_container.with_border(Border::all(1.).with_border_fill(
-        if visual_state.should_render_selection_frame() {
-            selected_border_color
-        } else {
-            coloru_with_opacity(selected_border_color, 0)
-        },
-    ));
-    if !visual_state.should_render_selection_frame() {
-        return row_container;
-    }
-
-    row_container.with_drop_shadow(
-        DropShadow::new_with_standard_offset_and_spread(selected_shadow_color)
-            .with_offset(vec2f(0., 0.)),
-    )
 }
 
 fn synchronize_mouse_states<Id>(mouse_states: &mut HashMap<Id, MouseStateHandle>, ids: &HashSet<Id>)
@@ -348,7 +320,6 @@ pub struct ProjectTreePanel {
     clipped_scroll_state: ClippedScrollStateHandle,
     tab_counts: HashMap<RepositoryWorkspaceId, usize>,
     running_workspace_ids: HashSet<RepositoryWorkspaceId>,
-    workspace_spinner_states: HashMap<RepositoryWorkspaceId, SpinnerStateHandle>,
     repository_mouse_states: HashMap<RepositoryId, MouseStateHandle>,
     workspace_mouse_states: HashMap<RepositoryWorkspaceId, MouseStateHandle>,
     workspace_delete_mouse_states: HashMap<RepositoryWorkspaceId, MouseStateHandle>,
@@ -373,7 +344,6 @@ impl ProjectTreePanel {
             clipped_scroll_state: Default::default(),
             tab_counts: HashMap::new(),
             running_workspace_ids: HashSet::new(),
-            workspace_spinner_states: HashMap::new(),
             repository_mouse_states: HashMap::new(),
             workspace_mouse_states: HashMap::new(),
             workspace_delete_mouse_states: HashMap::new(),
@@ -477,13 +447,6 @@ impl ProjectTreePanel {
         synchronize_mouse_states(&mut self.workspace_delete_mouse_states, &workspace_ids);
         self.running_workspace_ids
             .retain(|workspace_id| workspace_ids.contains(workspace_id));
-        self.workspace_spinner_states
-            .retain(|workspace_id, _| workspace_ids.contains(workspace_id));
-        for workspace_id in &workspace_ids {
-            self.workspace_spinner_states
-                .entry(*workspace_id)
-                .or_default();
-        }
         ctx.notify();
     }
 
@@ -548,23 +511,20 @@ impl ProjectTreePanel {
         let add_workspace_position_id = repository_add_workspace_position_id(repository_id);
         let add_workspace = SavePosition::new(add_workspace, &add_workspace_position_id).finish();
 
-        let repository_icon = Container::new(
-            ConstrainedBox::new(icons::Icon::Folder.to_warpui_icon(icon_color).finish())
-                .with_width(16.)
-                .with_height(16.)
-                .finish(),
+        let workspace_count = Container::new(
+            Text::new_inline(
+                workspace_count_pill_label(repository.workspaces.len()),
+                appearance.ui_font_family(),
+                appearance.ui_font_footnote(),
+            )
+            .with_color(theme.sub_text_color(theme.background()).into())
+            .finish(),
         )
-        .with_uniform_padding(4.)
+        .with_horizontal_padding(5.)
+        .with_vertical_padding(1.)
         .with_background(theme.surface_overlay_1())
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-        .finish();
-
-        let workspace_count = Text::new_inline(
-            workspace_count_label(repository.workspaces.len()),
-            appearance.ui_font_family(),
-            appearance.ui_font_footnote(),
-        )
-        .with_color(theme.sub_text_color(theme.background()).into())
+        .with_border(Border::all(1.).with_border_fill(theme.surface_2()))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
         .finish();
 
         let row = Flex::row()
@@ -574,11 +534,6 @@ impl ProjectTreePanel {
                 ConstrainedBox::new(chevron.to_warpui_icon(icon_color).finish())
                     .with_width(16.)
                     .with_height(16.)
-                    .finish(),
-            )
-            .with_child(
-                Container::new(repository_icon)
-                    .with_margin_left(4.)
                     .finish(),
             )
             .with_child(
@@ -594,15 +549,15 @@ impl ProjectTreePanel {
                         .with_color(theme.main_text_color(theme.background()).into())
                         .finish(),
                     )
-                    .with_margin_left(8.)
+                    .with_margin_left(6.)
                     .finish(),
                 )
                 .finish(),
             )
             .with_child(
                 Container::new(workspace_count)
-                    .with_margin_left(12.)
-                    .with_margin_right(8.)
+                    .with_margin_left(8.)
+                    .with_margin_right(6.)
                     .finish(),
             )
             .with_child(add_workspace)
@@ -633,98 +588,69 @@ impl ProjectTreePanel {
         .finish()
     }
 
-    fn render_workspace_activity_badge(
-        &self,
-        tab_count: usize,
+    fn render_workspace_running_dot(
         visual_state: WorkspaceVisualState,
-        workspace_id: RepositoryWorkspaceId,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let metadata_color = theme.sub_text_color(theme.background());
         let running_color: pathfinder_color::ColorU = theme.terminal_colors().normal.green.into();
-        let badge_background = if visual_state.should_render_running_spinner() {
-            coloru_with_opacity(running_color, 14).into()
-        } else {
-            theme.surface_2()
-        };
-        let border_fill = if visual_state.should_render_running_spinner() {
-            coloru_with_opacity(running_color, 42).into()
-        } else {
-            theme.surface_3()
-        };
-
-        let spinner = if visual_state.should_render_running_spinner() {
-            let spinner_state = self
-                .workspace_spinner_states
-                .get(&workspace_id)
-                .expect("workspace spinner state should be initialized during tree refresh")
-                .clone();
-            Box::new(BrailleSpinner::new(
-                appearance.ui_font_family(),
-                appearance.ui_font_footnote(),
-                running_color,
-                spinner_state,
-            )) as Box<dyn Element>
+        let dot = if visual_state.should_render_running_indicator() {
+            Container::new(Empty::new().finish())
+                .with_background(running_color)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+                    WORKSPACE_RUNNING_DOT_SIZE / 2.,
+                )))
+                .with_drop_shadow(
+                    DropShadow::new_with_standard_offset_and_spread(coloru_with_opacity(
+                        running_color,
+                        48,
+                    ))
+                    .with_offset(vec2f(0., 0.)),
+                )
+                .finish()
         } else {
             Empty::new().finish()
         };
-        let spinner_slot = ConstrainedBox::new(spinner)
-            .with_width(WORKSPACE_RUNNING_INDICATOR_SLOT_WIDTH)
-            .with_height(WORKSPACE_TAB_COUNT_BADGE_HEIGHT)
-            .finish();
-
-        let count = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::Center)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                Text::new_inline(
-                    tab_count_badge_label(tab_count),
-                    appearance.ui_font_family(),
-                    appearance.ui_font_footnote(),
-                )
-                .with_color(metadata_color.into())
-                .finish(),
-            )
-            .finish();
-        let count_badge = Container::new(
-            ConstrainedBox::new(count)
-                .with_width(workspace_tab_count_badge_width(tab_count))
-                .with_height(WORKSPACE_TAB_COUNT_BADGE_HEIGHT)
-                .finish(),
-        )
-        .with_background(badge_background)
-        .with_border(Border::all(1.).with_border_fill(border_fill))
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(12.)));
-        let count_badge = if visual_state.should_render_running_spinner() {
-            count_badge.with_drop_shadow(
-                DropShadow::new_with_standard_offset_and_spread(coloru_with_opacity(
-                    running_color,
-                    30,
-                ))
-                .with_offset(vec2f(0., 0.)),
-            )
-        } else {
-            count_badge
-        };
-
         ConstrainedBox::new(
             Flex::row()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_main_axis_alignment(MainAxisAlignment::End)
+                .with_main_axis_alignment(MainAxisAlignment::Center)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_spacing(WORKSPACE_STATUS_SLOT_GAP)
-                .with_child(spinner_slot)
-                .with_child(count_badge.finish())
+                .with_child(
+                    ConstrainedBox::new(dot)
+                        .with_width(WORKSPACE_RUNNING_DOT_SIZE)
+                        .with_height(WORKSPACE_RUNNING_DOT_SIZE)
+                        .finish(),
+                )
                 .finish(),
         )
-        .with_width(
-            WORKSPACE_RUNNING_INDICATOR_SLOT_WIDTH
-                + WORKSPACE_STATUS_SLOT_GAP
-                + workspace_tab_count_badge_width(tab_count),
+        .with_width(WORKSPACE_RUNNING_DOT_SIZE)
+        .with_height(WORKSPACE_RUNNING_DOT_SIZE)
+        .finish()
+    }
+
+    fn render_workspace_tab_count(
+        tab_count: usize,
+        visual_state: WorkspaceVisualState,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let color = if visual_state.should_render_selection_accent() {
+            theme.accent().into_solid_bias_right_color()
+        } else {
+            theme
+                .sub_text_color(theme.background())
+                .into_solid_bias_right_color()
+        };
+        ConstrainedBox::new(
+            Text::new_inline(
+                tab_count_badge_label(tab_count),
+                appearance.ui_font_family(),
+                appearance.ui_font_footnote(),
+            )
+            .with_color(color.into())
+            .finish(),
         )
-        .with_height(WORKSPACE_TAB_COUNT_BADGE_HEIGHT)
+        .with_min_width(14.)
         .finish()
     }
 
@@ -737,70 +663,81 @@ impl ProjectTreePanel {
         let selected =
             workspace_row_is_selected(self.state.selected_workspace_id(), workspace.workspace_id);
         let selection_accent = theme.accent();
-        let label_color = theme.main_text_color(theme.background());
+        let selection_accent_color = selection_accent.into_solid_bias_right_color();
+        let label_color = if selected {
+            selection_accent_color
+        } else {
+            theme
+                .main_text_color(theme.background())
+                .into_solid_bias_right_color()
+        };
         let metadata_color = theme.sub_text_color(theme.background());
         let workspace_id = workspace.workspace_id;
         let action = ProjectTreeAction::SelectWorkspace {
             workspace_id: Some(workspace_id),
         };
         let delete_action = ProjectTreeAction::DeleteWorkspace { workspace_id };
-        let branch = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(3.)
-            .with_child(
-                ConstrainedBox::new(
-                    icons::Icon::GitBranch
-                        .to_warpui_icon(metadata_color)
-                        .finish(),
-                )
-                .with_width(12.)
-                .with_height(12.)
-                .finish(),
-            )
-            .with_child(
-                Shrinkable::new(
-                    1.,
-                    Text::new_inline(
-                        workspace.branch.clone(),
-                        appearance.ui_font_family(),
-                        appearance.ui_font_footnote(),
+        let name = Text::new_inline(
+            workspace.display_name.clone(),
+            appearance.ui_font_family(),
+            appearance.ui_font_body(),
+        )
+        .with_clip(ClipConfig::ellipsis())
+        .with_color(label_color.into())
+        .finish();
+        let content = if workspace_shows_branch_subtitle(&workspace.display_name, &workspace.branch)
+        {
+            let branch = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(3.)
+                .with_child(
+                    ConstrainedBox::new(
+                        icons::Icon::GitBranch
+                            .to_warpui_icon(metadata_color)
+                            .finish(),
                     )
-                    .with_clip(ClipConfig::ellipsis())
-                    .with_color(metadata_color.into())
+                    .with_width(12.)
+                    .with_height(12.)
                     .finish(),
                 )
-                .finish(),
-            )
-            .finish();
-        let content = Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_spacing(2.)
-            .with_child(
-                Text::new_inline(
-                    workspace.display_name.clone(),
-                    appearance.ui_font_family(),
-                    appearance.ui_font_body(),
+                .with_child(
+                    Shrinkable::new(
+                        1.,
+                        Text::new_inline(
+                            workspace.branch.clone(),
+                            appearance.ui_font_family(),
+                            appearance.ui_font_footnote(),
+                        )
+                        .with_clip(ClipConfig::ellipsis())
+                        .with_color(metadata_color.into())
+                        .finish(),
+                    )
+                    .finish(),
                 )
-                .with_clip(ClipConfig::ellipsis())
-                .with_color(label_color.into())
-                .finish(),
-            )
-            .with_child(branch)
-            .finish();
+                .finish();
+            Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_spacing(1.)
+                .with_child(name)
+                .with_child(branch)
+                .finish()
+        } else {
+            name
+        };
 
         let visual_state = WorkspaceVisualState::new(
             selected,
             self.running_workspace_ids.contains(&workspace.workspace_id),
         );
-        let activity_badge = self.render_workspace_activity_badge(
-            workspace.tab_count,
-            visual_state,
-            workspace_id,
-            appearance,
-        );
-        let selected_color: pathfinder_color::ColorU = theme.terminal_colors().normal.blue.into();
-        let selected_border_color = coloru_with_opacity(selected_color, 58);
-        let selected_shadow_color = coloru_with_opacity(selected_color, 34);
+        let running_dot = Self::render_workspace_running_dot(visual_state, appearance);
+        let tab_count =
+            Self::render_workspace_tab_count(workspace.tab_count, visual_state, appearance);
+        let labeled_content = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(8.)
+            .with_child(running_dot)
+            .with_child(Shrinkable::new(1.0, content).finish())
+            .finish();
 
         let delete_tooltip = appearance
             .ui_builder()
@@ -843,57 +780,61 @@ impl ProjectTreePanel {
                     .with_main_axis_size(MainAxisSize::Max)
                     .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_child(Shrinkable::new(1.0, content).finish())
+                    .with_child(Shrinkable::new(1.0, labeled_content).finish())
                     .with_child(
                         Flex::row()
                             .with_cross_axis_alignment(CrossAxisAlignment::Center)
                             .with_spacing(8.)
-                            .with_child(activity_badge)
+                            .with_child(tab_count)
                             .with_child(delete)
                             .finish(),
                     )
                     .finish();
                 let mut row_container = Container::new(row_content)
                     .with_horizontal_padding(8.)
-                    .with_vertical_padding(6.)
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
-                if selected {
+                    .with_vertical_padding(5.)
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(5.)));
+                if visual_state.should_render_selection_accent() {
                     row_container =
                         row_container.with_background(selection_accent.with_opacity(10));
                 } else if mouse_state.is_hovered() {
                     row_container = row_container.with_background(theme.surface_overlay_2());
-                } else {
+                } else if visual_state.should_fill_idle_row() {
                     row_container = row_container.with_background(theme.surface_overlay_1());
                 }
-                row_container = apply_workspace_selection_frame(
-                    row_container,
-                    visual_state,
-                    selected_border_color,
-                    selected_shadow_color,
-                );
+                if visual_state.should_render_selection_frame() {
+                    row_container = row_container
+                        .with_border(Border::all(1.).with_border_fill(selection_accent));
+                }
 
-                let indicator = Container::new(
+                let rail = Container::new(
                     ConstrainedBox::new(Empty::new().finish())
-                        .with_width(2.)
+                        .with_width(WORKSPACE_TREE_RAIL_WIDTH)
                         .finish(),
                 );
-                let indicator = if selected {
-                    indicator
-                        .with_background(selection_accent)
+                let rail = if visual_state.should_render_selection_accent() {
+                    rail.with_background(selection_accent)
                         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(1.)))
+                        .with_drop_shadow(
+                            DropShadow::new_with_standard_offset_and_spread(coloru_with_opacity(
+                                selection_accent_color,
+                                48,
+                            ))
+                            .with_offset(vec2f(0., 0.)),
+                        )
                 } else {
-                    indicator
+                    rail.with_background(theme.surface_overlay_2())
                 };
 
                 Flex::row()
                     .with_main_axis_size(MainAxisSize::Max)
                     .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                    .with_child(indicator.finish())
+                    .with_child(rail.finish())
                     .with_child(
                         Shrinkable::new(
                             1.0,
                             Container::new(row_container.finish())
-                                .with_margin_left(4.)
+                                .with_margin_left(6.)
                                 .finish(),
                         )
                         .finish(),
@@ -1005,21 +946,21 @@ impl View for ProjectTreePanel {
         let theme = appearance.theme();
         let mut tree = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_spacing(8.);
+            .with_spacing(REPOSITORY_GROUP_SPACING);
         for repository in self.state.repositories() {
             let mut repository_group = Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                 .with_child(self.render_repository_row(repository, appearance));
-            if repository.expanded {
+            if repository.expanded && !repository.workspaces.is_empty() {
                 let mut workspaces = Flex::column()
                     .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                    .with_spacing(2.);
+                    .with_spacing(0.);
                 for workspace in &repository.workspaces {
                     workspaces.add_child(self.render_workspace_row(workspace, appearance));
                 }
                 repository_group.add_child(
                     Container::new(workspaces.finish())
-                        .with_margin_left(22.)
+                        .with_margin_left(WORKSPACE_GROUP_INDENT)
                         .with_margin_top(2.)
                         .finish(),
                 );

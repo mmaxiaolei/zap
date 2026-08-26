@@ -31,7 +31,7 @@ use crate::project_organization::domain::{
 use super::{
     repository_add_workspace_position_id, resolved_project_organization_tab_layout,
     should_show_workspace_delete_button, synchronize_mouse_states, tab_count_badge_label,
-    workspace_count_label, workspace_row_is_selected, workspace_tab_count_badge_width,
+    workspace_count_pill_label, workspace_row_is_selected, workspace_shows_branch_subtitle,
     ProjectTreeEvent, ProjectTreePanel, ProjectTreeState, RepositoryTreeNode, TabLayout,
     WorkspaceTreeNode, WorkspaceVisualState,
 };
@@ -232,10 +232,20 @@ fn workspace_row_selection_matches_only_the_active_workspace() {
 }
 
 #[test]
-fn project_tree_count_labels_use_correct_singular_and_plural_forms() {
-    assert_eq!(workspace_count_label(0), "0 workspaces");
-    assert_eq!(workspace_count_label(1), "1 workspace");
-    assert_eq!(workspace_count_label(2), "2 workspaces");
+fn workspace_count_pill_label_is_numeric() {
+    assert_eq!(workspace_count_pill_label(0), "0");
+    assert_eq!(workspace_count_pill_label(1), "1");
+    assert_eq!(workspace_count_pill_label(6), "6");
+}
+
+#[test]
+fn workspace_hides_redundant_branch_subtitle_when_name_matches_branch() {
+    assert!(!workspace_shows_branch_subtitle(
+        "feature-600-quick-recover",
+        "feature-600-quick-recover"
+    ));
+    assert!(workspace_shows_branch_subtitle("local", "main"));
+    assert!(workspace_shows_branch_subtitle("Feature A", "feature/a"));
 }
 
 #[test]
@@ -247,26 +257,25 @@ fn tab_count_badge_label_is_numeric_and_caps_large_counts() {
 }
 
 #[test]
-fn tab_count_badge_width_keeps_single_digit_counts_circular() {
-    assert_eq!(workspace_tab_count_badge_width(1), 24.);
-    assert_eq!(workspace_tab_count_badge_width(9), 24.);
-    assert_eq!(workspace_tab_count_badge_width(10), 30.);
-    assert_eq!(workspace_tab_count_badge_width(100), 30.);
-}
-
-#[test]
 fn workspace_visual_state_keeps_selection_and_running_separate() {
     let selected_static = WorkspaceVisualState::new(true, false);
-    assert!(selected_static.should_render_selection_frame());
-    assert!(!selected_static.should_render_running_spinner());
+    assert!(selected_static.should_render_selection_accent());
+    assert!(!selected_static.should_render_selection_frame());
+    assert!(!selected_static.should_render_running_indicator());
 
     let running_unselected = WorkspaceVisualState::new(false, true);
+    assert!(!running_unselected.should_render_selection_accent());
     assert!(!running_unselected.should_render_selection_frame());
-    assert!(running_unselected.should_render_running_spinner());
+    assert!(running_unselected.should_render_running_indicator());
 
     let selected_running = WorkspaceVisualState::new(true, true);
-    assert!(selected_running.should_render_selection_frame());
-    assert!(selected_running.should_render_running_spinner());
+    assert!(selected_running.should_render_selection_accent());
+    assert!(!selected_running.should_render_selection_frame());
+    assert!(selected_running.should_render_running_indicator());
+
+    let idle = WorkspaceVisualState::new(false, false);
+    assert!(!idle.should_render_selection_accent());
+    assert!(!idle.should_fill_idle_row());
 }
 
 #[test]
