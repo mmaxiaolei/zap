@@ -3208,6 +3208,7 @@ impl Workspace {
                 | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
                 | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
                 | BlocklistAIHistoryEvent::StartedNewConversation { .. }
+                | BlocklistAIHistoryEvent::RestoredConversations { .. }
         ) {
             self.sync_project_tree(ctx);
         }
@@ -4647,35 +4648,32 @@ impl Workspace {
             .collect_vec();
         let mut activities = Vec::new();
         for session in sessions {
+            if session.is_read_only() || session.shared_session_status().is_viewer() {
+                continue;
+            }
             let Some(terminal_view) =
                 pane_group.terminal_view_from_pane_id(session.pane_view_locator().pane_id, ctx)
             else {
                 continue;
             };
             let terminal_view_id = terminal_view.id();
-            let terminal_view = terminal_view.as_ref(ctx);
-            if terminal_view.is_read_only() {
-                continue;
-            }
 
             let cli = CLIAgentSessionsModel::as_ref(ctx)
                 .session(terminal_view_id)
                 .map(|session| (session.agent, session.status.clone()));
-            let oz = BlocklistAIHistoryModel::as_ref(ctx)
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            let oz = history
                 .active_conversation(terminal_view_id)
                 .map(|conversation| OzConversationSource {
                     status: conversation.status().clone(),
                     is_empty: conversation.is_empty(),
                     is_entirely_passive: conversation.is_entirely_passive(),
+                    is_ambient: history
+                        .get_conversation_metadata(&conversation.id())
+                        .is_some_and(|metadata| metadata.is_ambient_agent_conversation()),
                 });
-            // is_read_only 已释放 TerminalModel 锁后再读 ambient, 禁止嵌套加锁。
-            let ambient_in_progress = terminal_view.is_shared_ambient_agent_session();
 
-            activities.extend(activities_from_terminal_sources(
-                cli,
-                oz,
-                ambient_in_progress,
-            ));
+            activities.extend(activities_from_terminal_sources(cli, oz, false));
         }
         last_agent_activity(activities)
     }

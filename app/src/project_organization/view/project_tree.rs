@@ -326,14 +326,31 @@ impl WorkspaceVisualState {
     }
 }
 
+/// 品牌色过暗时换对比色, 避免深色侧栏上看不见环。
+fn ring_color_contrasts_on_dark_brand(brand: ColorU, fallback: ColorU) -> ColorU {
+    if (brand.r as u16) + (brand.g as u16) + (brand.b as u16) < 180 {
+        fallback
+    } else {
+        brand
+    }
+}
+
 /// 活动槽呼吸环颜色: Blocked 为黄, InProgress CLI 用 brand, Oz 用 accent。
 fn agent_activity_ring_color(activity: WorkspaceAgentActivity, theme: &WarpTheme) -> ColorU {
     match activity.phase {
         WorkspaceAgentPhase::Blocked => theme.ansi_fg_yellow(),
         WorkspaceAgentPhase::InProgress => match activity.identity {
-            WorkspaceAgentIdentity::Cli(agent) => agent
-                .brand_color()
-                .unwrap_or_else(|| theme.accent().into_solid_bias_right_color()),
+            WorkspaceAgentIdentity::Cli(agent) => {
+                let brand = agent
+                    .brand_color()
+                    .unwrap_or_else(|| theme.accent().into_solid_bias_right_color());
+                ring_color_contrasts_on_dark_brand(
+                    brand,
+                    theme
+                        .main_text_color(theme.background())
+                        .into_solid_bias_right_color(),
+                )
+            }
             WorkspaceAgentIdentity::Oz {
                 ambient: true,
             }

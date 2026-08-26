@@ -5,6 +5,7 @@ use std::{
     sync::Arc,
 };
 
+use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warpui::{
@@ -37,11 +38,11 @@ use crate::project_organization::domain::{
 
 use super::{
     repository_add_workspace_position_id, resolved_project_organization_tab_layout,
-    should_show_workspace_delete_button, synchronize_mouse_states, tab_count_badge_label,
-    workspace_count_pill_label, workspace_row_is_selected, workspace_shows_branch_subtitle,
-    ProjectTreeEvent, ProjectTreePanel, ProjectTreeState, RepositoryTreeNode, TabLayout,
-    WorkspaceTreeNode, WorkspaceVisualState, WORKSPACE_ACTIVITY_SLOT_SIZE,
-    WORKSPACE_AGENT_ICON_SIZING, WORKSPACE_AGENT_RING_WIDTH,
+    ring_color_contrasts_on_dark_brand, should_show_workspace_delete_button,
+    synchronize_mouse_states, tab_count_badge_label, workspace_count_pill_label,
+    workspace_row_is_selected, workspace_shows_branch_subtitle, ProjectTreeEvent, ProjectTreePanel,
+    ProjectTreeState, RepositoryTreeNode, TabLayout, WorkspaceTreeNode, WorkspaceVisualState,
+    WORKSPACE_ACTIVITY_SLOT_SIZE, WORKSPACE_AGENT_ICON_SIZING, WORKSPACE_AGENT_RING_WIDTH,
 };
 
 struct ProjectTreeTestHost {
@@ -322,6 +323,20 @@ fn workspace_visual_state_blocked_agent_does_not_breathe() {
         visual_state.activity_slot(),
         WorkspaceActivitySlot::Agent(activity)
     );
+}
+
+#[test]
+fn dark_grok_brand_uses_fallback_ring_color() {
+    let grok = ColorU::new(0x14, 0x14, 0x14, 255);
+    let fallback = ColorU::new(255, 255, 255, 255);
+    assert_eq!(ring_color_contrasts_on_dark_brand(grok, fallback), fallback);
+}
+
+#[test]
+fn bright_brand_keeps_ring_color() {
+    let bright = ColorU::new(255, 128, 0, 255);
+    let fallback = ColorU::new(255, 255, 255, 255);
+    assert_eq!(ring_color_contrasts_on_dark_brand(bright, fallback), bright);
 }
 
 #[test]

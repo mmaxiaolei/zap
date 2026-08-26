@@ -99,6 +99,7 @@ fn oz_blocked_is_collected() {
             },
             is_empty: false,
             is_entirely_passive: false,
+            is_ambient: false,
         }),
         false,
     );
@@ -119,6 +120,7 @@ fn empty_or_passive_oz_is_ignored() {
             status: ConversationStatus::InProgress,
             is_empty: true,
             is_entirely_passive: false,
+            is_ambient: false,
         }),
         false,
     );
@@ -133,6 +135,7 @@ fn entirely_passive_oz_in_progress_is_ignored() {
             status: ConversationStatus::InProgress,
             is_empty: false,
             is_entirely_passive: true,
+            is_ambient: false,
         }),
         false,
     );
@@ -148,6 +151,7 @@ fn oz_error_and_cancelled_are_ignored() {
                 status,
                 is_empty: false,
                 is_entirely_passive: false,
+                is_ambient: false,
             }),
             false,
         );
@@ -165,6 +169,7 @@ fn cli_wins_over_oz_on_the_same_terminal() {
             },
             is_empty: false,
             is_entirely_passive: false,
+            is_ambient: false,
         }),
         false,
     );
@@ -174,6 +179,27 @@ fn cli_wins_over_oz_on_the_same_terminal() {
 #[test]
 fn ambient_in_progress_uses_oz_cloud_identity() {
     let activities = activities_from_terminal_sources(None, None, true);
+    assert_eq!(
+        activities,
+        vec![WorkspaceAgentActivity {
+            identity: WorkspaceAgentIdentity::Oz { ambient: true },
+            phase: WorkspaceAgentPhase::InProgress,
+        }]
+    );
+}
+
+#[test]
+fn ambient_oz_source_uses_oz_cloud_identity() {
+    let activities = activities_from_terminal_sources(
+        None,
+        Some(OzConversationSource {
+            status: ConversationStatus::InProgress,
+            is_empty: false,
+            is_entirely_passive: false,
+            is_ambient: true,
+        }),
+        false,
+    );
     assert_eq!(
         activities,
         vec![WorkspaceAgentActivity {

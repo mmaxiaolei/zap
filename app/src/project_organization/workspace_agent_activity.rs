@@ -64,6 +64,7 @@ pub(crate) struct OzConversationSource {
     pub status: ConversationStatus,
     pub is_empty: bool,
     pub is_entirely_passive: bool,
+    pub is_ambient: bool,
 }
 
 /// 同一 terminal 上的候选顺序: ambient → Oz → CLI。last_agent_activity 因此让 CLI 覆盖 Oz。
@@ -85,7 +86,9 @@ pub(crate) fn activities_from_terminal_sources(
         if !oz.is_empty && !oz.is_entirely_passive {
             if let Some(phase) = phase_from_conversation_status(&oz.status) {
                 activities.push(WorkspaceAgentActivity {
-                    identity: WorkspaceAgentIdentity::Oz { ambient: false },
+                    identity: WorkspaceAgentIdentity::Oz {
+                        ambient: oz.is_ambient,
+                    },
                     phase,
                 });
             }
