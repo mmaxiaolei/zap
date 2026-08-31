@@ -77,6 +77,33 @@ fn tab_counts_include_active_and_inactive_workspaces() {
 }
 
 #[test]
+fn map_tabs_lists_active_and_inactive_repository_workspaces_in_order() {
+    let workspace_a = RepositoryWorkspaceId(uuid::Uuid::from_u128(1));
+    let workspace_b = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));
+    let mut sets = RepositoryWorkspaceTabSets::new(Some(workspace_a));
+    sets.insert_inactive(
+        Some(workspace_b),
+        RepositoryWorkspaceTabState::new(vec![20_u64, 21], 1),
+    );
+    sets.insert_inactive(None, RepositoryWorkspaceTabState::new(vec![30_u64], 0));
+
+    let active_tabs = vec![10_u64, 11];
+    let mapped = sets.map_tabs(&active_tabs, 1, |tab, index, is_active| {
+        (*tab, index, is_active)
+    });
+
+    assert_eq!(
+        mapped.get(&workspace_a),
+        Some(&vec![(10, 0, false), (11, 1, true)])
+    );
+    assert_eq!(
+        mapped.get(&workspace_b),
+        Some(&vec![(20, 0, false), (21, 1, false)])
+    );
+    assert_eq!(mapped.len(), 2);
+}
+
+#[test]
 fn workspace_ids_matching_includes_active_and_inactive_workspaces() {
     let workspace_a = RepositoryWorkspaceId(uuid::Uuid::from_u128(1));
     let workspace_b = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));

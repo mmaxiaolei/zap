@@ -86,8 +86,15 @@ use crate::project_organization::view::create_workspace_modal::{
 use crate::project_organization::view::delete_workspace_dialog::{
     DeleteWorkspaceDialog, DeleteWorkspaceDialogEvent,
 };
+use crate::project_organization::project_tree_tab::{
+    tab_node_activity, ProjectTreeTabId, ProjectTreeTabNode,
+};
 use crate::project_organization::view::project_tree::{
     resolved_project_organization_tab_layout, ProjectTreeEvent, TabLayout,
+};
+use self::full_height_left_panel_chrome::{
+    use_workspace_info_bar, workspace_info_bar_label, workspace_info_bar_parts,
+    WorkspaceInfoBarGitStats, WorkspaceInfoBarParts,
 };
 use crate::project_organization::workspace_agent_activity::{
     activities_from_terminal_sources, last_agent_activity, OzConversationSource,
@@ -886,6 +893,7 @@ pub struct Workspace {
     active_tab_index: usize,
     repository_workspace_tabs: RepositoryWorkspaceTabSets<TabData>,
     pub(crate) hovered_tab_index: Option<TabBarHoverIndex>,
+    workspace_info_bar_git: WorkspaceInfoBarGitStats,
     tab_bar_hover_state: MouseStateHandle,
     tab_fixed_width: Option<f32>,
     traffic_light_mouse_states: TrafficLightMouseStates,
@@ -1085,6 +1093,189 @@ impl Workspace {
             Self::vertical_tabs_active(app),
             warpui::platform::is_mobile_device(),
         )
+    }
+
+    fn use_workspace_info_bar(&self, app: &AppContext) -> bool {
+        use_workspace_info_bar(
+            self.use_full_height_left_panel_chrome(app),
+            self.active_repository_workspace_id().is_some(),
+        )
+    }
+
+    fn render_workspace_info_bar(
+        &self,
+        appearance: &Appearance,
+        ctx: &AppContext,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let muted = theme.sub_text_color(theme.background());
+        let parts = self.workspace_info_bar_parts(ctx);
+        let mut row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(6.);
+        row.add_child(
+            Text::new_inline(
+                parts.branch.clone(),
+                appearance.ui_font_family(),
+                appearance.ui_font_body(),
+            )
+            .with_color(muted.into())
+            .finish(),
+        );
+        if let Some(upstream) = &parts.from_upstream {
+            row.add_child(
+                Text::new_inline(
+                    "·",
+                    appearance.ui_font_family(),
+                    appearance.ui_font_body(),
+                )
+                .with_color(muted.into())
+                .finish(),
+            );
+            row.add_child(
+                Text::new_inline(
+                    format!("from {upstream}"),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_body(),
+                )
+                .with_color(muted.into())
+                .finish(),
+            );
+        }
+        if parts.has_diff() {
+            row.add_child(
+                Text::new_inline(
+                    "·",
+                    appearance.ui_font_family(),
+                    appearance.ui_font_body(),
+                )
+                .with_color(muted.into())
+                .finish(),
+            );
+            if parts.lines_added > 0 {
+                row.add_child(
+                    Text::new_inline(
+                        format!("+{}", parts.lines_added),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_body(),
+                    )
+                    .with_color(theme.terminal_colors().normal.green.into())
+                    .finish(),
+                );
+            }
+            if parts.lines_removed > 0 {
+                row.add_child(
+                    Text::new_inline(
+                        format!("−{}", parts.lines_removed),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_body(),
+                    )
+                    .with_color(theme.terminal_colors().normal.red.into())
+                    .finish(),
+                );
+            }
+        }
+        Shrinkable::new(
+            1.0,
+            Container::new(row.finish())
+                .with_padding_left(8.)
+                .finish(),
+        )
+        .finish()
+    }
+
+    fn workspace_info_bar_parts(
+        &self,
+        ctx: &AppContext,
+    ) -> WorkspaceInfoBarParts {
+        let Some(workspace_id) = self.active_repository_workspace_id() else {
+            return workspace_info_bar_parts("", None, None, None);
+        };
+        let branch = ProjectOrganizationModel::handle(ctx)
+            .as_ref(ctx)
+            .workspace(workspace_id)
+            .map(|workspace| workspace.branch.clone())
+            .unwrap_or_default();
+        let stats_match_workspace = self.workspace_info_bar_git.workspace_id == Some(workspace_id);
+        workspace_info_bar_parts(
+            &branch,
+            stats_match_workspace
+                .then_some(self.workspace_info_bar_git.upstream.as_deref())
+                .flatten(),
+            stats_match_workspace
+                .then_some(self.workspace_info_bar_git.lines_added)
+                .flatten(),
+            stats_match_workspace
+                .then_some(self.workspace_info_bar_git.lines_removed)
+                .flatten(),
+        )
+    }
+
+    fn workspace_info_bar_text(&self, ctx: &AppContext) -> String {
+        let parts = self.workspace_info_bar_parts(ctx);
+        workspace_info_bar_label(
+            &parts.branch,
+            parts.from_upstream.as_deref(),
+            Some(parts.lines_added).filter(|n| *n > 0),
+            Some(parts.lines_removed).filter(|n| *n > 0),
+        )
+    }
+
+    fn refresh_workspace_info_bar(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(workspace_id) = self.active_repository_workspace_id() else {
+            self.workspace_info_bar_git = WorkspaceInfoBarGitStats::default();
+            return;
+        };
+        if self.workspace_info_bar_git.workspace_id != Some(workspace_id) {
+            self.workspace_info_bar_git = WorkspaceInfoBarGitStats {
+                workspace_id: Some(workspace_id),
+                ..WorkspaceInfoBarGitStats::default()
+            };
+        }
+        #[cfg(feature = "local_fs")]
+        {
+            let Some(workspace) = ProjectOrganizationModel::handle(ctx)
+                .as_ref(ctx)
+                .workspace(workspace_id)
+                .cloned()
+            else {
+                return;
+            };
+            let worktree_path = workspace.worktree_path.clone();
+            let branch = workspace.branch.clone();
+            ctx.spawn(
+                async move {
+                    let summary = crate::util::git::get_repo_git_summary(&worktree_path).await;
+                    let upstream = crate::project_organization::git::workspace_upstream_ref(
+                        &worktree_path,
+                        &branch,
+                    )
+                    .ok()
+                    .flatten();
+                    (workspace_id, summary, upstream)
+                },
+                |workspace, (id, summary, upstream), ctx| {
+                    if workspace.active_repository_workspace_id() != Some(id) {
+                        return;
+                    }
+                    workspace.workspace_info_bar_git.workspace_id = Some(id);
+                    workspace.workspace_info_bar_git.upstream = upstream;
+                    match summary {
+                        Some(summary) => {
+                            workspace.workspace_info_bar_git.lines_added =
+                                Some(summary.lines_added);
+                            workspace.workspace_info_bar_git.lines_removed =
+                                Some(summary.lines_removed);
+                        }
+                        None => {
+                            workspace.workspace_info_bar_git.lines_added = None;
+                            workspace.workspace_info_bar_git.lines_removed = None;
+                        }
+                    }
+                    ctx.notify();
+                },
+            );
+        }
     }
 
     fn left_traffic_light_width(&self, ctx: &AppContext) -> f32 {
@@ -3006,6 +3197,7 @@ impl Workspace {
                 active_repository_workspace_id,
             ),
             hovered_tab_index: None,
+            workspace_info_bar_git: WorkspaceInfoBarGitStats::default(),
             tab_bar_hover_state: Default::default(),
             traffic_light_mouse_states: Default::default(),
             tab_rename_editor: Self::tab_rename_editor(ctx),
@@ -4562,6 +4754,7 @@ impl Workspace {
         );
         self.hovered_tab_index = None;
         self.sync_project_tree(ctx);
+        self.refresh_workspace_info_bar(ctx);
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
     }
@@ -4591,12 +4784,12 @@ impl Workspace {
         let tab_counts = self.repository_workspace_tabs.tab_counts(&self.tabs);
         let active_workspace_id = self.active_repository_workspace_id();
         let running_workspace_ids = self.repository_workspace_ids_with_long_running_terminal(ctx);
-        let agent_activities = self.repository_workspace_agent_activities(ctx);
+        let tab_nodes = self.repository_workspace_tab_nodes(ctx);
         self.left_panel_view.update(ctx, |left_panel, ctx| {
             left_panel.set_project_tree_tab_counts(tab_counts, ctx);
             left_panel.set_project_tree_active_workspace(active_workspace_id, ctx);
             left_panel.set_project_tree_running_workspaces(running_workspace_ids, ctx);
-            left_panel.set_project_tree_agent_activities(agent_activities, ctx);
+            left_panel.set_project_tree_tab_nodes(tab_nodes, ctx);
         });
     }
 
@@ -4628,12 +4821,123 @@ impl Workspace {
             })
     }
 
-    fn repository_workspace_agent_activities(
+    fn repository_workspace_tab_nodes(
         &self,
         ctx: &AppContext,
-    ) -> HashMap<RepositoryWorkspaceId, WorkspaceAgentActivity> {
+    ) -> HashMap<RepositoryWorkspaceId, Vec<ProjectTreeTabNode>> {
+        self.repository_workspace_tabs.map_tabs(
+            &self.tabs,
+            self.active_tab_index,
+            |tab, _index, is_active| ProjectTreeTabNode {
+                id: ProjectTreeTabId(tab.pane_group.id()),
+                title: tab.pane_group.as_ref(ctx).display_title(ctx),
+                activity: tab_node_activity(
+                    self.tab_agent_activity(tab, ctx),
+                    self.tab_has_long_running_terminal(tab, ctx),
+                ),
+                is_active,
+            },
+        )
+    }
+
+    fn tab_index_by_tree_id(&self, tab_id: ProjectTreeTabId) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|tab| tab.pane_group.id() == tab_id.0)
+    }
+
+    fn activate_repository_workspace_tab(
+        &mut self,
+        workspace_id: RepositoryWorkspaceId,
+        tab_id: ProjectTreeTabId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.switch_repository_workspace(Some(workspace_id), ctx);
+        if let Some(index) = self.tab_index_by_tree_id(tab_id) {
+            self.activate_tab(index, ctx);
+        }
+    }
+
+    fn close_repository_workspace_tab(
+        &mut self,
+        workspace_id: RepositoryWorkspaceId,
+        tab_id: ProjectTreeTabId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.switch_repository_workspace(Some(workspace_id), ctx);
+        if let Some(index) = self.tab_index_by_tree_id(tab_id) {
+            self.close_tab(index, false, true, ctx);
+        }
+    }
+
+    fn reorder_repository_workspace_tabs(
+        &mut self,
+        workspace_id: RepositoryWorkspaceId,
+        from: usize,
+        to: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.active_repository_workspace_id() == Some(workspace_id) {
+            let active_id = self
+                .tabs
+                .get(self.active_tab_index)
+                .map(|tab| tab.pane_group.id());
+            if !Self::reorder_tab_items(&mut self.tabs, from, to) {
+                return;
+            }
+            if let Some(active_id) = active_id {
+                if let Some(index) = self
+                    .tabs
+                    .iter()
+                    .position(|tab| tab.pane_group.id() == active_id)
+                {
+                    self.active_tab_index = index;
+                }
+            }
+            self.sync_project_tree(ctx);
+            ctx.dispatch_global_action("workspace:save_app", ());
+            ctx.notify();
+            return;
+        }
+
+        let Some(mut state) = self
+            .repository_workspace_tabs
+            .take_inactive(Some(workspace_id))
+        else {
+            return;
+        };
+        let active_id = state
+            .tabs
+            .get(state.active_tab_index)
+            .map(|tab| tab.pane_group.id());
+        if !Self::reorder_tab_items(&mut state.tabs, from, to) {
+            self.repository_workspace_tabs
+                .insert_inactive(Some(workspace_id), state);
+            return;
+        }
+        if let Some(active_id) = active_id {
+            if let Some(index) = state
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == active_id)
+            {
+                state.active_tab_index = index;
+            }
+        }
         self.repository_workspace_tabs
-            .map_last_matching(&self.tabs, |tab| self.tab_agent_activity(tab, ctx))
+            .insert_inactive(Some(workspace_id), state);
+        self.sync_project_tree(ctx);
+        ctx.dispatch_global_action("workspace:save_app", ());
+        ctx.notify();
+    }
+
+    fn reorder_tab_items<T>(tabs: &mut Vec<T>, from: usize, to: usize) -> bool {
+        if from == to || from >= tabs.len() || to >= tabs.len() {
+            return false;
+        }
+        let item = tabs.remove(from);
+        tabs.insert(to, item);
+        true
     }
 
     fn tab_agent_activity(
@@ -4862,6 +5166,10 @@ impl Workspace {
                 ctx,
             );
         });
+
+        if FeatureFlag::RepositoryWorkspaces.is_enabled() {
+            self.sync_project_tree(ctx);
+        }
 
         let pane_group = self.active_tab_pane_group();
         let focused_terminal_view_id = self
@@ -5774,6 +6082,29 @@ impl Workspace {
             }
             ProjectTreeEvent::WorkspaceSelected { workspace_id } => {
                 self.switch_repository_workspace(*workspace_id, ctx);
+            }
+            ProjectTreeEvent::TabSelected {
+                workspace_id,
+                tab_id,
+            } => {
+                self.activate_repository_workspace_tab(*workspace_id, *tab_id, ctx);
+            }
+            ProjectTreeEvent::TabCloseRequested {
+                workspace_id,
+                tab_id,
+            } => {
+                self.close_repository_workspace_tab(*workspace_id, *tab_id, ctx);
+            }
+            ProjectTreeEvent::NewTabRequested { workspace_id } => {
+                self.switch_repository_workspace(Some(*workspace_id), ctx);
+                self.handle_action(&WorkspaceAction::AddDefaultTab, ctx);
+            }
+            ProjectTreeEvent::TabsReordered {
+                workspace_id,
+                from,
+                to,
+            } => {
+                self.reorder_repository_workspace_tabs(*workspace_id, *from, *to, ctx);
             }
         }
     }
@@ -11136,7 +11467,13 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         let is_last_tab = self.tabs.len() == 1;
-        if !ContextFlag::CloseWindow.is_enabled() && is_last_tab {
+        let closing_last_repository_workspace_tab = is_last_tab
+            && FeatureFlag::RepositoryWorkspaces.is_enabled()
+            && self.active_repository_workspace_id().is_some();
+        if !ContextFlag::CloseWindow.is_enabled()
+            && is_last_tab
+            && !closing_last_repository_workspace_tab
+        {
             return;
         }
 
@@ -17498,6 +17835,8 @@ impl Workspace {
                 DispatchEventResult::StopPropagation
             })
             .finish();
+        } else if self.use_workspace_info_bar(ctx) {
+            tab_bar.add_child(self.render_workspace_info_bar(appearance, ctx));
         } else {
             // Copy from our saved tab_bar_state to ensure all tabs get rendered with the same state
             let active_tab_index = Some(self.active_tab_index);

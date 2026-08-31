@@ -9,11 +9,12 @@ use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::icons::Icon as WarpIcon;
 use warp_core::ui::theme::WarpTheme;
 use warpui::{
+    assets::asset_cache::AssetSource,
     elements::{
-        Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
-        CornerRadius, CrossAxisAlignment, DropShadow, Element, Empty, Fill, Flex, Hoverable,
-        MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition,
-        ScrollbarWidth, Shrinkable, Text,
+        Border, CacheOption, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
+        Container, CornerRadius, CrossAxisAlignment, DropShadow, Element, Empty, Fill, Flex,
+        Hoverable, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
+        SavePosition, ScrollbarWidth, Shrinkable, Text,
     },
     platform::Cursor,
     text_layout::ClipConfig,
@@ -43,6 +44,9 @@ use crate::{
 use crate::project_organization::domain::{
     Repository, RepositoryId, RepositoryWorkspace, RepositoryWorkspaceId,
 };
+use crate::project_organization::project_tree_tab::{
+    workspace_parent_activity_slot, ProjectTreeTabId, ProjectTreeTabNode, TabNodeActivity,
+};
 
 const WORKSPACE_RUNNING_DOT_SIZE: f32 = 6.;
 const WORKSPACE_ACTIVITY_SLOT_SIZE: f32 = 16.;
@@ -50,6 +54,12 @@ const WORKSPACE_TREE_RAIL_WIDTH: f32 = 2.;
 const WORKSPACE_GROUP_INDENT: f32 = 16.;
 const REPOSITORY_GROUP_SPACING: f32 = 10.;
 const WORKSPACE_AGENT_RING_WIDTH: f32 = 1.5;
+const TREE_CHEVRON_SIZE: f32 = 16.;
+const TREE_ROW_ICON_SIZE: f32 = 16.;
+const TREE_ICON_GAP: f32 = 6.;
+/// 页签图标与 workspace 行的分支图标对齐: chevron + gap。
+const TAB_UNDER_WORKSPACE_INDENT: f32 = TREE_CHEVRON_SIZE + TREE_ICON_GAP;
+const ITERM_PROMPT_ICON_PATH: &str = "bundled/svg/iterm-prompt.svg";
 
 const WORKSPACE_AGENT_ICON_SIZING: IconWithStatusSizing = IconWithStatusSizing {
     icon_size: 8.,
@@ -87,6 +97,8 @@ pub struct WorkspaceTreeNode {
     pub display_name: String,
     pub branch: String,
     pub tab_count: usize,
+    pub expanded: bool,
+    pub tabs: Vec<ProjectTreeTabNode>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -101,6 +113,10 @@ pub struct RepositoryTreeNode {
 pub enum ProjectTreeRow {
     Repository(RepositoryId),
     Workspace(RepositoryWorkspaceId),
+    Tab {
+        workspace_id: RepositoryWorkspaceId,
+        tab_id: ProjectTreeTabId,
+    },
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -125,6 +141,7 @@ impl ProjectTreeState {
         repositories: Vec<Repository>,
         workspaces: Vec<RepositoryWorkspace>,
         tab_counts: &HashMap<RepositoryWorkspaceId, usize>,
+        tabs: &HashMap<RepositoryWorkspaceId, Vec<ProjectTreeTabNode>>,
     ) -> Self {
         let mut workspaces_by_repository = HashMap::<RepositoryId, Vec<RepositoryWorkspace>>::new();
         for workspace in workspaces {
@@ -158,6 +175,8 @@ impl ProjectTreeState {
                         display_name: workspace.display_name,
                         branch: workspace.branch,
                         tab_count: tab_counts.get(&workspace.id).copied().unwrap_or_default(),
+                        expanded: true,
+                        tabs: tabs.get(&workspace.id).cloned().unwrap_or_default(),
                     })
                     .collect();
                 RepositoryTreeNode {
@@ -172,24 +191,26 @@ impl ProjectTreeState {
     }
 
     pub fn visible_rows(&self) -> Vec<ProjectTreeRow> {
-        self.repositories
-            .iter()
-            .flat_map(|repository| {
-                let repository_row =
-                    std::iter::once(ProjectTreeRow::Repository(repository.repository_id));
-                let workspace_rows = repository
-                    .expanded
-                    .then(|| {
-                        repository
-                            .workspaces
-                            .iter()
-                            .map(|workspace| ProjectTreeRow::Workspace(workspace.workspace_id))
-                    })
-                    .into_iter()
-                    .flatten();
-                repository_row.chain(workspace_rows)
-            })
-            .collect()
+        let mut rows = Vec::new();
+        for repository in &self.repositories {
+            rows.push(ProjectTreeRow::Repository(repository.repository_id));
+            if !repository.expanded {
+                continue;
+            }
+            for workspace in &repository.workspaces {
+                rows.push(ProjectTreeRow::Workspace(workspace.workspace_id));
+                if !workspace.expanded {
+                    continue;
+                }
+                for tab in &workspace.tabs {
+                    rows.push(ProjectTreeRow::Tab {
+                        workspace_id: workspace.workspace_id,
+                        tab_id: tab.id,
+                    });
+                }
+            }
+        }
+        rows
     }
 
     pub fn toggle_repository(&mut self, repository_id: RepositoryId) -> bool {
@@ -205,21 +226,74 @@ impl ProjectTreeState {
     }
 
     pub fn select_workspace(&mut self, workspace_id: RepositoryWorkspaceId) -> bool {
+        self.select_workspace_internal(workspace_id, true)
+    }
+
+    /// 点名称: 未选中或已收起则选中并展开; 已选中且已展开则收起。
+    pub fn select_or_toggle_workspace(&mut self, workspace_id: RepositoryWorkspaceId) -> bool {
+        let already_selected = self.selected_workspace_id == Some(workspace_id);
+        let expanded = self.workspace_is_expanded(workspace_id);
+        if already_selected && expanded {
+            self.toggle_workspace_expanded(workspace_id)
+        } else {
+            self.select_workspace(workspace_id)
+        }
+    }
+
+    fn workspace_is_expanded(&self, workspace_id: RepositoryWorkspaceId) -> bool {
+        self.repositories.iter().any(|repository| {
+            repository.workspaces.iter().any(|workspace| {
+                workspace.workspace_id == workspace_id && workspace.expanded
+            })
+        })
+    }
+
+    fn select_workspace_internal(
+        &mut self,
+        workspace_id: RepositoryWorkspaceId,
+        expand: bool,
+    ) -> bool {
         let exists = self.repositories.iter().any(|repository| {
             repository
                 .workspaces
                 .iter()
                 .any(|workspace| workspace.workspace_id == workspace_id)
         });
-        if exists {
-            self.selected_workspace_id = Some(workspace_id);
+        if !exists {
+            return false;
         }
-        exists
+        self.selected_workspace_id = Some(workspace_id);
+        if expand {
+            if let Some(workspace) = self.workspace_mut(workspace_id) {
+                workspace.expanded = true;
+            }
+        }
+        true
+    }
+
+    pub fn toggle_workspace_expanded(&mut self, workspace_id: RepositoryWorkspaceId) -> bool {
+        let Some(workspace) = self.workspace_mut(workspace_id) else {
+            return false;
+        };
+        workspace.expanded = !workspace.expanded;
+        true
+    }
+
+    fn workspace_mut(
+        &mut self,
+        workspace_id: RepositoryWorkspaceId,
+    ) -> Option<&mut WorkspaceTreeNode> {
+        self.repositories.iter_mut().find_map(|repository| {
+            repository
+                .workspaces
+                .iter_mut()
+                .find(|workspace| workspace.workspace_id == workspace_id)
+        })
     }
 
     pub fn set_active_workspace(&mut self, workspace_id: Option<RepositoryWorkspaceId>) {
         if let Some(workspace_id) = workspace_id {
-            if self.select_workspace(workspace_id) {
+            if self.select_workspace_internal(workspace_id, false) {
                 return;
             }
         }
@@ -246,6 +320,25 @@ pub enum ProjectTreeAction {
     SelectWorkspace {
         workspace_id: Option<RepositoryWorkspaceId>,
     },
+    ToggleWorkspace {
+        workspace_id: RepositoryWorkspaceId,
+    },
+    SelectTab {
+        workspace_id: RepositoryWorkspaceId,
+        tab_id: ProjectTreeTabId,
+    },
+    CloseTab {
+        workspace_id: RepositoryWorkspaceId,
+        tab_id: ProjectTreeTabId,
+    },
+    NewTab {
+        workspace_id: RepositoryWorkspaceId,
+    },
+    ReorderTabs {
+        workspace_id: RepositoryWorkspaceId,
+        from: usize,
+        to: usize,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -259,6 +352,22 @@ pub enum ProjectTreeEvent {
     },
     WorkspaceSelected {
         workspace_id: Option<RepositoryWorkspaceId>,
+    },
+    TabSelected {
+        workspace_id: RepositoryWorkspaceId,
+        tab_id: ProjectTreeTabId,
+    },
+    TabCloseRequested {
+        workspace_id: RepositoryWorkspaceId,
+        tab_id: ProjectTreeTabId,
+    },
+    NewTabRequested {
+        workspace_id: RepositoryWorkspaceId,
+    },
+    TabsReordered {
+        workspace_id: RepositoryWorkspaceId,
+        from: usize,
+        to: usize,
     },
 }
 
@@ -275,6 +384,29 @@ fn workspace_row_is_selected(
     workspace_id: RepositoryWorkspaceId,
 ) -> bool {
     selected_workspace_id == Some(workspace_id)
+}
+
+fn workspace_row_shows_selection_accent(workspace: &WorkspaceTreeNode, is_selected: bool) -> bool {
+    is_selected && !workspace.expanded
+}
+
+fn tree_row_icon(
+    icon: icons::Icon,
+    color: warp_core::ui::theme::Fill,
+    size: f32,
+) -> Box<dyn Element> {
+    ConstrainedBox::new(icon.to_warpui_icon(color).finish())
+        .with_width(size)
+        .with_height(size)
+        .finish()
+}
+
+fn tree_name_offset() -> f32 {
+    TREE_CHEVRON_SIZE + TREE_ICON_GAP + TREE_ROW_ICON_SIZE + TREE_ICON_GAP
+}
+
+fn tab_name_offset() -> f32 {
+    TAB_UNDER_WORKSPACE_INDENT + TREE_ROW_ICON_SIZE + TREE_ICON_GAP
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -431,12 +563,16 @@ pub struct ProjectTreePanel {
     state: ProjectTreeState,
     clipped_scroll_state: ClippedScrollStateHandle,
     tab_counts: HashMap<RepositoryWorkspaceId, usize>,
+    tab_nodes: HashMap<RepositoryWorkspaceId, Vec<ProjectTreeTabNode>>,
     running_workspace_ids: HashSet<RepositoryWorkspaceId>,
-    agent_activities: HashMap<RepositoryWorkspaceId, WorkspaceAgentActivity>,
-    workspace_breathing_states: HashMap<RepositoryWorkspaceId, BreathingStateHandle>,
+    tab_breathing_states: HashMap<ProjectTreeTabId, BreathingStateHandle>,
     repository_mouse_states: HashMap<RepositoryId, MouseStateHandle>,
     workspace_mouse_states: HashMap<RepositoryWorkspaceId, MouseStateHandle>,
     workspace_delete_mouse_states: HashMap<RepositoryWorkspaceId, MouseStateHandle>,
+    workspace_add_tab_mouse_states: HashMap<RepositoryWorkspaceId, MouseStateHandle>,
+    workspace_toggle_mouse_states: HashMap<RepositoryWorkspaceId, MouseStateHandle>,
+    tab_mouse_states: HashMap<ProjectTreeTabId, MouseStateHandle>,
+    tab_close_mouse_states: HashMap<ProjectTreeTabId, MouseStateHandle>,
     repository_add_workspace_mouse_states: HashMap<RepositoryId, MouseStateHandle>,
     unclassified_mouse_state: MouseStateHandle,
     add_repository_button: ViewHandle<ActionButton>,
@@ -457,12 +593,16 @@ impl ProjectTreePanel {
             state: ProjectTreeState::default(),
             clipped_scroll_state: Default::default(),
             tab_counts: HashMap::new(),
+            tab_nodes: HashMap::new(),
             running_workspace_ids: HashSet::new(),
-            agent_activities: HashMap::new(),
-            workspace_breathing_states: HashMap::new(),
+            tab_breathing_states: HashMap::new(),
             repository_mouse_states: HashMap::new(),
             workspace_mouse_states: HashMap::new(),
             workspace_delete_mouse_states: HashMap::new(),
+            workspace_add_tab_mouse_states: HashMap::new(),
+            workspace_toggle_mouse_states: HashMap::new(),
+            tab_mouse_states: HashMap::new(),
+            tab_close_mouse_states: HashMap::new(),
             repository_add_workspace_mouse_states: HashMap::new(),
             unclassified_mouse_state: Default::default(),
             add_repository_button,
@@ -498,30 +638,31 @@ impl ProjectTreePanel {
         ctx.notify();
     }
 
-    /// 设置各 workspace 的 agent 活动,并同步呼吸环状态。
-    pub fn set_agent_activities(
+    /// 设置各 workspace 的页签子节点,并同步呼吸环状态。
+    pub fn set_tab_nodes(
         &mut self,
-        agent_activities: HashMap<RepositoryWorkspaceId, WorkspaceAgentActivity>,
+        tab_nodes: HashMap<RepositoryWorkspaceId, Vec<ProjectTreeTabNode>>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if self.agent_activities == agent_activities {
+        if self.tab_nodes == tab_nodes {
             return;
         }
-        self.agent_activities = agent_activities;
-        self.sync_breathing_states();
-        ctx.notify();
+        self.tab_nodes = tab_nodes;
+        self.refresh_tree(ctx);
     }
 
     fn sync_breathing_states(&mut self) {
-        self.workspace_breathing_states.retain(|id, _| {
-            self.agent_activities
-                .get(id)
-                .is_some_and(|activity| activity.should_breathe())
-        });
-        for (id, activity) in &self.agent_activities {
-            if activity.should_breathe() {
-                self.workspace_breathing_states.entry(*id).or_default();
-            }
+        let breathing_ids = self
+            .tab_nodes
+            .values()
+            .flatten()
+            .filter(|tab| tab.activity.should_breathe())
+            .map(|tab| tab.id)
+            .collect::<HashSet<_>>();
+        self.tab_breathing_states
+            .retain(|id, _| breathing_ids.contains(id));
+        for id in breathing_ids {
+            self.tab_breathing_states.entry(id).or_default();
         }
     }
 
@@ -544,6 +685,13 @@ impl ProjectTreePanel {
             .iter()
             .map(|repository| (repository.repository_id, repository.expanded))
             .collect::<HashMap<_, _>>();
+        let expanded_by_workspace = self
+            .state
+            .repositories()
+            .iter()
+            .flat_map(|repository| repository.workspaces.iter())
+            .map(|workspace| (workspace.workspace_id, workspace.expanded))
+            .collect::<HashMap<_, _>>();
         let selected_workspace_id = self.state.selected_workspace_id();
         let repositories = self
             .project_organization_model
@@ -558,15 +706,23 @@ impl ProjectTreePanel {
             .cloned()
             .collect();
 
-        self.state = ProjectTreeState::from_records(repositories, workspaces, &self.tab_counts);
+        self.state = ProjectTreeState::from_records(
+            repositories,
+            workspaces,
+            &self.tab_counts,
+            &self.tab_nodes,
+        );
         for repository in &mut self.state.repositories {
             if let Some(expanded) = expanded_by_repository.get(&repository.repository_id) {
                 repository.expanded = *expanded;
             }
+            for workspace in &mut repository.workspaces {
+                if let Some(expanded) = expanded_by_workspace.get(&workspace.workspace_id) {
+                    workspace.expanded = *expanded;
+                }
+            }
         }
-        if let Some(workspace_id) = selected_workspace_id {
-            self.state.select_workspace(workspace_id);
-        }
+        self.state.set_active_workspace(selected_workspace_id);
 
         let repository_ids = self
             .state
@@ -581,6 +737,12 @@ impl ProjectTreePanel {
             .flat_map(|repository| repository.workspaces.iter())
             .map(|workspace| workspace.workspace_id)
             .collect::<HashSet<_>>();
+        let tab_ids = self
+            .tab_nodes
+            .values()
+            .flatten()
+            .map(|tab| tab.id)
+            .collect::<HashSet<_>>();
         synchronize_mouse_states(&mut self.repository_mouse_states, &repository_ids);
         synchronize_mouse_states(
             &mut self.repository_add_workspace_mouse_states,
@@ -588,10 +750,14 @@ impl ProjectTreePanel {
         );
         synchronize_mouse_states(&mut self.workspace_mouse_states, &workspace_ids);
         synchronize_mouse_states(&mut self.workspace_delete_mouse_states, &workspace_ids);
+        synchronize_mouse_states(&mut self.workspace_add_tab_mouse_states, &workspace_ids);
+        synchronize_mouse_states(&mut self.workspace_toggle_mouse_states, &workspace_ids);
+        synchronize_mouse_states(&mut self.tab_mouse_states, &tab_ids);
+        synchronize_mouse_states(&mut self.tab_close_mouse_states, &tab_ids);
         self.running_workspace_ids
             .retain(|workspace_id| workspace_ids.contains(workspace_id));
-        self.agent_activities
-            .retain(|id, _| workspace_ids.contains(id));
+        self.tab_nodes
+            .retain(|workspace_id, _| workspace_ids.contains(workspace_id));
         self.sync_breathing_states();
         ctx.notify();
     }
@@ -676,26 +842,23 @@ impl ProjectTreePanel {
         let row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                ConstrainedBox::new(chevron.to_warpui_icon(icon_color).finish())
-                    .with_width(16.)
-                    .with_height(16.)
-                    .finish(),
-            )
+            .with_spacing(TREE_ICON_GAP)
+            .with_child(tree_row_icon(chevron, icon_color, TREE_CHEVRON_SIZE))
+            .with_child(tree_row_icon(
+                icons::Icon::Folder,
+                icon_color,
+                TREE_ROW_ICON_SIZE,
+            ))
             .with_child(
                 Shrinkable::new(
                     1.0,
-                    Container::new(
-                        Text::new_inline(
-                            repository.display_name.clone(),
-                            appearance.ui_font_family(),
-                            appearance.ui_font_body(),
-                        )
-                        .with_clip(ClipConfig::ellipsis())
-                        .with_color(theme.main_text_color(theme.background()).into())
-                        .finish(),
+                    Text::new_inline(
+                        repository.display_name.clone(),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_body(),
                     )
-                    .with_margin_left(6.)
+                    .with_clip(ClipConfig::ellipsis())
+                    .with_color(theme.main_text_color(theme.background()).into())
                     .finish(),
                 )
                 .finish(),
@@ -776,24 +939,52 @@ impl ProjectTreePanel {
 
     fn render_workspace_activity_slot(
         &self,
-        workspace_id: RepositoryWorkspaceId,
         visual_state: WorkspaceVisualState,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         match visual_state.activity_slot() {
-            WorkspaceActivitySlot::Empty => sized_activity_slot(Empty::new().finish()),
+            WorkspaceActivitySlot::Empty | WorkspaceActivitySlot::Agent(_) => {
+                sized_activity_slot(Empty::new().finish())
+            }
             WorkspaceActivitySlot::RunningDot => {
                 sized_activity_slot(Self::render_workspace_running_dot(visual_state, appearance))
-            }
-            WorkspaceActivitySlot::Agent(activity) => {
-                self.render_workspace_agent_avatar(workspace_id, activity, appearance)
             }
         }
     }
 
-    fn render_workspace_agent_avatar(
+    fn render_tab_activity_slot(
         &self,
-        workspace_id: RepositoryWorkspaceId,
+        tab: &ProjectTreeTabNode,
+        visual_state: WorkspaceVisualState,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        match tab.activity {
+            TabNodeActivity::Idle => sized_activity_slot(
+                ConstrainedBox::new(
+                    Image::new(
+                        AssetSource::Bundled {
+                            path: ITERM_PROMPT_ICON_PATH,
+                        },
+                        CacheOption::BySize,
+                    )
+                    .finish(),
+                )
+                .with_width(TREE_ROW_ICON_SIZE)
+                .with_height(TREE_ROW_ICON_SIZE)
+                .finish(),
+            ),
+            TabNodeActivity::RunningDot => {
+                sized_activity_slot(Self::render_workspace_running_dot(visual_state, appearance))
+            }
+            TabNodeActivity::Agent(activity) => {
+                self.render_tab_agent_avatar(tab.id, activity, appearance)
+            }
+        }
+    }
+
+    fn render_tab_agent_avatar(
+        &self,
+        tab_id: ProjectTreeTabId,
         activity: WorkspaceAgentActivity,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
@@ -807,8 +998,8 @@ impl ProjectTreePanel {
         let ring_color = agent_activity_ring_color(activity, theme);
         let animate = activity.should_breathe();
         let handle = if animate {
-            self.workspace_breathing_states
-                .get(&workspace_id)
+            self.tab_breathing_states
+                .get(&tab_id)
                 .expect("InProgress agent 必须先由 sync_breathing_states 插入呼吸环 handle")
                 .clone()
         } else {
@@ -864,9 +1055,10 @@ impl ProjectTreePanel {
         let theme = appearance.theme();
         let selected =
             workspace_row_is_selected(self.state.selected_workspace_id(), workspace.workspace_id);
+        let shows_selection_accent = workspace_row_shows_selection_accent(workspace, selected);
         let selection_accent = theme.accent();
         let selection_accent_color = selection_accent.into_solid_bias_right_color();
-        let label_color = if selected {
+        let label_color = if shows_selection_accent {
             selection_accent_color
         } else {
             theme
@@ -927,19 +1119,48 @@ impl ProjectTreePanel {
             name
         };
 
+        let any_child_busy = workspace.tabs.iter().any(|tab| tab.activity.is_busy());
+        let parent_slot = workspace_parent_activity_slot(workspace.expanded, any_child_busy);
         let visual_state = WorkspaceVisualState::new(
-            selected,
-            self.running_workspace_ids.contains(&workspace.workspace_id),
-            self.agent_activities.get(&workspace.workspace_id).copied(),
+            shows_selection_accent,
+            matches!(parent_slot, WorkspaceActivitySlot::RunningDot),
+            None,
         );
-        let activity_slot =
-            self.render_workspace_activity_slot(workspace.workspace_id, visual_state, appearance);
+        let activity_slot = self.render_workspace_activity_slot(visual_state, appearance);
         let tab_count =
             Self::render_workspace_tab_count(workspace.tab_count, visual_state, appearance);
+        let toggle_action = ProjectTreeAction::ToggleWorkspace { workspace_id };
+        let chevron_icon = if workspace.expanded {
+            icons::Icon::ChevronDown
+        } else {
+            icons::Icon::ChevronRight
+        };
+        let chevron = Hoverable::new(
+            self.workspace_toggle_mouse_states
+                .get(&workspace_id)
+                .expect("workspace toggle mouse state should be initialized during tree refresh")
+                .clone(),
+            move |_| tree_row_icon(chevron_icon, metadata_color, TREE_CHEVRON_SIZE),
+        )
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(toggle_action.clone());
+        })
+        .finish();
+        let workspace_icon = if matches!(parent_slot, WorkspaceActivitySlot::RunningDot) {
+            activity_slot
+        } else {
+            tree_row_icon(
+                icons::Icon::GitBranch,
+                metadata_color,
+                TREE_ROW_ICON_SIZE,
+            )
+        };
         let labeled_content = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(8.)
-            .with_child(activity_slot)
+            .with_spacing(TREE_ICON_GAP)
+            .with_child(chevron)
+            .with_child(workspace_icon)
             .with_child(Shrinkable::new(1.0, content).finish())
             .finish();
 
@@ -968,6 +1189,28 @@ impl ProjectTreePanel {
             .with_width(icons::ICON_DIMENSIONS)
             .with_height(icons::ICON_DIMENSIONS)
             .finish();
+        let new_tab_action = ProjectTreeAction::NewTab { workspace_id };
+        let new_tab_tooltip = appearance
+            .ui_builder()
+            .tool_tip("New tab".to_string())
+            .build()
+            .finish();
+        let new_tab = icon_button(
+            appearance,
+            icons::Icon::Plus,
+            false,
+            self.workspace_add_tab_mouse_states
+                .get(&workspace_id)
+                .expect("workspace add-tab mouse state should be initialized during tree refresh")
+                .clone(),
+        )
+        .with_tooltip(move || new_tab_tooltip)
+        .build()
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(new_tab_action.clone());
+        })
+        .with_cursor(Cursor::PointingHand)
+        .finish();
 
         Hoverable::new(
             self.workspace_mouse_states
@@ -990,6 +1233,7 @@ impl ProjectTreePanel {
                             .with_cross_axis_alignment(CrossAxisAlignment::Center)
                             .with_spacing(8.)
                             .with_child(tab_count)
+                            .with_child(new_tab)
                             .with_child(delete)
                             .finish(),
                     )
@@ -1011,44 +1255,134 @@ impl ProjectTreePanel {
                         .with_border(Border::all(1.).with_border_fill(selection_accent));
                 }
 
-                let rail = Container::new(
-                    ConstrainedBox::new(Empty::new().finish())
-                        .with_width(WORKSPACE_TREE_RAIL_WIDTH)
-                        .finish(),
-                );
-                let rail = if visual_state.should_render_selection_accent() {
-                    rail.with_background(selection_accent)
-                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(1.)))
-                        .with_drop_shadow(
-                            DropShadow::new_with_standard_offset_and_spread(coloru_with_opacity(
-                                selection_accent_color,
-                                48,
-                            ))
-                            .with_offset(vec2f(0., 0.)),
-                        )
+                row_container.finish()
+            },
+        )
+        .with_cursor(Cursor::PointingHand)
+        .with_defer_events_to_children()
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(action.clone());
+        })
+        .finish()
+    }
+
+    fn render_tab_row(
+        &self,
+        workspace_id: RepositoryWorkspaceId,
+        tab: &ProjectTreeTabNode,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let selection_accent = theme.accent();
+        let selection_accent_color = selection_accent.into_solid_bias_right_color();
+        let visual_state = WorkspaceVisualState::new(
+            tab.is_active,
+            matches!(tab.activity, TabNodeActivity::RunningDot),
+            tab.activity.agent(),
+        );
+        let label_color = if tab.is_active {
+            selection_accent_color
+        } else {
+            theme
+                .main_text_color(theme.background())
+                .into_solid_bias_right_color()
+        };
+        let activity_slot = self.render_tab_activity_slot(tab, visual_state, appearance);
+        let title = Text::new_inline(
+            tab.title.clone(),
+            appearance.ui_font_family(),
+            appearance.ui_font_body(),
+        )
+        .with_clip(ClipConfig::ellipsis())
+        .with_color(label_color.into())
+        .finish();
+        let labeled_content = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(TREE_ICON_GAP)
+            .with_child(
+                ConstrainedBox::new(Empty::new().finish())
+                    .with_width(TAB_UNDER_WORKSPACE_INDENT)
+                    .finish(),
+            )
+            .with_child(activity_slot)
+            .with_child(Shrinkable::new(1.0, title).finish())
+            .finish();
+
+        let tab_id = tab.id;
+        let select_action = ProjectTreeAction::SelectTab {
+            workspace_id,
+            tab_id,
+        };
+        let close_action = ProjectTreeAction::CloseTab {
+            workspace_id,
+            tab_id,
+        };
+        let close_tooltip = appearance
+            .ui_builder()
+            .tool_tip("Close tab".to_string())
+            .build()
+            .finish();
+        let close = icon_button(
+            appearance,
+            icons::Icon::X,
+            false,
+            self.tab_close_mouse_states
+                .get(&tab_id)
+                .expect("tab close mouse state should be initialized during tree refresh")
+                .clone(),
+        )
+        .with_tooltip(move || close_tooltip)
+        .build()
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(close_action.clone());
+        })
+        .with_cursor(Cursor::PointingHand)
+        .finish();
+        let close_placeholder = ConstrainedBox::new(Empty::new().finish())
+            .with_width(icons::ICON_DIMENSIONS)
+            .with_height(icons::ICON_DIMENSIONS)
+            .finish();
+
+        Hoverable::new(
+            self.tab_mouse_states
+                .get(&tab_id)
+                .expect("tab row mouse state should be initialized during tree refresh")
+                .clone(),
+            move |mouse_state| {
+                let close = if mouse_state.is_hovered() {
+                    close
                 } else {
-                    rail.with_background(theme.surface_overlay_2())
+                    close_placeholder
                 };
+                let row_content = Flex::row()
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_child(Shrinkable::new(1.0, labeled_content).finish())
+                    .with_child(close)
+                    .finish();
+                let mut row_container = Container::new(row_content)
+                    .with_horizontal_padding(8.)
+                    .with_vertical_padding(4.)
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(5.)));
+                if visual_state.should_render_selection_accent() {
+                    row_container =
+                        row_container.with_background(selection_accent.with_opacity(10));
+                } else if mouse_state.is_hovered() {
+                    row_container = row_container.with_background(theme.surface_overlay_2());
+                }
 
                 Flex::row()
                     .with_main_axis_size(MainAxisSize::Max)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                    .with_child(rail.finish())
-                    .with_child(
-                        Shrinkable::new(
-                            1.0,
-                            Container::new(row_container.finish())
-                                .with_margin_left(6.)
-                                .finish(),
-                        )
-                        .finish(),
-                    )
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_child(Shrinkable::new(1.0, row_container.finish()).finish())
                     .finish()
             },
         )
         .with_cursor(Cursor::PointingHand)
+        .with_defer_events_to_children()
         .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(action.clone());
+            ctx.dispatch_typed_action(select_action.clone());
         })
         .finish()
     }
@@ -1127,7 +1461,7 @@ impl TypedActionView for ProjectTreePanel {
             }
             ProjectTreeAction::SelectWorkspace { workspace_id } => {
                 if let Some(workspace_id) = workspace_id {
-                    self.state.select_workspace(*workspace_id);
+                    self.state.select_or_toggle_workspace(*workspace_id);
                 } else {
                     self.state.selected_workspace_id = None;
                 }
@@ -1135,6 +1469,48 @@ impl TypedActionView for ProjectTreePanel {
                     workspace_id: *workspace_id,
                 });
                 ctx.notify();
+            }
+            ProjectTreeAction::ToggleWorkspace { workspace_id } => {
+                self.state.toggle_workspace_expanded(*workspace_id);
+                ctx.notify();
+            }
+            ProjectTreeAction::SelectTab {
+                workspace_id,
+                tab_id,
+            } => {
+                self.state.select_workspace(*workspace_id);
+                ctx.emit(ProjectTreeEvent::TabSelected {
+                    workspace_id: *workspace_id,
+                    tab_id: *tab_id,
+                });
+                ctx.notify();
+            }
+            ProjectTreeAction::CloseTab {
+                workspace_id,
+                tab_id,
+            } => {
+                ctx.emit(ProjectTreeEvent::TabCloseRequested {
+                    workspace_id: *workspace_id,
+                    tab_id: *tab_id,
+                });
+            }
+            ProjectTreeAction::NewTab { workspace_id } => {
+                self.state.select_workspace(*workspace_id);
+                ctx.emit(ProjectTreeEvent::NewTabRequested {
+                    workspace_id: *workspace_id,
+                });
+                ctx.notify();
+            }
+            ProjectTreeAction::ReorderTabs {
+                workspace_id,
+                from,
+                to,
+            } => {
+                ctx.emit(ProjectTreeEvent::TabsReordered {
+                    workspace_id: *workspace_id,
+                    from: *from,
+                    to: *to,
+                });
             }
         }
     }
@@ -1161,6 +1537,15 @@ impl View for ProjectTreePanel {
                     .with_spacing(0.);
                 for workspace in &repository.workspaces {
                     workspaces.add_child(self.render_workspace_row(workspace, appearance));
+                    if workspace.expanded {
+                        for tab in &workspace.tabs {
+                            workspaces.add_child(self.render_tab_row(
+                                workspace.workspace_id,
+                                tab,
+                                appearance,
+                            ));
+                        }
+                    }
                 }
                 repository_group.add_child(
                     Container::new(workspaces.finish())

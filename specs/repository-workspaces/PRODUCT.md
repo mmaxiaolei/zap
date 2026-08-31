@@ -2,7 +2,7 @@
 
 ## Summary
 
-为 Zap 增加本机项目组织能力，以 repository 作为一级组织单元，以独立 Git worktree workspace 作为二级组织单元。每个 workspace 管理自己完整的页签集合，并允许在同一 workspace 内运行多个独立终端及其他 PaneGroup 内容。
+为 Zap 增加本机项目组织能力，以 repository 作为一级组织单元，以独立 Git worktree workspace 作为二级组织单元，以页签作为 workspace 的子节点。每个 workspace 管理自己完整的页签集合，并允许在同一 workspace 内运行多个独立终端及其他 PaneGroup 内容。侧栏打开时用树切换页签，顶部改为当前 workspace 的 Git 信息栏。
 
 ## Problem
 
@@ -10,9 +10,11 @@
 
 ## Goals
 
-- 提供清晰的 repository → workspace 双层组织结构。
+- 提供清晰的 repository → workspace → 页签三层组织结构。
 - 保持每个 workspace 的 Git 目录和分支隔离。
-- 复用现有顶部 TabBar、PaneGroup、分屏和会话恢复体验。
+- 页签状态（含 agent 身份）展示在对应树节点上，避免 workspace 行聚合头像造成误读。
+- 侧栏打开时用顶部信息栏展示当前分支、upstream 和未提交行数；侧栏收起时恢复 TabBar。
+- 复用现有 PaneGroup、分屏和会话恢复体验。
 - 为创建、迁移和删除操作提供明确且保守的安全语义。
 - 首期仅保存本机状态，并通过 Dogfood Feature Flag 灰度。
 
@@ -22,10 +24,14 @@
 - Pull Request workspace、远程主机 workspace、端口管理或 setup/teardown scripts。
 - 替换现有终端、PaneGroup 或分屏模型。
 - 在项目组织模式下同时显示 Vertical Tabs。
+- 第一期不把未归类页签展开为树子节点。
+- 第一期不在树上跨 workspace 拖拽页签，也不从树节点拖出拆窗。
+- 第一期信息不栏不展示 worktree 路径或内存 / CPU。
+- 不在折叠的 workspace 行上叠多个 agent 头像或显示 +N。
 
 ## Figma
 
-Figma: none provided. 交互和布局以本规格确认过程中批准的视觉方案为准。
+Figma: none provided. 交互和布局以本规格确认过程中批准的视觉方案为准。页签进树与信息栏的已确认决策见 `docs/plans/2026-08-31-workspace-tabs-in-tree-design.md`。
 
 ## References
 
@@ -35,7 +41,7 @@ Figma: none provided. 交互和布局以本规格确认过程中批准的视觉�
 
 ## Behavior
 
-1. 当 `RepositoryWorkspaces` Feature Flag 启用时，主窗口左侧显示 repository → workspace 双层树。左侧 ToolsPanel 打开时，侧栏通顶，TabBar 只出现在右侧内容列；侧栏收起时 TabBar 恢复整窗通栏。项目组织模式不显示 Vertical Tabs，也不修改用户原有的 Vertical Tabs 设置值。
+1. 当 `RepositoryWorkspaces` Feature Flag 启用时，主窗口左侧显示 repository → workspace → 页签三层树。左侧 ToolsPanel 打开且当前是真正的 repository workspace 时，侧栏通顶，右侧内容列顶部是 workspace 信息栏而不是页签列表；侧栏收起，或当前是未归类页签时，顶部恢复 TabBar。项目组织模式不显示 Vertical Tabs，也不修改用户原有的 Vertical Tabs 设置值。
 
 2. 当 Feature Flag 关闭时，用户继续看到原有项目和页签体验。关闭 Flag 不删除已经保存的 repository、workspace 或页签归属数据。
 
@@ -73,19 +79,19 @@ Figma: none provided. 交互和布局以本规格确认过程中批准的视觉�
 
 19. 新 workspace 创建成功后自动成为当前 workspace，并打开一个以其 worktree 为启动目录的终端页签。
 
-20. 在 workspace 中创建的新页签自动归属当前 workspace。终端默认从 workspace 的 worktree 路径启动；页签仍可使用现有 PaneGroup、分屏、重命名、颜色和拖拽能力。
+20. 在 workspace 中创建的新页签自动归属当前 workspace。终端默认从 workspace 的 worktree 路径启动；页签仍可使用现有 PaneGroup、分屏、重命名、颜色能力。侧栏打开时，新建页签的可见入口是对应 workspace 行上的 `+`：若该 workspace 已是当前 workspace，则直接新建并激活；否则先切换到该 workspace 再新建并激活。快捷键新建页签的语义不变，仍归属当时的当前 workspace。
 
 21. workspace 管理完整页签集合，而不只管理终端页签。AI、Notebook、代码或混合 PaneGroup 页签与终端页签使用相同归属和切换规则。
 
-22. 切换 workspace 时，顶部 TabBar 只显示目标 workspace 的页签，并恢复该 workspace 在当前窗口上次活动的页签。其他 workspace 的终端和后台进程继续运行，不因切换而关闭或重启。
+22. 点击 workspace 父节点时，切换到该 workspace 并恢复该窗口上次活动的页签；若该节点未展开则展开，并高亮对应页签子节点。其他 workspace 的终端和后台进程继续运行，不因切换而关闭或重启。侧栏打开时，该 workspace 的页签作为子节点出现在树里，不出现在顶部栏；侧栏收起后顶部 TabBar 只显示当前 workspace 的页签。
 
 23. workspace 没有页签时显示空状态，并提供“新建终端”操作。空 workspace 仍然有效，不会被自动删除。
 
 24. 每个窗口独立记住当前 workspace，以及每个 workspace 的活动页签。应用重启后恢复相同的窗口、workspace、页签顺序和活动位置。
 
-25. 跨窗口拖动页签时保留其 workspace 归属；目标窗口切换到该 workspace 并激活被拖入的页签。
+25. 跨窗口拖动页签时保留其 workspace 归属；目标窗口切换到该 workspace 并激活被拖入的页签。第一期树节点只支持同一 workspace 内排序；跨 workspace 拖拽和拖出拆窗只在侧栏收起后的 TabBar 上保留。
 
-26. 左侧树底部提供“未归类页签”入口。非 Git 页签、位于主仓库工作目录的旧页签，以及无法可靠映射到 linked worktree 的页签进入该集合。
+26. 左侧树底部提供“未归类页签”入口。非 Git 页签、位于主仓库工作目录的旧页签，以及无法可靠映射到 linked worktree 的页签进入该集合。第一期未归类不展开为页签子节点；选中未归类后顶部仍使用 TabBar 展示这些页签。
 
 27. 首次启用功能时，Zap 自动把现有项目路径迁移为 repository，并根据 Git common directory 识别 linked worktree。位于同一 linked worktree 的现有页签归入同一个 workspace；迁移不得移动目录、切换分支或重启终端。
 
@@ -107,8 +113,20 @@ Figma: none provided. 交互和布局以本规格确认过程中批准的视觉�
 
 36. 长时间 Git 操作不阻塞窗口渲染。对应 repository/workspace 行显示进行中状态，并禁止会与当前操作冲突的重命名、删除或重复创建操作。
 
-37. 双层树、创建弹窗和删除确认支持键盘焦点、方向键导航、Enter 确认和 Escape 取消。图标按钮提供可访问名称或 Tooltip，文本和状态在浅色、深色主题下均使用现有主题色。
+37. 三层树、创建弹窗和删除确认支持键盘焦点、方向键导航、Enter 确认和 Escape 取消。在树上，方向键在 repository / workspace / 页签节点间移动；Enter 激活聚焦的 workspace 或页签。图标按钮提供可访问名称或 Tooltip，文本和状态在浅色、深色主题下均使用现有主题色。新建、关闭、Ctrl+Tab、Cmd/Ctrl+1..9 等现有页签快捷键语义不变。
 
 38. repository 和 workspace 的路径、分支和页签归属仅在本机持久化，不上传到云端，也不在其他设备自动创建或恢复。
 
-39. 当某个 workspace 的页签（含切走后仍挂在后台的页签）中有 agent 处于 InProgress 或 Blocked 时，该 workspace 行左侧活动槽显示对应 agent 的圆形品牌图标：CLI 会话用该 CLI 的品牌图标，原生 Oz / Warp Agent 用 Oz 图标。InProgress 时图标外圈以品牌色做缓慢呼吸；Blocked 时外圈改为静态警告黄。同一 workspace 有多个命中时只显示最近进入该状态的那个。会话结束、取消或出错后图标立即消失。没有 agent 活动但存在 shell 长任务时，活动槽回退为现有绿点。活动槽为纯展示，点击行仍只切换 workspace。详情见 `docs/superpowers/specs/2026-08-26-workspace-agent-activity-design.md`。
+39. 每个页签子节点左侧活动槽展示该页签自己的状态，而不是把多个页签聚合到 workspace 行上。agent 处于 InProgress 或 Blocked 时显示对应品牌圆形图标：CLI 会话用该 CLI 的品牌图标，原生 Oz / Warp Agent 用 Oz 图标。InProgress 时图标外圈以品牌色做缓慢呼吸；Blocked 时外圈改为静态警告黄。会话结束、取消或出错后图标立即消失。没有 agent 活动但存在 shell 长任务时，活动槽为 6px 绿点；都没有时显示与当前 TabBar 一致的页签类型图标。切到其他 workspace 后，后台仍在跑的页签子节点继续显示自己的状态。详情见 `docs/plans/2026-08-31-workspace-tabs-in-tree-design.md`。
+
+40. 页签子节点的标题与当前 TabBar 使用同一标题（自定义名、对话标题或 cwd）。**选中高亮在当前活动页签子节点上**，不在其 workspace 父节点上。空 workspace 没有子节点时，父节点自己处于选中，右侧显示现有空状态，并提供“新建终端”。
+
+41. 点击页签子节点激活该页签；若它属于后台 workspace，先切换到该 workspace 再激活。hover 子节点右侧显示关闭按钮，关闭规则与现有页签相同（含未保存确认）。关掉最后一个页签后 workspace 变为空，不删除 workspace、不终止未关联的 Git 状态。右键打开现有页签上下文菜单。第一期不支持树上双击重命名。
+
+42. 同一 workspace 内可通过拖拽页签子节点排序，顺序与侧栏收起后 TabBar 中的顺序一致，并随窗口快照持久化。
+
+43. 折叠的 workspace 不显示具体 agent 头像。若任一子页签（含后台页签）有 agent 处于 InProgress / Blocked 或存在 shell 长任务，父节点活动槽显示通用绿点；页签数仍显示在父节点右侧。展开后绿点/头像落在各子节点上。
+
+44. 侧栏打开且当前是真正的 repository workspace 时，内容列顶部信息栏显示：真实 Git 分支名；若存在仍可用的 upstream，则显示 `from <upstream 短名>`，否则省略该段；相对 HEAD 的未提交改动行数 `+n −n`（含暂存与 untracked 文本行）。`+n` 与 `−n` 都为 0 时不显示数字。Git 失败或 worktree 丢失时不显示假数字，workspace 树行走现有错误态。信息栏高度与原 TabBar 相同，窗控、红绿灯和拖动窗口行为不变。
+
+45. 信息不栏第一期不展示 worktree 路径、内存或 CPU。信息栏也没有新建页签按钮。

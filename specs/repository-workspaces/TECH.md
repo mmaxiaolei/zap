@@ -29,10 +29,11 @@
 - `model.rs`: repository/workspace 集合、活动操作状态、CRUD 事件和持久化事件桥接。
 - `git.rs`: repository 校验、clone、fetch、ref 解析、worktree 创建、状态检查和删除。
 - `migration.rs`: 旧 projects 与现有 Tab 快照的首次迁移和启动一致性检查。
-- `workspace_agent_activity.rs`: workspace 行活动槽类型、CLI/Oz 身份与绿点互斥决胜。
-- `view/project_tree.rs`: 左侧双层树和空态/错误态。
+- `workspace_agent_activity.rs`: 页签级活动类型、CLI/Oz 身份与绿点互斥决胜；折叠 workspace 父节点只用子节点 activity 的 OR 画通用绿点，不再渲染聚合头像。
+- `view/project_tree.rs`: 左侧三层树（repository → workspace → 页签）和空态/错误态。
+- `view/workspace_info_bar.rs`（或 `Workspace` 顶栏槽内的等价渲染）：侧栏打开且当前是 repository workspace 时替换 TabBar 中间的页签列表。
 
-Workspace 行左侧活动槽由 `Workspace::sync_project_tree` 下发两组互斥信号：`running_workspace_ids`（shell 长任务绿点）和 `HashMap<RepositoryWorkspaceId, WorkspaceAgentActivity>`（CLI/Oz InProgress 或 Blocked 的品牌头像）。聚合在 `Workspace`（`map_last_matching` + `tab_agent_activity`），渲染在 `ProjectTreePanel`，槽宽固定 16px。Agent 在场时不画绿点。身份跟页签 agent 走，不跟底层模型。多命中无时间戳时按页签从左到右最后一个；同一 tab 内按 `pane_sessions` 迭代顺序最后一个。详情见 `docs/superpowers/specs/2026-08-26-workspace-agent-activity-design.md`。
+`Workspace::sync_project_tree` 下发：`tab_counts`、`active_workspace_id`、每个 workspace 的 `Vec<ProjectTreeTabNode>`（稳定 `PaneGroup` id、标题、per-tab activity、`is_active`）。`ProjectTreePanel` 不遍历 terminal / conversation。页签节点活动槽复用 `tab_agent_activity` 与现有 long-running 判定；身份跟该页签的 agent 走，不跟底层模型。折叠父节点有任一子节点活动时画绿点。详情见 `docs/plans/2026-08-31-workspace-tabs-in-tree-design.md`。
 
 - `view/add_repository_modal.rs`: 本地目录与 Git URL 两种添加流程。
 - `view/create_workspace_modal.rs`: 远端基线新建分支与本地分支关联流程。
@@ -169,9 +170,40 @@ row
         └── 其余 panels（header items 已去掉 ToolsPanel）
 ```
 
-判断与 padding 公式在 `app/src/workspace/view/full_height_left_panel_chrome.rs`。macOS 红绿灯避让从 TabBar 改到 `LeftPanelView.titlebar_leading_inset`；Windows/Linux 右侧红绿灯仍由 TabBar 右侧 padding 承担。`titlebar_height` 仍是整窗顶带 `TOTAL_TAB_BAR_HEIGHT`。
+判断与 padding 公式在 `app/src/workspace/view/full_height_left_panel_chrome.rs`。macOS 红绿灯避让从 TabBar 改到 `LeftPanelView.titlebar_leading_inset`；Windows/Linux 右侧红绿灯仍由顶栏右侧 padding 承担。`titlebar_height` 仍是整窗顶带 `TOTAL_TAB_BAR_HEIGHT`。
+
+当通顶 chrome 成立且 `active_repository_workspace_id` 为 `Some` 时，内容列顶部中间换成 workspace 信息栏，页签列表不画在顶栏；窗控仍在右侧。侧栏收起、当前为未归类、或 Flag 关闭时恢复 TabBar。
 
 侧栏收起或 Flag 关闭时恢复 `column(TabBar, panels)`。
+
+### 6b. 树内页签
+
+页签子节点的视图模型由 `Workspace` 计算，不进入 `ProjectTreePanel` 的 terminal 遍历：
+
+```rust
+struct ProjectTreeTabNode {
+    tab_id: PaneGroupId, // 或现有稳定 PaneGroup identity
+    title: String,
+    activity: TabNodeActivity, // agent InProgress/Blocked | shell 长任务 | 类型图标
+    is_active: bool,
+}
+```
+
+`ProjectTreeEvent` 增加 `TabSelected`、`TabCloseRequested`、`NewTabRequested { workspace_id }`、`TabsReordered { workspace_id, from, to }`。`Workspace` 把这些事件映射到现有激活/关闭/新建/重排 API；`NewTabRequested` 在目标不是当前 workspace 时先做集合交换。
+
+树行交互状态（hover、关闭按钮、拖拽）按页签稳定 id 缓存 `MouseStateHandle` / `DraggableState`，在 `refresh_tree` 后同步，避免重绘丢失点击。同一 workspace 内拖拽只改该 workspace 的 tabs 顺序；不得走跨窗口 `TAB_BAR_POSITION_ID` 拆窗路径。
+
+渲染复用 `render_icon_with_status` 与 workspace 行同一 16px 活动槽宽。选中高亮画在 `is_active` 的子节点上。父节点 `+` 与现有 repository 行 `+` 同一套 `ActionButton` / tooltip 模式。
+
+### 6c. Workspace 信息栏
+
+纯展示。数据：
+
+- 分支：当前 `RepositoryWorkspace.branch`；与 Git HEAD 不一致时走现有树行错误态，不在信息栏另造分支。
+- upstream：`branch_upstream`；空或 gone 则省略 `from`。
+- `+n −n`：`get_repo_git_summary`（`git diff --shortstat HEAD` + untracked 文本行）。都为 0 不渲染数字。
+
+只对当前可见 workspace debounce 刷新，失败时保留上一次成功值或留空，禁止显示 0 或猜测值冒充成功。Git 子进程走 `crates/command`。信息不栏没有 `+`、不列出页签。
 
 ### 6. 左侧树与弹窗
 
@@ -182,8 +214,9 @@ UI 遵循 `warp-ui-guidelines`：按钮使用现有 ActionButton/Button 主题�
 树行显示：
 
 - repository: 展开状态、显示名称、进行中/错误状态、添加 workspace 和更多菜单。
-- workspace: 显示名称、真实分支、页签数量、活动/错误状态。
-- 底部固定“未归类页签”入口和数量。
+- workspace: 显示名称、页签数量、折叠时的通用绿点（有子页签活动时）、新建页签 `+`、hover 删除。展开后不在父节点画 agent 头像。
+- tab: 活动槽、标题、hover 关闭；当前活动页签高亮。
+- 底部固定“未归类页签”入口和数量。第一期不展开子页签。
 
 创建弹窗使用 segmented control 切换两种模式。远端模式展示 remote branch、新分支名、自动生成、workspace 名称和 worktree 路径；本地模式展示 local branch、workspace 名称和路径。切换模式时清除不属于目标模式的选择，避免提交陈旧 ref。
 
@@ -219,7 +252,9 @@ UI 遵循 `warp-ui-guidelines`：按钮使用现有 ActionButton/Button 主题�
 
 - `app/src/project_organization/git_tests.rs`: 覆盖 PRODUCT 行为 4-7、11-18、29-35，包括完整 ref 分类、remote 基线新分支、本地分支已检出、脏 worktree、未合并分支、路径与 shell 特殊字符。
 - `app/src/project_organization/model_tests.rs`: 覆盖行为 3、8-10、14、16、36、38，验证 CRUD、唯一约束映射和并发操作门禁。
-- `app/src/workspace/repository_workspace_tabs_tests.rs`: 覆盖行为 19-25，验证集合交换、活动索引、后台实体保留、新页签归属和跨窗口拖拽。
+- `app/src/workspace/repository_workspace_tabs_tests.rs`: 覆盖行为 19-25、42，验证集合交换、活动索引、后台实体保留、新页签归属、同 workspace 重排和跨窗口拖拽。
+- `app/src/project_organization/view/project_tree.rs` 及相关 `*_tests.rs`: 覆盖行为 1、20、22、39-43 的树结构：子节点 per-tab 状态、折叠父节点无头像、点父节点恢复上次页签、hover 关闭、workspace 行 `+` 先切换再新建。
+- `app/src/workspace/view/full_height_left_panel_chrome_tests.rs` 与信息栏谓词测试: 覆盖行为 1、44-45，验证通顶 chrome + 真实 workspace 才显示信息栏；侧栏收起 / 未归类 / flag 关恢复 TabBar；无 upstream 省略 `from`；`+/-` 为 0 或 Git 失败不造数字。
 - `app/src/project_organization/migration_tests.rs`: 覆盖行为 26-28、34，使用临时 repository/worktree 验证幂等迁移和不确定状态进入未分类。
 - persistence round-trip tests: 覆盖行为 24、27、38，验证多窗口、多 workspace、未分类 tabs 和 down/up migration。
 - modal/view tests: 覆盖行为 1-2、10-18、29-37，验证模式切换、焦点、禁用状态、默认复选框和二次确认。
@@ -255,3 +290,6 @@ cargo check
 - 多窗口保存会重建 window/tab id。workspace 使用 UUID，Tab 归属直接随快照写入；窗口关联状态在同一保存 transaction 中使用新 window id 重建。
 - 自动迁移可能遇到主仓库页签或不完整 cwd。仅对 linked worktree 建立确定关联，其余进入未分类，优先避免错误迁移。
 - 项目组织面板与 Vertical Tabs 冲突。Flag 启用时只改变渲染选择，不覆盖用户设置，便于关闭 Flag 回滚。
+- 树内拖拽若复用 TabBar 的 `TAB_BAR_POSITION_ID` 拆窗逻辑，会在第一期误开跨窗口拖。页签子节点拖拽必须限制在同一 workspace 的树节点范围内。
+- 信息栏 Git 刷新过勤会打满 worktree IO。只订阅当前可见 workspace 的路径变更并 debounce，失败留空不重试打爆。
+- 侧栏打开时没有顶栏页签，跨窗口拖和拆窗入口变少。PRODUCT 已把这些能力限定在侧栏收起后的 TabBar，测试需覆盖该回退路径。

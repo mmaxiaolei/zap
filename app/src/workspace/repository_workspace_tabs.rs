@@ -164,6 +164,38 @@ impl<T> RepositoryWorkspaceTabSets<T> {
         self.inactive.iter()
     }
 
+    /// 每个 repository workspace 的全部页签,按该集合内从左到右的顺序。
+    /// 未归类不计。`is_active` 只对当前活动 workspace 的活动下标为 true。
+    pub(crate) fn map_tabs<U>(
+        &self,
+        active_tabs: &[T],
+        active_tab_index: usize,
+        mut map_tab: impl FnMut(&T, usize, bool) -> U,
+    ) -> HashMap<RepositoryWorkspaceId, Vec<U>> {
+        let mut mapped = HashMap::new();
+
+        if let Some(workspace_id) = self.active_workspace_id {
+            let mut tabs = Vec::with_capacity(active_tabs.len());
+            for (index, tab) in active_tabs.iter().enumerate() {
+                tabs.push(map_tab(tab, index, index == active_tab_index));
+            }
+            mapped.insert(workspace_id, tabs);
+        }
+
+        for (workspace_id, state) in &self.inactive {
+            let Some(workspace_id) = workspace_id else {
+                continue;
+            };
+            let mut tabs = Vec::with_capacity(state.tabs.len());
+            for (index, tab) in state.tabs.iter().enumerate() {
+                tabs.push(map_tab(tab, index, false));
+            }
+            mapped.insert(*workspace_id, tabs);
+        }
+
+        mapped
+    }
+
     pub(crate) fn tab_counts(&self, active_tabs: &[T]) -> HashMap<RepositoryWorkspaceId, usize> {
         let mut counts = HashMap::new();
         if let Some(workspace_id) = self.active_workspace_id.filter(|_| !active_tabs.is_empty()) {

@@ -39,10 +39,11 @@ use crate::project_organization::domain::{
 use super::{
     repository_add_workspace_position_id, resolved_project_organization_tab_layout,
     ring_color_contrasts_on_dark_brand, should_show_workspace_delete_button,
-    synchronize_mouse_states, tab_count_badge_label, workspace_count_pill_label,
-    workspace_row_is_selected, workspace_shows_branch_subtitle, ProjectTreeEvent, ProjectTreePanel,
-    ProjectTreeState, RepositoryTreeNode, TabLayout, WorkspaceTreeNode, WorkspaceVisualState,
-    WORKSPACE_ACTIVITY_SLOT_SIZE, WORKSPACE_AGENT_ICON_SIZING, WORKSPACE_AGENT_RING_WIDTH,
+    synchronize_mouse_states, tab_count_badge_label, tab_name_offset, tree_name_offset,
+    workspace_count_pill_label, workspace_row_is_selected, workspace_shows_branch_subtitle,
+    ProjectTreeEvent, ProjectTreePanel, ProjectTreeState, RepositoryTreeNode, TabLayout,
+    WorkspaceTreeNode, WorkspaceVisualState, WORKSPACE_ACTIVITY_SLOT_SIZE,
+    WORKSPACE_AGENT_ICON_SIZING, WORKSPACE_AGENT_RING_WIDTH,
 };
 
 struct ProjectTreeTestHost {
@@ -86,6 +87,71 @@ impl TypedActionView for ProjectTreeTestHost {
 }
 
 #[test]
+fn tab_label_aligns_with_workspace_label() {
+    assert_eq!(tree_name_offset(), tab_name_offset());
+}
+
+#[test]
+fn clicking_selected_expanded_workspace_collapses_it() {
+    let repository_id = RepositoryId(uuid::Uuid::from_u128(1));
+    let workspace_id = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));
+    let mut state = ProjectTreeState::new(vec![RepositoryTreeNode {
+        repository_id,
+        display_name: "zap".to_string(),
+        expanded: true,
+        workspaces: vec![WorkspaceTreeNode {
+            workspace_id,
+            display_name: "Feature A".to_string(),
+            branch: "feature/a".to_string(),
+            tab_count: 1,
+            expanded: false,
+            tabs: vec![],
+        }],
+    }]);
+
+    assert!(state.select_or_toggle_workspace(workspace_id));
+    assert_eq!(state.selected_workspace_id(), Some(workspace_id));
+    assert!(state.workspace_is_expanded(workspace_id));
+
+    assert!(state.select_or_toggle_workspace(workspace_id));
+    assert_eq!(state.selected_workspace_id(), Some(workspace_id));
+    assert!(!state.workspace_is_expanded(workspace_id));
+}
+
+#[test]
+fn tree_renders_three_levels_and_collapsing_workspace_hides_tabs() {
+    let repository_id = RepositoryId(uuid::Uuid::from_u128(1));
+    let workspace_id = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));
+    let tab_id = crate::project_organization::project_tree_tab::ProjectTreeTabId(
+        warpui::EntityId::from_usize(7),
+    );
+    let mut state = ProjectTreeState::new(vec![RepositoryTreeNode {
+        repository_id,
+        display_name: "zap".to_string(),
+        expanded: true,
+        workspaces: vec![WorkspaceTreeNode {
+            workspace_id,
+            display_name: "Feature A".to_string(),
+            branch: "feature/a".to_string(),
+            tab_count: 1,
+            expanded: true,
+            tabs: vec![crate::project_organization::project_tree_tab::ProjectTreeTabNode {
+                id: tab_id,
+                title: "agent".to_string(),
+                activity: crate::project_organization::project_tree_tab::TabNodeActivity::Idle,
+                is_active: true,
+            }],
+        }],
+    }]);
+
+    assert_eq!(state.visible_rows().len(), 3);
+    assert!(state.toggle_workspace_expanded(workspace_id));
+    assert_eq!(state.visible_rows().len(), 2);
+    assert!(state.select_workspace(workspace_id));
+    assert_eq!(state.visible_rows().len(), 3);
+}
+
+#[test]
 fn tree_renders_two_levels_and_selects_workspace() {
     let repository_id = RepositoryId(uuid::Uuid::from_u128(1));
     let workspace_id = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));
@@ -98,6 +164,8 @@ fn tree_renders_two_levels_and_selects_workspace() {
             display_name: "Feature A".to_string(),
             branch: "feature/a".to_string(),
             tab_count: 2,
+            expanded: true,
+            tabs: vec![],
         }],
     }]);
 
@@ -169,6 +237,7 @@ fn tree_sorts_repositories_and_workspaces_by_creation_time() {
             },
         ],
         &[(workspace_a, 2), (workspace_b, 1)].into_iter().collect(),
+        &HashMap::new(),
     );
 
     assert_eq!(state.repositories()[0].display_name, "zebra");
@@ -192,6 +261,8 @@ fn tree_can_clear_and_restore_the_active_workspace_selection() {
             display_name: "Feature A".to_string(),
             branch: "feature/a".to_string(),
             tab_count: 0,
+            expanded: true,
+            tabs: vec![],
         }],
     }]);
 
@@ -638,13 +709,22 @@ fn project_tree_renders_running_grok_agent_avatar() {
             project_tree.set_tab_counts(HashMap::from([(workspace_id, 3)]), ctx);
             project_tree.set_active_workspace(Some(workspace_id), ctx);
             project_tree.set_running_workspaces(HashSet::from([workspace_id]), ctx);
-            project_tree.set_agent_activities(
+            project_tree.set_tab_nodes(
                 HashMap::from([(
                     workspace_id,
-                    WorkspaceAgentActivity {
-                        identity: WorkspaceAgentIdentity::Cli(CLIAgent::Grok),
-                        phase: WorkspaceAgentPhase::InProgress,
-                    },
+                    vec![crate::project_organization::project_tree_tab::ProjectTreeTabNode {
+                        id: crate::project_organization::project_tree_tab::ProjectTreeTabId(
+                            warpui::EntityId::from_usize(11),
+                        ),
+                        title: "grok".to_string(),
+                        activity: crate::project_organization::project_tree_tab::TabNodeActivity::Agent(
+                            WorkspaceAgentActivity {
+                                identity: WorkspaceAgentIdentity::Cli(CLIAgent::Grok),
+                                phase: WorkspaceAgentPhase::InProgress,
+                            },
+                        ),
+                        is_active: true,
+                    }],
                 )]),
                 ctx,
             );

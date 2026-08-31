@@ -1804,6 +1804,14 @@ fn remove_claimed_directory_if_empty(
     })
 }
 
+pub fn workspace_upstream_ref(
+    worktree: &Path,
+    branch: &str,
+) -> Result<Option<String>, GitWorkspaceError> {
+    let full_ref = format!("refs/heads/{branch}");
+    branch_upstream(worktree, &full_ref)
+}
+
 fn branch_upstream(repository: &Path, full_ref: &str) -> Result<Option<String>, GitWorkspaceError> {
     let upstream = output_string(
         repository,

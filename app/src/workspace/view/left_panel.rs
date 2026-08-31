@@ -60,8 +60,8 @@ use crate::{
     pane_group::pane::view::header::{components::HEADER_EDGE_PADDING, PANE_HEADER_HEIGHT},
     pane_group::{self},
     project_organization::domain::RepositoryWorkspaceId,
+    project_organization::project_tree_tab::ProjectTreeTabNode,
     project_organization::view::project_tree::{ProjectTreeEvent, ProjectTreePanel},
-    project_organization::workspace_agent_activity::WorkspaceAgentActivity,
     terminal::resizable_data::{ModalType, ResizableData},
     ui_components::{
         buttons::{icon_button, icon_button_with_color},
@@ -763,13 +763,13 @@ impl LeftPanelView {
         });
     }
 
-    pub fn set_project_tree_agent_activities(
+    pub fn set_project_tree_tab_nodes(
         &mut self,
-        agent_activities: HashMap<RepositoryWorkspaceId, WorkspaceAgentActivity>,
+        tab_nodes: HashMap<RepositoryWorkspaceId, Vec<ProjectTreeTabNode>>,
         ctx: &mut ViewContext<Self>,
     ) {
         self.project_tree_view.update(ctx, |tree, ctx| {
-            tree.set_agent_activities(agent_activities, ctx);
+            tree.set_tab_nodes(tab_nodes, ctx);
         });
     }
 

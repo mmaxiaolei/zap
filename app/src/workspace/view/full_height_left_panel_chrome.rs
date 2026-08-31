@@ -10,6 +10,15 @@ use warpui::platform::FullscreenState;
 use warpui::{AppContext, SingletonEntity, WindowId};
 
 use super::TAB_BAR_PADDING_LEFT;
+use crate::project_organization::domain::RepositoryWorkspaceId;
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WorkspaceInfoBarGitStats {
+    pub workspace_id: Option<RepositoryWorkspaceId>,
+    pub upstream: Option<String>,
+    pub lines_added: Option<u32>,
+    pub lines_removed: Option<u32>,
+}
 
 /// 项目组织模式下，侧栏是否通顶、TabBar 是否只出现在内容列。
 pub(crate) fn use_full_height_left_panel_chrome(
@@ -24,6 +33,85 @@ pub(crate) fn use_full_height_left_panel_chrome(
         && !simplified_wasm_tab_bar
         && !vertical_tabs_active
         && !mobile_overlay
+}
+
+/// 侧栏打开且当前是真正的 repository workspace 时,顶栏中间换成 Git 信息栏。
+pub(crate) fn use_workspace_info_bar(
+    full_height_chrome: bool,
+    has_active_repository_workspace: bool,
+) -> bool {
+    full_height_chrome && has_active_repository_workspace
+}
+
+/// `refs/remotes/origin/main` → `main`。没有 remote 前缀时原样返回。
+pub(crate) fn short_upstream_name(upstream: &str) -> String {
+    let trimmed = upstream.trim();
+    trimmed
+        .strip_prefix("refs/remotes/")
+        .and_then(|rest| rest.split_once('/').map(|(_, branch)| branch.to_string()))
+        .unwrap_or_else(|| {
+            trimmed
+                .strip_prefix("refs/heads/")
+                .unwrap_or(trimmed)
+                .to_string()
+        })
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorkspaceInfoBarParts {
+    pub branch: String,
+    pub from_upstream: Option<String>,
+    pub lines_added: u32,
+    pub lines_removed: u32,
+}
+
+impl WorkspaceInfoBarParts {
+    pub(crate) fn has_diff(&self) -> bool {
+        self.lines_added > 0 || self.lines_removed > 0
+    }
+}
+
+/// 信息栏分段。无 upstream 省略 from; +/- 都为 0 时 diff 为 0。
+pub(crate) fn workspace_info_bar_parts(
+    branch: &str,
+    upstream: Option<&str>,
+    lines_added: Option<u32>,
+    lines_removed: Option<u32>,
+) -> WorkspaceInfoBarParts {
+    let from_upstream = upstream
+        .map(short_upstream_name)
+        .filter(|name| !name.is_empty());
+    let added = lines_added.unwrap_or(0);
+    let removed = lines_removed.unwrap_or(0);
+    let (lines_added, lines_removed) = if added == 0 && removed == 0 {
+        (0, 0)
+    } else {
+        (added, removed)
+    };
+    WorkspaceInfoBarParts {
+        branch: branch.to_string(),
+        from_upstream,
+        lines_added,
+        lines_removed,
+    }
+}
+
+/// 信息栏纯文本回退。无 upstream 省略 from; +/- 都为 0 或未知时不显示数字。
+pub(crate) fn workspace_info_bar_label(
+    branch: &str,
+    upstream: Option<&str>,
+    lines_added: Option<u32>,
+    lines_removed: Option<u32>,
+) -> String {
+    let parts = workspace_info_bar_parts(branch, upstream, lines_added, lines_removed);
+    let mut chunks = vec![parts.branch.clone()];
+    if let Some(upstream) = &parts.from_upstream {
+        chunks.push(format!("from {upstream}"));
+    }
+    if parts.has_diff() {
+        chunks.push(format!("+{}  −{}", parts.lines_added, parts.lines_removed));
+    }
+    chunks.join("  ·  ")
 }
 
 /// 新 chrome 已把 ToolsPanel 提到窗口左侧时，从 header toolbar 配置中去掉它，避免画两次。

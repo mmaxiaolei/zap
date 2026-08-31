@@ -1,6 +1,7 @@
 use super::{
     header_items_excluding_lifted_tools_panel, left_panel_titlebar_leading_inset,
-    tab_bar_leading_padding, use_full_height_left_panel_chrome,
+    short_upstream_name, tab_bar_leading_padding, use_full_height_left_panel_chrome,
+    use_workspace_info_bar, workspace_info_bar_label, workspace_info_bar_parts,
 };
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 
@@ -24,6 +25,54 @@ fn use_full_height_left_panel_chrome_truth_table() {
     assert!(!use_full_height_left_panel_chrome(
         true, true, false, false, true
     ));
+}
+
+#[test]
+fn use_workspace_info_bar_requires_full_height_chrome_and_active_workspace() {
+    assert!(use_workspace_info_bar(true, true));
+    assert!(!use_workspace_info_bar(true, false));
+    assert!(!use_workspace_info_bar(false, true));
+    assert!(!use_workspace_info_bar(false, false));
+}
+
+#[test]
+fn short_upstream_name_strips_remote_ref_prefix() {
+    assert_eq!(short_upstream_name("refs/remotes/origin/main"), "main");
+    assert_eq!(
+        short_upstream_name("refs/remotes/origin/feature/a"),
+        "feature/a"
+    );
+    assert_eq!(short_upstream_name("main"), "main");
+}
+
+#[test]
+fn workspace_info_bar_label_omits_missing_upstream_and_zero_diff() {
+    assert_eq!(
+        workspace_info_bar_label("feature-a", None, Some(0), Some(0)),
+        "feature-a"
+    );
+    assert_eq!(
+        workspace_info_bar_label("feature-a", Some("refs/remotes/origin/main"), Some(12), Some(3)),
+        "feature-a  ·  from main  ·  +12  −3"
+    );
+    assert_eq!(
+        workspace_info_bar_label("feature-a", Some("refs/remotes/origin/main"), None, None),
+        "feature-a  ·  from main"
+    );
+}
+
+#[test]
+fn workspace_info_bar_parts_exposes_diff_counts_for_colored_render() {
+    let parts = workspace_info_bar_parts(
+        "fix",
+        Some("refs/remotes/origin/main"),
+        Some(46),
+        Some(1),
+    );
+    assert_eq!(parts.from_upstream.as_deref(), Some("main"));
+    assert_eq!(parts.lines_added, 46);
+    assert_eq!(parts.lines_removed, 1);
+    assert!(parts.has_diff());
 }
 
 #[test]
