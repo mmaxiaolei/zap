@@ -163,3 +163,59 @@ fn preemption_logic_covers_until_completion_timeout() {
         DurationDelay(Duration::from_secs(1))
     ));
 }
+
+#[test]
+fn detects_git_log_stat_as_implicit_pager_command() {
+    for command in [
+        "git log --stat",
+        "git log",
+        "git diff",
+        "git show HEAD",
+        "git blame README.md",
+        "git reflog",
+        "man git-log",
+        "less CHANGELOG.md",
+        "/usr/bin/git log --stat",
+        "command git log --stat",
+        r#""C:\Program Files\Git\cmd\git.exe" log --stat"#,
+        "warp_run_generator_command 42 'git log --stat'",
+    ] {
+        assert_eq!(command_uses_implicit_pager(command), true, "{command}");
+    }
+}
+
+#[test]
+fn does_not_treat_non_pager_or_explicitly_disabled_git_as_pager() {
+    for command in [
+        "git status",
+        "git log --stat | cat",
+        "git --no-pager log --stat",
+        "git -P log --stat",
+        "git log --no-pager --stat",
+        "git commit -m 'log --stat'",
+        "echo git log --stat",
+        "ls",
+    ] {
+        assert_eq!(command_uses_implicit_pager(command), false, "{command}");
+    }
+}
+
+#[test]
+fn requested_command_keeps_pager_for_interactive_git_log() {
+    assert!(!should_disable_pager_for_requested_command(
+        true,
+        "git log --stat"
+    ));
+    assert!(!should_disable_pager_for_requested_command(
+        false,
+        "git log --stat"
+    ));
+    assert!(should_disable_pager_for_requested_command(
+        true,
+        "git status"
+    ));
+    assert!(!should_disable_pager_for_requested_command(
+        false,
+        "git status"
+    ));
+}
