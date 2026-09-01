@@ -2939,6 +2939,7 @@ vertical-tabs-no-tabs-open = No tabs open
 vertical-tabs-untitled-tab = Untitled tab
 vertical-tabs-view-options-tooltip = View options
 vertical-tabs-new-session = New session
+repository-workspace-terminal-tab-title = Terminal { $number }
 vertical-tabs-terminal-kind-oz = Oz
 vertical-tabs-pane-kind-terminal = Terminal
 vertical-tabs-pane-kind-code = Code

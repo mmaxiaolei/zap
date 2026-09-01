@@ -1,4 +1,4 @@
-use super::{build_resume_command, CliAgentResumeSnapshot};
+use super::{build_resume_command, take_resume_command_if_shell_ready, CliAgentResumeSnapshot};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
 };
@@ -169,4 +169,24 @@ fn snapshot_keeps_local_claude_session() {
         snapshot.resume_command().as_deref(),
         Some("claude --dangerously-skip-permissions --resume sid"),
     );
+}
+
+#[test]
+fn queued_resume_stays_until_shell_is_bootstrapped() {
+    let mut pending = Some("claude --resume sid".to_owned());
+    assert_eq!(
+        take_resume_command_if_shell_ready(&mut pending, false),
+        None
+    );
+    assert_eq!(pending.as_deref(), Some("claude --resume sid"));
+}
+
+#[test]
+fn queued_resume_is_taken_after_shell_bootstraps() {
+    let mut pending = Some("claude --resume sid".to_owned());
+    assert_eq!(
+        take_resume_command_if_shell_ready(&mut pending, true).as_deref(),
+        Some("claude --resume sid"),
+    );
+    assert_eq!(pending, None);
 }

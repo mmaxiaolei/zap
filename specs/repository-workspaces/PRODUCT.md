@@ -119,7 +119,7 @@ Figma: none provided. 交互和布局以本规格确认过程中批准的视觉�
 
 39. 每个页签子节点左侧活动槽展示该页签自己的状态，而不是把多个页签聚合到 workspace 行上。agent 处于 InProgress 或 Blocked 时显示对应品牌圆形图标：CLI 会话用该 CLI 的品牌图标，原生 Oz / Warp Agent 用 Oz 图标。InProgress 时图标外圈以品牌色做缓慢呼吸；Blocked 时外圈改为静态警告黄。会话结束、取消或出错后图标立即消失。没有 agent 活动但存在 shell 长任务时，活动槽为 6px 绿点；都没有时显示与当前 TabBar 一致的页签类型图标。切到其他 workspace 后，后台仍在跑的页签子节点继续显示自己的状态。详情见 `docs/plans/2026-08-31-workspace-tabs-in-tree-design.md`。
 
-40. 页签子节点的标题与当前 TabBar 使用同一标题（自定义名、对话标题或 cwd）。**选中高亮在当前活动页签子节点上**，不在其 workspace 父节点上。空 workspace 没有子节点时，父节点自己处于选中，右侧显示现有空状态，并提供“新建终端”。
+40. 页签子节点的标题与侧栏收起后的 TabBar 使用同一套规则。自定义名永远优先。聚焦 pane 是 terminal 时，标题依次为：CLI agent / 对话标题、与 cwd 不同的长任务 OSC 标题、最近一条有信息量的命令（跳过 `cd` / `ls` / `pwd` / `clear` / `exit` 等）、否则按当前 workspace 从左到右编号为 `Terminal 1`、`Terminal 2`。非 terminal 页签仍用原 display_title。路径留在 hover tooltip，不进标题。**选中高亮在当前活动页签子节点上**，不在其 workspace 父节点上。空 workspace 没有子节点时，父节点自己处于选中，右侧显示现有空状态，并提供“新建终端”。
 
 41. 点击页签子节点激活该页签；若它属于后台 workspace，先切换到该 workspace 再激活。hover 子节点右侧显示关闭按钮，关闭规则与现有页签相同（含未保存确认）。关掉最后一个页签后 workspace 变为空，不删除 workspace、不终止未关联的 Git 状态。右键打开现有页签上下文菜单。第一期不支持树上双击重命名。
 

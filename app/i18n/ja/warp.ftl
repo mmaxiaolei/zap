@@ -2749,6 +2749,7 @@ vertical-tabs-no-tabs-open = 開いているタブはありません
 vertical-tabs-untitled-tab = 無題のタブ
 vertical-tabs-view-options-tooltip = 表示オプション
 vertical-tabs-new-session = 新しいセッション
+repository-workspace-terminal-tab-title = ターミナル { $number }
 vertical-tabs-terminal-kind-oz = Oz
 vertical-tabs-pane-kind-terminal = ターミナル
 vertical-tabs-pane-kind-code = コード

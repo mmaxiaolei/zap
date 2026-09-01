@@ -74,7 +74,7 @@ repository
 | 无 agent、有 shell 长任务 | 6px 绿点 |
 | 都没有 | 页签类型图标，与现在 TabBar 一致 |
 
-- 标题与当前 TabBar 相同（自定义名、对话标题或 cwd）。
+- 标题与侧栏收起后的 TabBar 相同：自定义名、agent/对话标题、长任务进程名、最近有信息量的命令；空闲 terminal 按当前 workspace 编号为 Terminal 1、Terminal 2。不再用缩写路径当标题。
 - **选中高亮在活动页签子节点上**，不在 workspace 父节点上。点父节点只是切 workspace 并高亮上次活动子节点。
 - hover 右侧关闭；关闭规则跟现有页签相同（未保存确认等）。
 - 同一 workspace 内拖拽排序。

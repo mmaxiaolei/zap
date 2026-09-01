@@ -228,6 +228,10 @@ fn apply_color_support_env(builder: &mut Command) {
     builder.env("CLICOLOR_FORCE", "1");
     builder.env_remove("NO_COLOR");
     builder.env_remove("NODE_DISABLE_COLORS");
+    // Agent 关 pager 时会临时 export `GIT_CONFIG_COUNT=1` + `core.pager=cat`。
+    // 若这组变量漏进 Zap 进程再遗传到新 PTY,用户自己跑 `git log --stat`
+    // 也会一次性把全部内容打出来,不再进 less。
+    builder.env_remove("GIT_CONFIG_COUNT");
 }
 
 /// Builds the `Command` for a host-shell PTY session: executable, args,

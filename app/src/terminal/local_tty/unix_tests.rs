@@ -51,3 +51,12 @@ fn apply_color_support_env_overrides_caller_no_color_after_env_vars() {
     assert_eq!(env_value(&cmd, "NO_COLOR"), Some(None));
     assert_eq!(env_value(&cmd, "FORCE_COLOR"), Some(Some(OsStr::new("3"))));
 }
+
+#[test]
+fn apply_color_support_env_strips_inherited_git_pager_override() {
+    let mut cmd = Command::new("true");
+    cmd.env("GIT_CONFIG_COUNT", "1");
+    apply_color_support_env(&mut cmd);
+
+    assert_eq!(env_value(&cmd, "GIT_CONFIG_COUNT"), Some(None));
+}

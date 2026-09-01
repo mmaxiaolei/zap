@@ -38,12 +38,12 @@ use crate::project_organization::domain::{
 
 use super::{
     repository_add_workspace_position_id, resolved_project_organization_tab_layout,
-    ring_color_contrasts_on_dark_brand, should_show_workspace_delete_button,
-    synchronize_mouse_states, tab_count_badge_label, tab_name_offset, tree_name_offset,
-    workspace_count_pill_label, workspace_row_is_selected, workspace_shows_branch_subtitle,
-    ProjectTreeEvent, ProjectTreePanel, ProjectTreeState, RepositoryTreeNode, TabLayout,
-    WorkspaceTreeNode, WorkspaceVisualState, WORKSPACE_ACTIVITY_SLOT_SIZE,
-    WORKSPACE_AGENT_ICON_SIZING, WORKSPACE_AGENT_RING_WIDTH,
+    ring_color_contrasts_on_dark_brand, should_show_workspace_hover_actions,
+    synchronize_mouse_states, tab_count_badge_label, tab_name_offset, tab_status_icon_offset,
+    tree_name_offset, tree_status_icon_offset, workspace_count_pill_label,
+    workspace_row_is_selected, workspace_shows_branch_subtitle, ProjectTreeEvent, ProjectTreePanel,
+    ProjectTreeState, RepositoryTreeNode, TabLayout, WorkspaceTreeNode, WorkspaceVisualState,
+    WORKSPACE_ACTIVITY_SLOT_SIZE, WORKSPACE_AGENT_ICON_SIZING, WORKSPACE_AGENT_RING_WIDTH,
 };
 
 struct ProjectTreeTestHost {
@@ -92,6 +92,11 @@ fn tab_label_aligns_with_workspace_label() {
 }
 
 #[test]
+fn tab_status_icon_aligns_with_workspace_branch_icon() {
+    assert_eq!(tree_status_icon_offset(), tab_status_icon_offset());
+}
+
+#[test]
 fn clicking_selected_expanded_workspace_collapses_it() {
     let repository_id = RepositoryId(uuid::Uuid::from_u128(1));
     let workspace_id = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));
@@ -135,12 +140,14 @@ fn tree_renders_three_levels_and_collapsing_workspace_hides_tabs() {
             branch: "feature/a".to_string(),
             tab_count: 1,
             expanded: true,
-            tabs: vec![crate::project_organization::project_tree_tab::ProjectTreeTabNode {
-                id: tab_id,
-                title: "agent".to_string(),
-                activity: crate::project_organization::project_tree_tab::TabNodeActivity::Idle,
-                is_active: true,
-            }],
+            tabs: vec![
+                crate::project_organization::project_tree_tab::ProjectTreeTabNode {
+                    id: tab_id,
+                    title: "agent".to_string(),
+                    activity: crate::project_organization::project_tree_tab::TabNodeActivity::Idle,
+                    is_active: true,
+                },
+            ],
         }],
     }]);
 
@@ -296,9 +303,9 @@ fn synchronize_mouse_states_removes_stale_entries_and_preserves_existing_handles
 }
 
 #[test]
-fn workspace_delete_button_only_shows_when_workspace_row_is_hovered() {
-    assert!(!should_show_workspace_delete_button(false));
-    assert!(should_show_workspace_delete_button(true));
+fn workspace_hover_actions_only_show_when_workspace_row_is_hovered() {
+    assert!(!should_show_workspace_hover_actions(false));
+    assert!(should_show_workspace_hover_actions(true));
 }
 
 #[test]
@@ -376,8 +383,7 @@ fn workspace_visual_state_hides_running_dot_when_agent_is_present() {
 
 #[test]
 fn workspace_agent_avatar_inner_plus_ring_fits_activity_slot() {
-    let inner =
-        WORKSPACE_AGENT_ICON_SIZING.icon_size + WORKSPACE_AGENT_ICON_SIZING.padding * 2.;
+    let inner = WORKSPACE_AGENT_ICON_SIZING.icon_size + WORKSPACE_AGENT_ICON_SIZING.padding * 2.;
     let ring = WORKSPACE_AGENT_RING_WIDTH * 2.;
     assert_eq!(inner + ring, WORKSPACE_ACTIVITY_SLOT_SIZE);
 }

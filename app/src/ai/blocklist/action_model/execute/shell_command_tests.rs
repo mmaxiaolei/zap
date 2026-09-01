@@ -179,6 +179,12 @@ fn detects_git_log_stat_as_implicit_pager_command() {
         "command git log --stat",
         r#""C:\Program Files\Git\cmd\git.exe" log --stat"#,
         "warp_run_generator_command 42 'git log --stat'",
+        "cd /tmp && git log --stat",
+        "cd /tmp; git log --stat",
+        "noglob git log --stat",
+        "PAGER=less git log --stat",
+        "git log --pretty=format:'%h | %s' --stat",
+        "git log --stat | less",
     ] {
         assert_eq!(command_uses_implicit_pager(command), true, "{command}");
     }
@@ -189,12 +195,14 @@ fn does_not_treat_non_pager_or_explicitly_disabled_git_as_pager() {
     for command in [
         "git status",
         "git log --stat | cat",
+        "cd /tmp && git log --stat | cat",
         "git --no-pager log --stat",
         "git -P log --stat",
         "git log --no-pager --stat",
         "git commit -m 'log --stat'",
         "echo git log --stat",
         "ls",
+        "cd /tmp && git status",
     ] {
         assert_eq!(command_uses_implicit_pager(command), false, "{command}");
     }
@@ -217,5 +225,17 @@ fn requested_command_keeps_pager_for_interactive_git_log() {
     assert!(!should_disable_pager_for_requested_command(
         false,
         "git status"
+    ));
+    assert!(!should_disable_pager_for_requested_command(
+        true,
+        "cd /tmp && git log --stat"
+    ));
+    assert!(!should_disable_pager_for_requested_command(
+        true,
+        "git log --pretty=format:'%h | %s' --stat"
+    ));
+    assert!(should_disable_pager_for_requested_command(
+        true,
+        "git log --stat | cat"
     ));
 }

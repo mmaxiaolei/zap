@@ -195,6 +195,8 @@ struct ProjectTreeTabNode {
 
 渲染复用 `render_icon_with_status` 与 workspace 行同一 16px 活动槽宽。选中高亮画在 `is_active` 的子节点上。父节点 `+` 与现有 repository 行 `+` 同一套 `ActionButton` / tooltip 模式。
 
+标题由 `Workspace::resolve_workspace_tab_label` 计算，纯规则在 `project_tree_tab.rs` 的 `resolve_terminal_tab_label` / `assign_idle_terminal_numbers`。每个 workspace 内空闲 terminal 从 1 编号。树和 TabBar 共用该结果；窗口标题仍走 `display_title`（cwd / 自定义名）。`PaneTitleUpdated` 和 `TerminalViewStateChanged` 都会 `sync_project_tree`，命令结束后树标题会更新。
+
 ### 6c. Workspace 信息栏
 
 纯展示。数据：

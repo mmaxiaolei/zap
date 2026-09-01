@@ -7,8 +7,9 @@ use crate::project_organization::workspace_agent_activity::{
 use crate::terminal::CLIAgent;
 
 use super::{
-    tab_is_active, tab_node_activity, workspace_parent_activity_slot, ProjectTreeTabId,
-    ProjectTreeTabNode, TabNodeActivity,
+    ProjectTreeTabId, ProjectTreeTabNode, ResolvedWorkspaceTabLabel, TabNodeActivity,
+    assign_idle_terminal_numbers, default_terminal_tab_title, resolve_terminal_tab_label,
+    tab_is_active, tab_node_activity, workspace_parent_activity_slot,
 };
 
 fn grok_running() -> WorkspaceAgentActivity {
@@ -35,10 +36,7 @@ fn tab_node_activity_prefers_agent_over_running_dot() {
 
 #[test]
 fn tab_node_activity_falls_back_to_running_dot() {
-    assert_eq!(
-        tab_node_activity(None, true),
-        TabNodeActivity::RunningDot
-    );
+    assert_eq!(tab_node_activity(None, true), TabNodeActivity::RunningDot);
 }
 
 #[test]
@@ -71,6 +69,248 @@ fn collapsed_idle_parent_is_empty() {
     assert_eq!(
         workspace_parent_activity_slot(false, false),
         WorkspaceActivitySlot::Empty
+    );
+}
+
+#[test]
+fn custom_title_wins_over_command_and_cwd() {
+    assert_eq!(
+        resolve_terminal_tab_label(
+            Some("Build"),
+            true,
+            "~/zap",
+            Some("claude"),
+            Some("conversation"),
+            false,
+            "~/zap",
+            "~/zap",
+            Some("cargo test"),
+        ),
+        ResolvedWorkspaceTabLabel::Named("Build".to_string())
+    );
+}
+
+#[test]
+fn non_terminal_tab_keeps_display_title() {
+    assert_eq!(
+        resolve_terminal_tab_label(
+            None,
+            false,
+            "main.rs",
+            None,
+            None,
+            false,
+            "",
+            "",
+            Some("cargo test"),
+        ),
+        ResolvedWorkspaceTabLabel::Named("main.rs".to_string())
+    );
+}
+
+#[test]
+fn cli_agent_title_beats_last_command() {
+    assert_eq!(
+        resolve_terminal_tab_label(
+            None,
+            true,
+            "~/zap",
+            Some("fix the pager"),
+            None,
+            false,
+            "~/zap",
+            "~/zap",
+            Some("cargo test"),
+        ),
+        ResolvedWorkspaceTabLabel::Named("fix the pager".to_string())
+    );
+}
+
+#[test]
+fn long_running_process_title_beats_last_command() {
+    assert_eq!(
+        resolve_terminal_tab_label(
+            None,
+            true,
+            "~/zap",
+            None,
+            None,
+            true,
+            "nvim src/lib.rs",
+            "~/zap",
+            Some("ls"),
+        ),
+        ResolvedWorkspaceTabLabel::Named("nvim src/lib.rs".to_string())
+    );
+}
+
+#[test]
+fn last_command_replaces_cwd_title() {
+    assert_eq!(
+        resolve_terminal_tab_label(
+            None,
+            true,
+            "~/zap",
+            None,
+            None,
+            false,
+            "~/zap",
+            "~/zap",
+            Some("cargo nextest run"),
+        ),
+        ResolvedWorkspaceTabLabel::Named("cargo nextest run".to_string())
+    );
+}
+
+#[test]
+fn idle_terminal_ignores_osc_path_title() {
+    assert_eq!(
+        resolve_terminal_tab_label(
+            None,
+            true,
+            "feature-601-dump-sample",
+            None,
+            None,
+            false,
+            "feature-601-dump-sample",
+            "~/.warp/worktrees/repo/feature-601-dump-sample",
+            None,
+        ),
+        ResolvedWorkspaceTabLabel::IdleTerminal
+    );
+}
+
+#[test]
+fn idle_terminal_ignores_custom_title_that_is_cwd() {
+    assert_eq!(
+        resolve_terminal_tab_label(
+            Some("~/.warp/worktrees/repo/feature-601-dump-sample"),
+            true,
+            "~/.warp/worktrees/repo/feature-601-dump-sample",
+            None,
+            None,
+            false,
+            "~/.warp/worktrees/repo/feature-601-dump-sample",
+            "~/.warp/worktrees/repo/feature-601-dump-sample",
+            Some("git status"),
+        ),
+        ResolvedWorkspaceTabLabel::Named("git status".to_string())
+    );
+}
+
+#[test]
+fn path_like_osc_title_is_treated_as_cwd() {
+    assert_eq!(
+        resolve_terminal_tab_label(
+            None,
+            true,
+            "/Users/me/.warp/worktrees/repo/feature-601-dump-sample",
+            None,
+            None,
+            false,
+            "/Users/me/.warp/worktrees/repo/feature-601-dump-sample",
+            "~/.warp/worktrees/repo/feature-601-dump-sample",
+            Some("git status"),
+        ),
+        ResolvedWorkspaceTabLabel::Named("git status".to_string())
+    );
+    assert_eq!(
+        resolve_terminal_tab_label(
+            None,
+            true,
+            "~/.warp/worktrees/repo/feature-601-dump-sample",
+            None,
+            None,
+            false,
+            "feature-601-dump-sample",
+            "~/.warp/worktrees/repo/feature-601-dump-sample",
+            None,
+        ),
+        ResolvedWorkspaceTabLabel::IdleTerminal
+    );
+}
+
+#[test]
+fn host_prefixed_osc_path_is_treated_as_cwd() {
+    assert_eq!(
+        resolve_terminal_tab_label(
+            None,
+            true,
+            "~/zap",
+            None,
+            None,
+            false,
+            "host: ~/zap",
+            "~/zap",
+            Some("git status"),
+        ),
+        ResolvedWorkspaceTabLabel::Named("git status".to_string())
+    );
+}
+
+#[test]
+fn trivial_commands_fall_through_to_idle_terminal() {
+    assert_eq!(
+        resolve_terminal_tab_label(
+            None,
+            true,
+            "~/zap",
+            None,
+            None,
+            false,
+            "~/zap",
+            "~/zap",
+            Some("ls -la"),
+        ),
+        ResolvedWorkspaceTabLabel::IdleTerminal
+    );
+    assert_eq!(
+        resolve_terminal_tab_label(
+            None,
+            true,
+            "~/zap",
+            None,
+            None,
+            false,
+            "~/zap",
+            "~/zap",
+            Some("cd src"),
+        ),
+        ResolvedWorkspaceTabLabel::IdleTerminal
+    );
+}
+
+#[test]
+fn compound_command_starting_with_cd_is_kept() {
+    assert_eq!(
+        resolve_terminal_tab_label(
+            None,
+            true,
+            "~/zap",
+            None,
+            None,
+            false,
+            "~/zap",
+            "~/zap",
+            Some("cd src && cargo test"),
+        ),
+        ResolvedWorkspaceTabLabel::Named("cd src && cargo test".to_string())
+    );
+}
+
+#[test]
+fn idle_terminals_are_numbered_in_workspace_order() {
+    assert_eq!(
+        assign_idle_terminal_numbers(vec![
+            ResolvedWorkspaceTabLabel::IdleTerminal,
+            ResolvedWorkspaceTabLabel::Named("cargo test".to_string()),
+            ResolvedWorkspaceTabLabel::IdleTerminal,
+        ]),
+        vec![
+            default_terminal_tab_title(1),
+            "cargo test".to_string(),
+            default_terminal_tab_title(2),
+        ]
     );
 }
 

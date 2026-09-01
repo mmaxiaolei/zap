@@ -28,6 +28,10 @@ use crate::workspace::cross_window_tab_drag::{
 };
 pub(crate) use onboarding::OnboardingTutorial;
 
+use self::full_height_left_panel_chrome::{
+    use_workspace_info_bar, workspace_info_bar_label, workspace_info_bar_parts,
+    WorkspaceInfoBarGitStats, WorkspaceInfoBarParts,
+};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::agent_conversations_model::ConversationOrTask;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -80,21 +84,18 @@ use crate::project_organization::git::{
     remove_workspace_async, validate_existing_worktree_async, validate_repository_async,
 };
 use crate::project_organization::model::ProjectOrganizationModel;
+use crate::project_organization::project_tree_tab::{
+    assign_idle_terminal_numbers, resolve_terminal_tab_label, tab_node_activity, ProjectTreeTabId,
+    ProjectTreeTabNode, ResolvedWorkspaceTabLabel,
+};
 use crate::project_organization::view::create_workspace_modal::{
     CreateWorkspaceModal, CreateWorkspaceModalEvent, CreateWorkspaceRequest, CreateWorkspaceSource,
 };
 use crate::project_organization::view::delete_workspace_dialog::{
     DeleteWorkspaceDialog, DeleteWorkspaceDialogEvent,
 };
-use crate::project_organization::project_tree_tab::{
-    tab_node_activity, ProjectTreeTabId, ProjectTreeTabNode,
-};
 use crate::project_organization::view::project_tree::{
     resolved_project_organization_tab_layout, ProjectTreeEvent, TabLayout,
-};
-use self::full_height_left_panel_chrome::{
-    use_workspace_info_bar, workspace_info_bar_label, workspace_info_bar_parts,
-    WorkspaceInfoBarGitStats, WorkspaceInfoBarParts,
 };
 use crate::project_organization::workspace_agent_activity::{
     activities_from_terminal_sources, last_agent_activity, OzConversationSource,
@@ -1124,13 +1125,9 @@ impl Workspace {
         );
         if let Some(upstream) = &parts.from_upstream {
             row.add_child(
-                Text::new_inline(
-                    "·",
-                    appearance.ui_font_family(),
-                    appearance.ui_font_body(),
-                )
-                .with_color(muted.into())
-                .finish(),
+                Text::new_inline("·", appearance.ui_font_family(), appearance.ui_font_body())
+                    .with_color(muted.into())
+                    .finish(),
             );
             row.add_child(
                 Text::new_inline(
@@ -1144,13 +1141,9 @@ impl Workspace {
         }
         if parts.has_diff() {
             row.add_child(
-                Text::new_inline(
-                    "·",
-                    appearance.ui_font_family(),
-                    appearance.ui_font_body(),
-                )
-                .with_color(muted.into())
-                .finish(),
+                Text::new_inline("·", appearance.ui_font_family(), appearance.ui_font_body())
+                    .with_color(muted.into())
+                    .finish(),
             );
             if parts.lines_added > 0 {
                 row.add_child(
@@ -1177,17 +1170,12 @@ impl Workspace {
         }
         Shrinkable::new(
             1.0,
-            Container::new(row.finish())
-                .with_padding_left(8.)
-                .finish(),
+            Container::new(row.finish()).with_padding_left(8.).finish(),
         )
         .finish()
     }
 
-    fn workspace_info_bar_parts(
-        &self,
-        ctx: &AppContext,
-    ) -> WorkspaceInfoBarParts {
+    fn workspace_info_bar_parts(&self, ctx: &AppContext) -> WorkspaceInfoBarParts {
         let Some(workspace_id) = self.active_repository_workspace_id() else {
             return workspace_info_bar_parts("", None, None, None);
         };
@@ -4755,8 +4743,25 @@ impl Workspace {
         self.hovered_tab_index = None;
         self.sync_project_tree(ctx);
         self.refresh_workspace_info_bar(ctx);
+        self.flush_cli_agent_resumes_in_active_tabs(ctx);
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
+    }
+
+    fn flush_cli_agent_resumes_in_active_tabs(&mut self, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::CliAgentSessionResume.is_enabled() {
+            return;
+        }
+        let terminals = self
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.pane_group.as_ref(ctx).terminal_views(ctx))
+            .collect::<Vec<_>>();
+        for terminal in terminals {
+            terminal.update(ctx, |terminal, ctx| {
+                terminal.flush_queued_cli_agent_resume(ctx);
+            });
+        }
     }
 
     fn activate_repository_workspace(
@@ -4825,18 +4830,100 @@ impl Workspace {
         &self,
         ctx: &AppContext,
     ) -> HashMap<RepositoryWorkspaceId, Vec<ProjectTreeTabNode>> {
-        self.repository_workspace_tabs.map_tabs(
+        let drafts = self.repository_workspace_tabs.map_tabs(
             &self.tabs,
             self.active_tab_index,
-            |tab, _index, is_active| ProjectTreeTabNode {
-                id: ProjectTreeTabId(tab.pane_group.id()),
-                title: tab.pane_group.as_ref(ctx).display_title(ctx),
-                activity: tab_node_activity(
-                    self.tab_agent_activity(tab, ctx),
-                    self.tab_has_long_running_terminal(tab, ctx),
-                ),
-                is_active,
+            |tab, _index, is_active| {
+                (
+                    ProjectTreeTabId(tab.pane_group.id()),
+                    self.resolve_workspace_tab_label(tab, ctx),
+                    tab_node_activity(
+                        self.tab_agent_activity(tab, ctx),
+                        self.tab_has_long_running_terminal(tab, ctx),
+                    ),
+                    is_active,
+                )
             },
+        );
+        drafts
+            .into_iter()
+            .map(|(workspace_id, tabs)| {
+                let titles = assign_idle_terminal_numbers(
+                    tabs.iter().map(|(_, label, _, _)| label.clone()).collect(),
+                );
+                let nodes = tabs
+                    .into_iter()
+                    .zip(titles)
+                    .map(|((id, _, activity, is_active), title)| ProjectTreeTabNode {
+                        id,
+                        title,
+                        activity,
+                        is_active,
+                    })
+                    .collect();
+                (workspace_id, nodes)
+            })
+            .collect()
+    }
+
+    fn repository_workspace_tab_labels(&self, tabs: &[TabData], ctx: &AppContext) -> Vec<String> {
+        if !FeatureFlag::RepositoryWorkspaces.is_enabled()
+            || self.active_repository_workspace_id().is_none()
+        {
+            return tabs
+                .iter()
+                .map(|tab| tab.pane_group.as_ref(ctx).display_title(ctx))
+                .collect();
+        }
+        assign_idle_terminal_numbers(
+            tabs.iter()
+                .map(|tab| self.resolve_workspace_tab_label(tab, ctx))
+                .collect(),
+        )
+    }
+
+    fn resolve_workspace_tab_label(
+        &self,
+        tab: &TabData,
+        ctx: &AppContext,
+    ) -> ResolvedWorkspaceTabLabel {
+        let pane_group = tab.pane_group.as_ref(ctx);
+        let custom_title = pane_group.custom_title(ctx);
+        let fallback_display_title = pane_group.display_title(ctx);
+        let Some(terminal_view) = pane_group
+            .focused_session_view(ctx)
+            .or_else(|| pane_group.terminal_views(ctx).into_iter().next())
+        else {
+            return resolve_terminal_tab_label(
+                custom_title.as_deref(),
+                false,
+                &fallback_display_title,
+                None,
+                None,
+                false,
+                "",
+                "",
+                None,
+            );
+        };
+        let terminal_view_id = terminal_view.id();
+        let view = terminal_view.as_ref(ctx);
+        let cli_agent_title = CLIAgentSessionsModel::as_ref(ctx)
+            .session(terminal_view_id)
+            .filter(|session| session.listener.is_some())
+            .and_then(|session| session.session_context.display_title());
+        let conversation_title = view.selected_conversation_display_title(ctx);
+        let working_directory = view.display_working_directory(ctx).unwrap_or_default();
+        resolve_terminal_tab_label(
+            custom_title.as_deref(),
+            true,
+            &fallback_display_title,
+            cli_agent_title.as_deref(),
+            conversation_title.as_deref(),
+            view.is_long_running_and_user_controlled(),
+            &view.terminal_title_from_shell(),
+            &working_directory,
+            view.last_completed_command_text().as_deref(),
         )
     }
 
@@ -5170,6 +5257,7 @@ impl Workspace {
         if FeatureFlag::RepositoryWorkspaces.is_enabled() {
             self.sync_project_tree(ctx);
         }
+        self.flush_cli_agent_resumes_in_active_tabs(ctx);
 
         let pane_group = self.active_tab_pane_group();
         let focused_terminal_view_id = self
@@ -5226,8 +5314,11 @@ impl Workspace {
     }
 
     pub fn rename_tab(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
-        let tab = &self.tabs[index];
-        let title = tab.pane_group.as_ref(ctx).display_title(ctx);
+        let title = self
+            .repository_workspace_tab_labels(&self.tabs, ctx)
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| self.tabs[index].pane_group.as_ref(ctx).display_title(ctx));
 
         self.rename_tab_internal(index, &title, ctx);
         send_telemetry_from_ctx!(
@@ -13830,6 +13921,7 @@ impl Workspace {
             }
             pane_group::Event::PaneTitleUpdated => {
                 self.update_window_title(ctx);
+                self.sync_project_tree(ctx);
                 ctx.notify();
             }
             pane_group::Event::ShowCommandSearch(options) => {
@@ -17165,6 +17257,7 @@ impl Workspace {
         &self,
         tab_index: usize,
         tab_bar_state: TabBarState,
+        title: &str,
         ctx: &AppContext,
     ) -> Box<dyn Element> {
         let tab = &self.tabs[tab_index];
@@ -17191,6 +17284,7 @@ impl Workspace {
             is_drag_target,
             ctx,
         )
+        .with_title(title.to_owned())
         .build()
         .finish()
     }
@@ -17231,6 +17325,11 @@ impl Workspace {
             // outer `SavePosition`, `Draggable`, and `DropTarget` wrappers
             // so the chip overlay doesn't pollute the target window's
             // position cache (see `TabComponent::for_drag_ghost`).
+            let title = self
+                .repository_workspace_tab_labels(&self.tabs, ctx)
+                .get(tab_index)
+                .cloned()
+                .unwrap_or_else(|| tab.pane_group.as_ref(ctx).display_title(ctx));
             TabComponent::new(
                 tab_index,
                 tab_bar_state,
@@ -17240,6 +17339,7 @@ impl Workspace {
                 false,
                 ctx,
             )
+            .with_title(title)
             .for_drag_ghost()
             .build()
             .finish()
@@ -17857,6 +17957,7 @@ impl Workspace {
             // `None` and nothing is hidden — otherwise the stale
             // `source_tab_index` would collapse an unrelated tab (e.g. the
             // first tab shifting into that slot after a leftward put-back).
+            let tab_titles = self.repository_workspace_tab_labels(&self.tabs, ctx);
             let transferred_tab_index = if drag_model.is_active()
                 && drag_model.source_window_id() == Some(self.window_id)
             {
@@ -17892,12 +17993,22 @@ impl Workspace {
                 }
                 if is_transferred {
                     tab_bar.add_child(
-                        ConstrainedBox::new(self.render_tab_in_tab_bar(i, tab_bar_state, ctx))
-                            .with_width(0.)
-                            .finish(),
+                        ConstrainedBox::new(self.render_tab_in_tab_bar(
+                            i,
+                            tab_bar_state,
+                            tab_titles.get(i).map(String::as_str).unwrap_or(""),
+                            ctx,
+                        ))
+                        .with_width(0.)
+                        .finish(),
                     );
                 } else {
-                    tab_bar.add_child(self.render_tab_in_tab_bar(i, tab_bar_state, ctx));
+                    tab_bar.add_child(self.render_tab_in_tab_bar(
+                        i,
+                        tab_bar_state,
+                        tab_titles.get(i).map(String::as_str).unwrap_or(""),
+                        ctx,
+                    ));
                 }
             }
 

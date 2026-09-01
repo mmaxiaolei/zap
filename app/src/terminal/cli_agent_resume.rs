@@ -50,6 +50,19 @@ impl CliAgentResumeSnapshot {
     }
 }
 
+/// Resume 只有在 login shell bootstrap 完成后才能从队列取出。
+/// 过早 take 会把命令写进仍会被 bootstrap 清掉的 input,重启后会话接不回去。
+pub(crate) fn take_resume_command_if_shell_ready(
+    pending: &mut Option<String>,
+    is_login_shell_bootstrapped: bool,
+) -> Option<String> {
+    if is_login_shell_bootstrapped {
+        pending.take()
+    } else {
+        None
+    }
+}
+
 /// 按各 CLI 的 resume 语法拼命令。session_id 优先;没有 id 时仅 Claude / Codex 回退到 continue/last。
 pub fn build_resume_command(
     agent: CLIAgent,

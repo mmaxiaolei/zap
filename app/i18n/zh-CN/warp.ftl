@@ -2858,6 +2858,7 @@ vertical-tabs-no-tabs-open = 没有打开的标签页
 vertical-tabs-untitled-tab = 未命名标签页
 vertical-tabs-view-options-tooltip = 查看选项
 vertical-tabs-new-session = 新建会话
+repository-workspace-terminal-tab-title = 终端 { $number }
 vertical-tabs-terminal-kind-oz = Oz
 vertical-tabs-pane-kind-terminal = 终端
 vertical-tabs-pane-kind-code = 代码

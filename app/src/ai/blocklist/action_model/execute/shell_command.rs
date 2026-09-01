@@ -828,22 +828,138 @@ fn should_disable_pager_for_requested_command(wait_until_completion: bool, comma
 ///
 /// `git log --stat` 与裸 `git log` 一样会调 pager,必须按交互命令处理。
 /// 管道 / `--no-pager` / `-P` 会让 git 不再进 pager,这时仍可关 pager。
+///
+/// 必须看整条链,而不是只看第一个可执行文件:`cd repo && git log --stat`
+/// 的入口是 `cd`,旧实现会误关 pager,把整段 log 一次性打进 block。
+/// 引号里的 `|`(`--pretty=format:'%h | %s'`)不是管道,不能当成已关闭 pager。
 fn command_uses_implicit_pager(command: &str) -> bool {
     let command = command.trim_start();
     if let Some(inner) = in_band_generator_command(command) {
         return command_uses_implicit_pager(&inner);
     }
 
-    // 管道会让 stdout 不再是 tty,git/man 都不会进 pager。
-    if command.contains('|') {
-        return false;
-    }
+    split_unquoted_chain(command)
+        .into_iter()
+        .any(pipeline_uses_implicit_pager)
+}
 
+fn pipeline_uses_implicit_pager(segment: &str) -> bool {
+    let stages = split_unquoted_pipes(segment);
+    match stages.as_slice() {
+        [] => false,
+        [single] => simple_command_uses_implicit_pager(single),
+        [.., last] => explicit_pager_executable(last),
+    }
+}
+
+fn simple_command_uses_implicit_pager(segment: &str) -> bool {
+    let command = skip_env_assignments_and_wrappers(segment);
     match first_executable_name(command).as_deref() {
         Some("less" | "less.exe" | "more" | "more.exe" | "man" | "man.exe") => true,
         Some("git" | "git.exe") => git_subcommand_uses_pager(command),
         _ => false,
     }
+}
+
+fn explicit_pager_executable(segment: &str) -> bool {
+    matches!(
+        first_executable_name(skip_env_assignments_and_wrappers(segment)).as_deref(),
+        Some("less" | "less.exe" | "more" | "more.exe")
+    )
+}
+
+const COMMAND_WRAPPER_PREFIXES: &[&str] = &[
+    "builtin", "env", "exec", "nice", "noglob", "nohup", "sudo", "time",
+];
+
+fn skip_env_assignments_and_wrappers(command: &str) -> &str {
+    let mut current = command.trim_start();
+    loop {
+        let Some((token, rest)) =
+            first_executable_token(current).or_else(|| first_command_token(current))
+        else {
+            return current;
+        };
+        if is_env_assignment(token)
+            || COMMAND_WRAPPER_PREFIXES
+                .iter()
+                .any(|prefix| token.eq_ignore_ascii_case(prefix))
+        {
+            current = rest.trim_start();
+            continue;
+        }
+        return current;
+    }
+}
+
+fn is_env_assignment(token: &str) -> bool {
+    let Some(eq) = token.find('=') else {
+        return false;
+    };
+    eq > 0 && !token[..eq].contains(['/', '\\'])
+}
+
+fn split_unquoted_chain(command: &str) -> Vec<&str> {
+    split_unquoted(command, SplitKind::Chain)
+}
+
+fn split_unquoted_pipes(command: &str) -> Vec<&str> {
+    split_unquoted(command, SplitKind::Pipe)
+}
+
+enum SplitKind {
+    Chain,
+    Pipe,
+}
+
+fn split_unquoted(command: &str, kind: SplitKind) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut quote: Option<char> = None;
+    let mut chars = command.char_indices().peekable();
+    while let Some((idx, ch)) = chars.next() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            continue;
+        }
+        let rest = &command[idx..];
+        let sep_len = match kind {
+            SplitKind::Chain => {
+                if rest.starts_with("&&") || rest.starts_with("||") {
+                    Some(2)
+                } else if ch == ';' {
+                    Some(1)
+                } else {
+                    None
+                }
+            }
+            SplitKind::Pipe => {
+                if rest.starts_with("||") {
+                    None
+                } else if ch == '|' {
+                    Some(1)
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some(sep_len) = sep_len {
+            parts.push(command[start..idx].trim());
+            for _ in 1..sep_len {
+                chars.next();
+            }
+            start = idx + sep_len;
+        }
+    }
+    parts.push(command[start..].trim());
+    parts.retain(|part| !part.is_empty());
+    parts
 }
 
 /// git 全局选项里会吃掉下一个 token 的旗标。漏掉会把 `-C repo log` 的

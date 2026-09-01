@@ -11,10 +11,10 @@ use warp_core::ui::theme::WarpTheme;
 use warpui::{
     assets::asset_cache::AssetSource,
     elements::{
-        Border, CacheOption, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
-        Container, CornerRadius, CrossAxisAlignment, DropShadow, Element, Empty, Fill, Flex,
-        Hoverable, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
-        SavePosition, ScrollbarWidth, Shrinkable, Text,
+        Border, CacheOption, ChildView, ClippedScrollStateHandle, ClippedScrollable,
+        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow, Element, Empty,
+        Fill, Flex, Hoverable, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+        ParentElement, Radius, SavePosition, ScrollbarWidth, Shrinkable, Text,
     },
     platform::Cursor,
     text_layout::ClipConfig,
@@ -57,8 +57,8 @@ const WORKSPACE_AGENT_RING_WIDTH: f32 = 1.5;
 const TREE_CHEVRON_SIZE: f32 = 16.;
 const TREE_ROW_ICON_SIZE: f32 = 16.;
 const TREE_ICON_GAP: f32 = 6.;
-/// 页签图标与 workspace 行的分支图标对齐: chevron + gap。
-const TAB_UNDER_WORKSPACE_INDENT: f32 = TREE_CHEVRON_SIZE + TREE_ICON_GAP;
+/// 页签图标与 workspace 分支图标对齐: 与 chevron 同宽,行内 Flex spacing 再补 gap。
+const TAB_UNDER_WORKSPACE_INDENT: f32 = TREE_CHEVRON_SIZE;
 const ITERM_PROMPT_ICON_PATH: &str = "bundled/svg/iterm-prompt.svg";
 
 const WORKSPACE_AGENT_ICON_SIZING: IconWithStatusSizing = IconWithStatusSizing {
@@ -242,9 +242,10 @@ impl ProjectTreeState {
 
     fn workspace_is_expanded(&self, workspace_id: RepositoryWorkspaceId) -> bool {
         self.repositories.iter().any(|repository| {
-            repository.workspaces.iter().any(|workspace| {
-                workspace.workspace_id == workspace_id && workspace.expanded
-            })
+            repository
+                .workspaces
+                .iter()
+                .any(|workspace| workspace.workspace_id == workspace_id && workspace.expanded)
         })
     }
 
@@ -375,7 +376,7 @@ fn repository_add_workspace_position_id(repository_id: RepositoryId) -> String {
     format!("project_tree:repository:{repository_id}:add_workspace")
 }
 
-fn should_show_workspace_delete_button(workspace_row_hovered: bool) -> bool {
+fn should_show_workspace_hover_actions(workspace_row_hovered: bool) -> bool {
     workspace_row_hovered
 }
 
@@ -401,12 +402,20 @@ fn tree_row_icon(
         .finish()
 }
 
+fn tree_status_icon_offset() -> f32 {
+    TREE_CHEVRON_SIZE + TREE_ICON_GAP
+}
+
+fn tab_status_icon_offset() -> f32 {
+    TAB_UNDER_WORKSPACE_INDENT + TREE_ICON_GAP
+}
+
 fn tree_name_offset() -> f32 {
-    TREE_CHEVRON_SIZE + TREE_ICON_GAP + TREE_ROW_ICON_SIZE + TREE_ICON_GAP
+    tree_status_icon_offset() + TREE_ROW_ICON_SIZE + TREE_ICON_GAP
 }
 
 fn tab_name_offset() -> f32 {
-    TAB_UNDER_WORKSPACE_INDENT + TREE_ROW_ICON_SIZE + TREE_ICON_GAP
+    tab_status_icon_offset() + TREE_ROW_ICON_SIZE + TREE_ICON_GAP
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -481,9 +490,7 @@ fn agent_activity_ring_color(activity: WorkspaceAgentActivity, theme: &WarpTheme
                         .into_solid_bias_right_color(),
                 )
             }
-            WorkspaceAgentIdentity::Oz {
-                ambient: true,
-            }
+            WorkspaceAgentIdentity::Oz { ambient: true }
             | WorkspaceAgentIdentity::Oz { ambient: false } => {
                 theme.accent().into_solid_bias_right_color()
             }
@@ -513,18 +520,24 @@ fn agent_activity_icon_variant(
     }
 }
 
-/// 绿点/空槽需要 Flex 居中。Agent 头像禁止走这条路径: Flex 会把子节点主轴 max 放开,带边框的 Container 会超出 16px。
-fn sized_activity_slot(child: Box<dyn Element>) -> Box<dyn Element> {
+/// 固定 16×16 槽,把绿点 / 终端图标 / agent 头像都居中在和 workspace 分支图标同一列。
+/// ConstrainedBox 只收紧子约束、不强制返回尺寸,所以用 Flex Max 把槽撑满。
+fn tree_status_slot(child: Box<dyn Element>) -> Box<dyn Element> {
     ConstrainedBox::new(
         Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::Center)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(child)
             .finish(),
     )
-    .with_width(WORKSPACE_ACTIVITY_SLOT_SIZE)
-    .with_height(WORKSPACE_ACTIVITY_SLOT_SIZE)
+    .with_width(TREE_ROW_ICON_SIZE)
+    .with_height(TREE_ROW_ICON_SIZE)
     .finish()
+}
+
+fn sized_activity_slot(child: Box<dyn Element>) -> Box<dyn Element> {
+    tree_status_slot(child)
 }
 
 /// 显示名与真实分支相同时不再重复第二行; 分支信息仍由显示名本身承担。
@@ -920,21 +933,10 @@ impl ProjectTreePanel {
         } else {
             Empty::new().finish()
         };
-        ConstrainedBox::new(
-            Flex::row()
-                .with_main_axis_alignment(MainAxisAlignment::Center)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(
-                    ConstrainedBox::new(dot)
-                        .with_width(WORKSPACE_RUNNING_DOT_SIZE)
-                        .with_height(WORKSPACE_RUNNING_DOT_SIZE)
-                        .finish(),
-                )
-                .finish(),
-        )
-        .with_width(WORKSPACE_RUNNING_DOT_SIZE)
-        .with_height(WORKSPACE_RUNNING_DOT_SIZE)
-        .finish()
+        ConstrainedBox::new(dot)
+            .with_width(WORKSPACE_RUNNING_DOT_SIZE)
+            .with_height(WORKSPACE_RUNNING_DOT_SIZE)
+            .finish()
     }
 
     fn render_workspace_activity_slot(
@@ -959,7 +961,7 @@ impl ProjectTreePanel {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         match tab.activity {
-            TabNodeActivity::Idle => sized_activity_slot(
+            TabNodeActivity::Idle => tree_status_slot(
                 ConstrainedBox::new(
                     Image::new(
                         AssetSource::Bundled {
@@ -974,10 +976,10 @@ impl ProjectTreePanel {
                 .finish(),
             ),
             TabNodeActivity::RunningDot => {
-                sized_activity_slot(Self::render_workspace_running_dot(visual_state, appearance))
+                tree_status_slot(Self::render_workspace_running_dot(visual_state, appearance))
             }
             TabNodeActivity::Agent(activity) => {
-                self.render_tab_agent_avatar(tab.id, activity, appearance)
+                tree_status_slot(self.render_tab_agent_avatar(tab.id, activity, appearance))
             }
         }
     }
@@ -1150,11 +1152,7 @@ impl ProjectTreePanel {
         let workspace_icon = if matches!(parent_slot, WorkspaceActivitySlot::RunningDot) {
             activity_slot
         } else {
-            tree_row_icon(
-                icons::Icon::GitBranch,
-                metadata_color,
-                TREE_ROW_ICON_SIZE,
-            )
+            tree_row_icon(icons::Icon::GitBranch, metadata_color, TREE_ROW_ICON_SIZE)
         };
         let labeled_content = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -1171,7 +1169,7 @@ impl ProjectTreePanel {
             .finish();
         let delete = icon_button(
             appearance,
-            icons::Icon::Trash,
+            icons::Icon::X,
             false,
             self.workspace_delete_mouse_states
                 .get(&workspace_id)
@@ -1211,6 +1209,10 @@ impl ProjectTreePanel {
         })
         .with_cursor(Cursor::PointingHand)
         .finish();
+        let new_tab_placeholder = ConstrainedBox::new(Empty::new().finish())
+            .with_width(icons::ICON_DIMENSIONS)
+            .with_height(icons::ICON_DIMENSIONS)
+            .finish();
 
         Hoverable::new(
             self.workspace_mouse_states
@@ -1218,7 +1220,13 @@ impl ProjectTreePanel {
                 .expect("workspace row mouse state should be initialized during tree refresh")
                 .clone(),
             move |mouse_state| {
-                let delete = if should_show_workspace_delete_button(mouse_state.is_hovered()) {
+                let show_actions = should_show_workspace_hover_actions(mouse_state.is_hovered());
+                let new_tab = if show_actions {
+                    new_tab
+                } else {
+                    new_tab_placeholder
+                };
+                let delete = if show_actions {
                     delete
                 } else {
                     delete_placeholder

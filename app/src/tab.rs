@@ -713,6 +713,11 @@ impl<'a> TabComponent<'a> {
         self
     }
 
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = title.into();
+        self
+    }
+
     /// Returns the agent indicator for the focused session's active conversation,
     /// or `None` if there is no non-empty, non-passive conversation to display.
     /// When a shell command is long-running the status is overridden to
