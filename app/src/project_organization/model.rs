@@ -109,6 +109,7 @@ impl ProjectOrganizationModel {
             created_at: now,
             last_opened_at: now,
             sort_index: self.next_sort_index(),
+            expanded: true,
         };
         self.validate_new_repository(&repository)?;
 
@@ -120,6 +121,7 @@ impl ProjectOrganizationModel {
             worktree_path: canonical_path,
             created_at: repository.created_at,
             last_opened_at: repository.last_opened_at,
+            expanded: true,
         };
         if self.workspaces.contains_key(&workspace.id) {
             return Err(ProjectOrganizationError::WorkspaceIdAlreadyExists {
@@ -201,6 +203,7 @@ impl ProjectOrganizationModel {
             created_at: now,
             last_opened_at: now,
             sort_index: self.next_sort_index(),
+            expanded: true,
         };
         let repository_id = repository.id;
 
@@ -529,6 +532,42 @@ impl ProjectOrganizationModel {
         self.update_workspace(workspace, ctx)
     }
 
+    pub fn set_repository_expanded(
+        &mut self,
+        repository_id: RepositoryId,
+        expanded: bool,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), ProjectOrganizationError> {
+        let mut repository = self
+            .repositories
+            .get(&repository_id)
+            .cloned()
+            .ok_or(ProjectOrganizationError::RepositoryNotFound { repository_id })?;
+        if repository.expanded == expanded {
+            return Ok(());
+        }
+        repository.expanded = expanded;
+        self.update_repository(repository, ctx)
+    }
+
+    pub fn set_workspace_expanded(
+        &mut self,
+        workspace_id: RepositoryWorkspaceId,
+        expanded: bool,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), ProjectOrganizationError> {
+        let mut workspace = self
+            .workspaces
+            .get(&workspace_id)
+            .cloned()
+            .ok_or(ProjectOrganizationError::WorkspaceNotFound { workspace_id })?;
+        if workspace.expanded == expanded {
+            return Ok(());
+        }
+        workspace.expanded = expanded;
+        self.update_workspace(workspace, ctx)
+    }
+
     pub fn remove_workspace(
         &mut self,
         workspace_id: RepositoryWorkspaceId,
@@ -773,6 +812,7 @@ impl ProjectOrganizationModel {
             created_at: repository.created_at,
             last_opened_at: repository.last_opened_at,
             sort_index: repository.sort_index,
+            expanded: repository.expanded,
         })
     }
 
@@ -801,6 +841,7 @@ impl ProjectOrganizationModel {
             worktree_path,
             created_at: workspace.created_at,
             last_opened_at: workspace.last_opened_at,
+            expanded: workspace.expanded,
         })
     }
 
@@ -821,6 +862,7 @@ impl ProjectOrganizationModel {
             created_at: repository.created_at,
             last_opened_at: repository.last_opened_at,
             sort_index: repository.sort_index,
+            expanded: repository.expanded,
         })
     }
 
@@ -840,6 +882,7 @@ impl ProjectOrganizationModel {
             worktree_path: worktree_path.to_string(),
             created_at: workspace.created_at,
             last_opened_at: workspace.last_opened_at,
+            expanded: workspace.expanded,
         })
     }
 

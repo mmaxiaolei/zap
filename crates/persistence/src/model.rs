@@ -196,6 +196,7 @@ pub struct Repository {
     pub created_at: NaiveDateTime,
     pub last_opened_at: NaiveDateTime,
     pub sort_index: i32,
+    pub expanded: bool,
 }
 
 #[derive(Clone, Debug, Eq, Identifiable, Insertable, PartialEq, Queryable, AsChangeset)]
@@ -208,6 +209,7 @@ pub struct RepositoryWorkspace {
     pub worktree_path: String,
     pub created_at: NaiveDateTime,
     pub last_opened_at: NaiveDateTime,
+    pub expanded: bool,
 }
 
 #[derive(Identifiable, Insertable, Queryable)]

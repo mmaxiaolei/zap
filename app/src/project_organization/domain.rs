@@ -181,6 +181,7 @@ pub struct Repository {
     pub created_at: NaiveDateTime,
     pub last_opened_at: NaiveDateTime,
     pub sort_index: i32,
+    pub expanded: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -192,6 +193,7 @@ pub struct RepositoryWorkspace {
     pub worktree_path: PathBuf,
     pub created_at: NaiveDateTime,
     pub last_opened_at: NaiveDateTime,
+    pub expanded: bool,
 }
 
 #[derive(Debug, Error)]

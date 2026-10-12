@@ -45,7 +45,7 @@ Figma: none provided. 交互和布局以本规格确认过程中批准的视觉�
 
 2. 当 Feature Flag 关闭时，用户继续看到原有项目和页签体验。关闭 Flag 不删除已经保存的 repository、workspace 或页签归属数据。
 
-3. repository 树支持展开、折叠、选择、重命名、刷新、在文件管理器中打开、移除和拖拽排序。移除按钮只在鼠标悬停该 repository 行时显示。拖拽时其余 repository 组按插入位让位，松手后把显示顺序持久化到本机。repository 默认名称取目录名，重命名只改变显示名称，不重命名磁盘目录或 Git remote。
+3. repository 树支持展开、折叠、选择、重命名、刷新、在文件管理器中打开、移除和拖拽排序。移除按钮只在鼠标悬停该 repository 行时显示。拖拽时其余 repository 组按插入位让位，松手后把显示顺序持久化到本机。repository 和 workspace 节点的展开/折叠状态同样持久化到本机，重启 Zap 后恢复为上次离开时的样子；新节点默认展开。展开状态在窗口之间共享，与拖拽排序一致。repository 默认名称取目录名，重命名只改变显示名称，不重命名磁盘目录或 Git remote。
 
 4. 用户可以通过选择本地目录添加 repository。所选目录必须是 Git 主工作目录；linked worktree、普通目录、缺失目录和不可访问目录均被拒绝，并显示具体原因。
 

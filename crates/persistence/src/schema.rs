@@ -342,6 +342,7 @@ diesel::table! {
         created_at -> Timestamp,
         last_opened_at -> Timestamp,
         sort_index -> Integer,
+        expanded -> Bool,
     }
 }
 
@@ -362,6 +363,7 @@ diesel::table! {
         worktree_path -> Text,
         created_at -> Timestamp,
         last_opened_at -> Timestamp,
+        expanded -> Bool,
     }
 }
 

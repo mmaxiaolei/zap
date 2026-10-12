@@ -10,8 +10,6 @@ use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::icons::Icon as WarpIcon;
 use warp_core::ui::theme::WarpTheme;
 use warpui::{
-    AppContext, Entity, EventContext, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
     assets::asset_cache::AssetSource,
     elements::{
         AcceptedByDropTarget, Border, CacheOption, ChildView, ClippedScrollStateHandle,
@@ -23,6 +21,8 @@ use warpui::{
     platform::Cursor,
     text_layout::ClipConfig,
     ui_components::components::UiComponent,
+    AppContext, Entity, EventContext, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
 };
 
 use crate::{
@@ -30,14 +30,14 @@ use crate::{
     project_organization::{
         model::ProjectOrganizationModel,
         workspace_agent_activity::{
-            WorkspaceActivitySlot, WorkspaceAgentActivity, WorkspaceAgentIdentity,
-            WorkspaceAgentPhase, workspace_activity_slot,
+            workspace_activity_slot, WorkspaceActivitySlot, WorkspaceAgentActivity,
+            WorkspaceAgentIdentity, WorkspaceAgentPhase,
         },
     },
     ui_components::{
         breathing_ring::{BreathingRing, BreathingStateHandle},
         buttons::icon_button,
-        icon_with_status::{IconWithStatusSizing, IconWithStatusVariant, render_icon_with_status},
+        icon_with_status::{render_icon_with_status, IconWithStatusSizing, IconWithStatusVariant},
         icons,
     },
     view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme},
@@ -47,7 +47,7 @@ use crate::project_organization::domain::{
     Repository, RepositoryId, RepositoryWorkspace, RepositoryWorkspaceId,
 };
 use crate::project_organization::project_tree_tab::{
-    ProjectTreeTabId, ProjectTreeTabNode, TabNodeActivity, workspace_parent_activity_slot,
+    workspace_parent_activity_slot, ProjectTreeTabId, ProjectTreeTabNode, TabNodeActivity,
 };
 
 const WORKSPACE_RUNNING_DOT_SIZE: f32 = 6.;
@@ -200,14 +200,14 @@ impl ProjectTreeState {
                         display_name: workspace.display_name,
                         branch: workspace.branch,
                         tab_count: tab_counts.get(&workspace.id).copied().unwrap_or_default(),
-                        expanded: true,
+                        expanded: workspace.expanded,
                         tabs: tabs.get(&workspace.id).cloned().unwrap_or_default(),
                     })
                     .collect();
                 RepositoryTreeNode {
                     repository_id: repository.id,
                     display_name: repository.display_name,
-                    expanded: true,
+                    expanded: repository.expanded,
                     workspaces,
                 }
             })
@@ -266,11 +266,34 @@ impl ProjectTreeState {
     }
 
     fn workspace_is_expanded(&self, workspace_id: RepositoryWorkspaceId) -> bool {
-        self.repositories.iter().any(|repository| {
+        self.workspace_expanded(workspace_id).unwrap_or(false)
+    }
+
+    fn workspace_expanded(&self, workspace_id: RepositoryWorkspaceId) -> Option<bool> {
+        self.repositories.iter().find_map(|repository| {
+            repository.workspaces.iter().find_map(|workspace| {
+                (workspace.workspace_id == workspace_id).then_some(workspace.expanded)
+            })
+        })
+    }
+
+    fn repository_expanded(&self, repository_id: RepositoryId) -> Option<bool> {
+        self.repositories
+            .iter()
+            .find(|repository| repository.repository_id == repository_id)
+            .map(|repository| repository.expanded)
+    }
+
+    fn repository_id_for_workspace(
+        &self,
+        workspace_id: RepositoryWorkspaceId,
+    ) -> Option<RepositoryId> {
+        self.repositories.iter().find_map(|repository| {
             repository
                 .workspaces
                 .iter()
-                .any(|workspace| workspace.workspace_id == workspace_id && workspace.expanded)
+                .any(|workspace| workspace.workspace_id == workspace_id)
+                .then_some(repository.repository_id)
         })
     }
 
@@ -437,6 +460,14 @@ pub enum ProjectTreeEvent {
     RepositoriesReordered {
         from: usize,
         to: usize,
+    },
+    RepositoryExpandedChanged {
+        repository_id: RepositoryId,
+        expanded: bool,
+    },
+    WorkspaceExpandedChanged {
+        workspace_id: RepositoryWorkspaceId,
+        expanded: bool,
     },
 }
 
@@ -862,6 +893,16 @@ impl ProjectTreePanel {
         ctx: &mut ViewContext<Self>,
     ) {
         if self.state.reveal_workspace(workspace_id) {
+            if let Some(repository_id) = self.state.repository_id_for_workspace(workspace_id) {
+                ctx.emit(ProjectTreeEvent::RepositoryExpandedChanged {
+                    repository_id,
+                    expanded: true,
+                });
+            }
+            ctx.emit(ProjectTreeEvent::WorkspaceExpandedChanged {
+                workspace_id,
+                expanded: true,
+            });
             self.clipped_scroll_state.scroll_to_position(ScrollTarget {
                 position_id: workspace_row_position_id(workspace_id),
                 mode: ScrollToPositionMode::TopIntoView,
@@ -1744,12 +1785,28 @@ impl TypedActionView for ProjectTreePanel {
                 });
             }
             ProjectTreeAction::ToggleRepository { repository_id } => {
-                self.state.toggle_repository(*repository_id);
-                ctx.notify();
+                if self.state.toggle_repository(*repository_id) {
+                    if let Some(expanded) = self.state.repository_expanded(*repository_id) {
+                        ctx.emit(ProjectTreeEvent::RepositoryExpandedChanged {
+                            repository_id: *repository_id,
+                            expanded,
+                        });
+                    }
+                    ctx.notify();
+                }
             }
             ProjectTreeAction::SelectWorkspace { workspace_id } => {
                 if let Some(workspace_id) = workspace_id {
+                    let was_expanded = self.state.workspace_is_expanded(*workspace_id);
                     self.state.select_or_toggle_workspace(*workspace_id);
+                    if let Some(expanded) = self.state.workspace_expanded(*workspace_id) {
+                        if expanded != was_expanded {
+                            ctx.emit(ProjectTreeEvent::WorkspaceExpandedChanged {
+                                workspace_id: *workspace_id,
+                                expanded,
+                            });
+                        }
+                    }
                 } else {
                     self.state.selected_workspace_id = None;
                 }
@@ -1759,14 +1816,28 @@ impl TypedActionView for ProjectTreePanel {
                 ctx.notify();
             }
             ProjectTreeAction::ToggleWorkspace { workspace_id } => {
-                self.state.toggle_workspace_expanded(*workspace_id);
-                ctx.notify();
+                if self.state.toggle_workspace_expanded(*workspace_id) {
+                    if let Some(expanded) = self.state.workspace_expanded(*workspace_id) {
+                        ctx.emit(ProjectTreeEvent::WorkspaceExpandedChanged {
+                            workspace_id: *workspace_id,
+                            expanded,
+                        });
+                    }
+                    ctx.notify();
+                }
             }
             ProjectTreeAction::SelectTab {
                 workspace_id,
                 tab_id,
             } => {
+                let was_expanded = self.state.workspace_is_expanded(*workspace_id);
                 self.state.select_workspace(*workspace_id);
+                if !was_expanded {
+                    ctx.emit(ProjectTreeEvent::WorkspaceExpandedChanged {
+                        workspace_id: *workspace_id,
+                        expanded: true,
+                    });
+                }
                 ctx.emit(ProjectTreeEvent::TabSelected {
                     workspace_id: *workspace_id,
                     tab_id: *tab_id,
@@ -1783,7 +1854,14 @@ impl TypedActionView for ProjectTreePanel {
                 });
             }
             ProjectTreeAction::NewTab { workspace_id } => {
+                let was_expanded = self.state.workspace_is_expanded(*workspace_id);
                 self.state.select_workspace(*workspace_id);
+                if !was_expanded {
+                    ctx.emit(ProjectTreeEvent::WorkspaceExpandedChanged {
+                        workspace_id: *workspace_id,
+                        expanded: true,
+                    });
+                }
                 ctx.emit(ProjectTreeEvent::NewTabRequested {
                     workspace_id: *workspace_id,
                 });

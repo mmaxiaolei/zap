@@ -85,6 +85,8 @@ CREATE TABLE repository_workspace_window_states (
 
 `windows.active_tab_index` 继续保存当前活动集合的索引，并兼容未归类集合。`repository_workspace_window_states` 保存同一窗口中其他真实 workspace 的活动索引；未归类集合不创建关联行。
 
+后续 migration 为 `repositories.expanded` 与 `repository_workspaces.expanded` 增加 `BOOLEAN NOT NULL DEFAULT 1`。侧栏 chevron、选中/reveal 导致的展开折叠写入这两列，而不是 window snapshot；多窗口共享同一份树状态。`ProjectTreeState::from_records` 以记录值为准，`refresh_tree` 仍用内存 overlay 保住当次会话里尚未落盘完成的切换。
+
 迁移分两阶段执行，保证每个提交都能独立构建和回滚。第一条 migration 创建新表并把旧 `projects` 路径复制到 `repositories`，暂时保留旧表；默认显示名在 Rust 首次加载时规范化为目录名，`source = 'local'`。代码消费者全部切换到新模型后，第二条 migration 删除旧 `projects` 表；该 migration 的 down 方向从 repositories 回填旧路径与时间戳。
 
 ### 3. Repository 与 Git 服务

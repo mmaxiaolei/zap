@@ -116,6 +116,7 @@ fn persisted_repository(id: RepositoryId, path: &Path) -> PersistedRepository {
         created_at,
         last_opened_at: created_at,
         sort_index: 0,
+        expanded: true,
     }
 }
 
@@ -137,6 +138,7 @@ fn persisted_workspace(
             .to_string(),
         created_at,
         last_opened_at: created_at,
+        expanded: true,
     }
 }
 
@@ -188,6 +190,7 @@ fn repository_workspace(
         worktree_path: worktree_path.to_path_buf(),
         created_at,
         last_opened_at: created_at,
+        expanded: true,
     }
 }
 
@@ -202,6 +205,7 @@ fn repository(id: RepositoryId, path: &Path) -> Repository {
         created_at,
         last_opened_at: created_at,
         sort_index: 0,
+        expanded: true,
     }
 }
 
@@ -1043,6 +1047,102 @@ fn reorder_repositories_swaps_display_order() {
                 1
             );
         });
+    });
+}
+
+#[test]
+fn set_repository_expanded_persists_collapsed_state() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).expect("repository directory should be created");
+        let (model, harness) = create_acknowledged_model(&mut app, vec![], vec![]);
+        let (emitted_events, _event_probe) = capture_project_organization_events(&mut app, &model);
+        let repository_id = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository(&repository_path, ctx)
+            })
+            .expect("repository should be added");
+        let _ = harness.operations.try_iter().collect::<Vec<_>>();
+        emitted_events.lock().unwrap().clear();
+
+        model
+            .update(&mut app, |model, ctx| {
+                model.set_repository_expanded(repository_id, false, ctx)
+            })
+            .expect("repository should collapse");
+
+        let operations = harness.operations.try_iter().collect::<Vec<_>>();
+        assert_eq!(operations.len(), 1);
+        assert!(matches!(
+            &operations[0],
+            RepositoryPersistenceOperation::UpsertRepository { repository }
+                if repository.id == repository_id.to_string() && !repository.expanded
+        ));
+        assert!(!model.read(&app, |model, _| {
+            model
+                .repository(repository_id)
+                .expect("repository should exist")
+                .expanded
+        }));
+        assert_eq!(
+            *emitted_events.lock().unwrap(),
+            vec![ProjectOrganizationEvent::RepositoryUpdated { repository_id }]
+        );
+
+        model
+            .update(&mut app, |model, ctx| {
+                model.set_repository_expanded(repository_id, false, ctx)
+            })
+            .expect("collapsing again should be a no-op");
+        assert!(harness.operations.try_iter().next().is_none());
+    });
+}
+
+#[test]
+fn set_workspace_expanded_persists_collapsed_state() {
+    App::test((), |mut app| async move {
+        let tempdir = TempDir::new().expect("temporary directory should be created");
+        let repository_path = tempdir.path().join("repository");
+        std::fs::create_dir(&repository_path).expect("repository directory should be created");
+        let (model, harness) = create_acknowledged_model(&mut app, vec![], vec![]);
+        let (emitted_events, _event_probe) = capture_project_organization_events(&mut app, &model);
+        let (_repository_id, workspace_id) = model
+            .update(&mut app, |model, ctx| {
+                model.add_local_repository_with_initial_workspace(
+                    &repository_path,
+                    None,
+                    "main",
+                    ctx,
+                )
+            })
+            .expect("repository and workspace should be added");
+        let _ = harness.operations.try_iter().collect::<Vec<_>>();
+        emitted_events.lock().unwrap().clear();
+
+        model
+            .update(&mut app, |model, ctx| {
+                model.set_workspace_expanded(workspace_id, false, ctx)
+            })
+            .expect("workspace should collapse");
+
+        let operations = harness.operations.try_iter().collect::<Vec<_>>();
+        assert_eq!(operations.len(), 1);
+        assert!(matches!(
+            &operations[0],
+            RepositoryPersistenceOperation::UpsertRepositoryWorkspace { workspace }
+                if workspace.id == workspace_id.to_string() && !workspace.expanded
+        ));
+        assert!(!model.read(&app, |model, _| {
+            model
+                .workspace(workspace_id)
+                .expect("workspace should exist")
+                .expanded
+        }));
+        assert_eq!(
+            *emitted_events.lock().unwrap(),
+            vec![ProjectOrganizationEvent::WorkspaceUpdated { workspace_id }]
+        );
     });
 }
 

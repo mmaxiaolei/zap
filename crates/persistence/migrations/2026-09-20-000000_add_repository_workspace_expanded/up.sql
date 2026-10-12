@@ -1,0 +1,2 @@
+ALTER TABLE repositories ADD COLUMN expanded BOOLEAN NOT NULL DEFAULT 1;
+ALTER TABLE repository_workspaces ADD COLUMN expanded BOOLEAN NOT NULL DEFAULT 1;

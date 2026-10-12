@@ -6268,6 +6268,42 @@ impl Workspace {
                     });
                 }
             }
+            ProjectTreeEvent::RepositoryExpandedChanged {
+                repository_id,
+                expanded,
+            } => {
+                let result = ProjectOrganizationModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.set_repository_expanded(*repository_id, *expanded, ctx)
+                });
+                if let Err(error) = result {
+                    self.toast_stack.update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(format!(
+                                "Failed to save repository expanded state: {error}"
+                            )),
+                            ctx,
+                        );
+                    });
+                }
+            }
+            ProjectTreeEvent::WorkspaceExpandedChanged {
+                workspace_id,
+                expanded,
+            } => {
+                let result = ProjectOrganizationModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.set_workspace_expanded(*workspace_id, *expanded, ctx)
+                });
+                if let Err(error) = result {
+                    self.toast_stack.update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(format!(
+                                "Failed to save workspace expanded state: {error}"
+                            )),
+                            ctx,
+                        );
+                    });
+                }
+            }
         }
     }
 
@@ -6905,6 +6941,7 @@ impl Workspace {
                     worktree_path: request.worktree_path.clone(),
                     created_at: now,
                     last_opened_at: now,
+                    expanded: true,
                 };
                 let persisted = ProjectOrganizationModel::handle(ctx)
                     .update(ctx, |model, ctx| model.insert_workspace(record, ctx));

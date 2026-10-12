@@ -9,18 +9,18 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warpui::{
-    App, Element, Entity, Event, Presenter, TypedActionView, View, ViewContext, ViewHandle,
-    WindowInvalidation,
     elements::{ChildView, MouseStateHandle, ParentElement, Stack},
     platform::WindowStyle,
+    App, Element, Entity, Event, Presenter, TypedActionView, View, ViewContext, ViewHandle,
+    WindowInvalidation,
 };
 
 use crate::{
     persistence::{
-        RepositoryPersistence,
         model::{
             Repository as PersistedRepository, RepositoryWorkspace as PersistedRepositoryWorkspace,
         },
+        RepositoryPersistence,
     },
     project_organization::{
         model::ProjectOrganizationModel,
@@ -37,17 +37,17 @@ use crate::project_organization::domain::{
 };
 
 use super::{
-    ProjectTreeEvent, ProjectTreePanel, ProjectTreeState, RepositoryTreeNode,
-    TREE_TRAILING_ACTION_SPACING, TabLayout, WORKSPACE_ACTIVITY_SLOT_SIZE,
-    WORKSPACE_AGENT_ICON_SIZING, WORKSPACE_AGENT_RING_WIDTH, WorkspaceTreeNode,
-    WorkspaceVisualState, current_workspace_location, repository_add_workspace_position_id,
-    repository_block_position_id, repository_drag_display_order, repository_drop_indices,
-    repository_insert_index_for_centers, repository_remove_position_id,
-    resolved_project_organization_tab_layout, ring_color_contrasts_on_dark_brand,
-    should_show_repository_hover_actions, should_show_workspace_hover_actions,
-    synchronize_mouse_states, tab_count_badge_label, tab_name_offset, tab_status_icon_offset,
-    tree_name_offset, tree_status_icon_offset, workspace_count_pill_label,
-    workspace_row_is_selected, workspace_row_position_id, workspace_shows_branch_subtitle,
+    current_workspace_location, repository_add_workspace_position_id, repository_block_position_id,
+    repository_drag_display_order, repository_drop_indices, repository_insert_index_for_centers,
+    repository_remove_position_id, resolved_project_organization_tab_layout,
+    ring_color_contrasts_on_dark_brand, should_show_repository_hover_actions,
+    should_show_workspace_hover_actions, synchronize_mouse_states, tab_count_badge_label,
+    tab_name_offset, tab_status_icon_offset, tree_name_offset, tree_status_icon_offset,
+    workspace_count_pill_label, workspace_row_is_selected, workspace_row_position_id,
+    workspace_shows_branch_subtitle, ProjectTreeEvent, ProjectTreePanel, ProjectTreeState,
+    RepositoryTreeNode, TabLayout, WorkspaceTreeNode, WorkspaceVisualState,
+    TREE_TRAILING_ACTION_SPACING, WORKSPACE_ACTIVITY_SLOT_SIZE, WORKSPACE_AGENT_ICON_SIZING,
+    WORKSPACE_AGENT_RING_WIDTH,
 };
 
 struct ProjectTreeTestHost {
@@ -217,6 +217,7 @@ fn tree_sorts_repositories_and_workspaces_by_creation_time() {
                 created_at: earlier,
                 last_opened_at: earlier,
                 sort_index: 0,
+                expanded: true,
             },
             Repository {
                 id: repository_a,
@@ -227,6 +228,7 @@ fn tree_sorts_repositories_and_workspaces_by_creation_time() {
                 created_at: later,
                 last_opened_at: later,
                 sort_index: 1,
+                expanded: true,
             },
         ],
         vec![
@@ -238,6 +240,7 @@ fn tree_sorts_repositories_and_workspaces_by_creation_time() {
                 worktree_path: "/tmp/alpha-zeta".into(),
                 created_at: earlier,
                 last_opened_at: earlier,
+                expanded: true,
             },
             RepositoryWorkspace {
                 id: workspace_b,
@@ -247,6 +250,7 @@ fn tree_sorts_repositories_and_workspaces_by_creation_time() {
                 worktree_path: "/tmp/alpha-beta".into(),
                 created_at: later,
                 last_opened_at: later,
+                expanded: true,
             },
         ],
         &[(workspace_a, 2), (workspace_b, 1)].into_iter().collect(),
@@ -279,6 +283,7 @@ fn tree_sorts_repositories_by_sort_index_before_created_at() {
                 created_at: earlier,
                 last_opened_at: earlier,
                 sort_index: 1,
+                expanded: true,
             },
             Repository {
                 id: repository_b,
@@ -289,6 +294,7 @@ fn tree_sorts_repositories_by_sort_index_before_created_at() {
                 created_at: later,
                 last_opened_at: later,
                 sort_index: 0,
+                expanded: true,
             },
         ],
         vec![],
@@ -298,6 +304,65 @@ fn tree_sorts_repositories_by_sort_index_before_created_at() {
 
     assert_eq!(state.repositories()[0].display_name, "zebra");
     assert_eq!(state.repositories()[1].display_name, "alpha");
+}
+
+#[test]
+fn from_records_uses_persisted_expanded_flags() {
+    let repository_id = RepositoryId(uuid::Uuid::from_u128(1));
+    let expanded_workspace_id = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));
+    let collapsed_workspace_id = RepositoryWorkspaceId(uuid::Uuid::from_u128(3));
+    let timestamp = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+
+    let state = ProjectTreeState::from_records(
+        vec![Repository {
+            id: repository_id,
+            display_name: "zap".to_string(),
+            path: "/tmp/zap".into(),
+            remote_url: None,
+            source: RepositorySource::Local,
+            created_at: timestamp,
+            last_opened_at: timestamp,
+            sort_index: 0,
+            expanded: false,
+        }],
+        vec![
+            RepositoryWorkspace {
+                id: expanded_workspace_id,
+                repository_id,
+                display_name: "expanded".to_string(),
+                branch: "expanded".to_string(),
+                worktree_path: "/tmp/zap-expanded".into(),
+                created_at: timestamp,
+                last_opened_at: timestamp,
+                expanded: true,
+            },
+            RepositoryWorkspace {
+                id: collapsed_workspace_id,
+                repository_id,
+                display_name: "collapsed".to_string(),
+                branch: "collapsed".to_string(),
+                worktree_path: "/tmp/zap-collapsed".into(),
+                created_at: timestamp,
+                last_opened_at: timestamp,
+                expanded: false,
+            },
+        ],
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+
+    assert!(!state.repositories()[0].expanded);
+    assert_eq!(
+        state.repositories()[0].workspaces[0].display_name,
+        "collapsed"
+    );
+    assert!(!state.repositories()[0].workspaces[0].expanded);
+    assert_eq!(
+        state.repositories()[0].workspaces[1].display_name,
+        "expanded"
+    );
+    assert!(state.repositories()[0].workspaces[1].expanded);
+    assert_eq!(state.visible_rows().len(), 1);
 }
 
 #[test]
@@ -603,6 +668,7 @@ fn project_tree_renders_workspace_rows_with_finite_flex_constraints() {
                     created_at: timestamp,
                     last_opened_at: timestamp,
                     sort_index: 0,
+                    expanded: true,
                 }],
                 vec![PersistedRepositoryWorkspace {
                     id: workspace_id.to_string(),
@@ -612,6 +678,7 @@ fn project_tree_renders_workspace_rows_with_finite_flex_constraints() {
                     worktree_path: worktree_path.to_string_lossy().to_string(),
                     created_at: timestamp,
                     last_opened_at: timestamp,
+                    expanded: true,
                 }],
                 RepositoryPersistence::new(None),
                 ctx,
@@ -670,6 +737,7 @@ fn project_tree_scrolls_when_workspace_list_overflows() {
                 created_at: timestamp,
                 last_opened_at: timestamp,
                 sort_index: index as i32,
+                expanded: true,
             });
             workspaces.push(PersistedRepositoryWorkspace {
                 id: workspace_id.to_string(),
@@ -679,6 +747,7 @@ fn project_tree_scrolls_when_workspace_list_overflows() {
                 worktree_path: worktree_path.to_string_lossy().to_string(),
                 created_at: timestamp,
                 last_opened_at: timestamp,
+                expanded: true,
             });
         }
 
@@ -791,6 +860,7 @@ fn project_tree_renders_running_selected_workspace_activity_badge() {
                     created_at: timestamp,
                     last_opened_at: timestamp,
                     sort_index: 0,
+                    expanded: true,
                 }],
                 vec![PersistedRepositoryWorkspace {
                     id: workspace_id.to_string(),
@@ -800,6 +870,7 @@ fn project_tree_renders_running_selected_workspace_activity_badge() {
                     worktree_path: worktree_path.to_string_lossy().to_string(),
                     created_at: timestamp,
                     last_opened_at: timestamp,
+                    expanded: true,
                 }],
                 RepositoryPersistence::new(None),
                 ctx,
@@ -858,6 +929,7 @@ fn project_tree_renders_running_grok_agent_avatar() {
                     created_at: timestamp,
                     last_opened_at: timestamp,
                     sort_index: 0,
+                    expanded: true,
                 }],
                 vec![PersistedRepositoryWorkspace {
                     id: workspace_id.to_string(),
@@ -867,6 +939,7 @@ fn project_tree_renders_running_grok_agent_avatar() {
                     worktree_path: worktree_path.to_string_lossy().to_string(),
                     created_at: timestamp,
                     last_opened_at: timestamp,
+                    expanded: true,
                 }],
                 RepositoryPersistence::new(None),
                 ctx,
@@ -941,6 +1014,7 @@ fn create_workspace_button_does_not_toggle_its_repository() {
                     created_at: timestamp,
                     last_opened_at: timestamp,
                     sort_index: 0,
+                    expanded: true,
                 }],
                 vec![],
                 RepositoryPersistence::new(None),
@@ -1037,6 +1111,7 @@ fn remove_repository_button_does_not_toggle_its_repository() {
                     created_at: timestamp,
                     last_opened_at: timestamp,
                     sort_index: 0,
+                    expanded: true,
                 }],
                 vec![],
                 RepositoryPersistence::new(None),

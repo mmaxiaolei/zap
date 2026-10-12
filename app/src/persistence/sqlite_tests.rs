@@ -442,6 +442,7 @@ fn repository_rows_round_trip() {
         created_at,
         last_opened_at,
         sort_index: 0,
+        expanded: true,
     };
 
     save_repository(&mut conn, repository.clone()).expect("repository should save");
@@ -449,6 +450,37 @@ fn repository_rows_round_trip() {
     assert_eq!(
         get_all_repositories(&mut conn).expect("repositories should load"),
         vec![repository]
+    );
+}
+
+#[test]
+fn repository_and_workspace_expanded_false_round_trips() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let mut repository = repository_row(
+        "123e4567-e89b-12d3-a456-426614174200",
+        "/tmp/zap-collapsed-repository",
+    );
+    repository.expanded = false;
+    save_repository(&mut conn, repository.clone()).expect("repository should save");
+
+    let mut workspace = repository_workspace_row(
+        "123e4567-e89b-12d3-a456-426614174201",
+        &repository.id,
+        "main",
+        "/tmp/zap-collapsed-workspace",
+    );
+    workspace.expanded = false;
+    save_repository_workspace(&mut conn, workspace.clone()).expect("workspace should save");
+
+    assert_eq!(
+        get_all_repositories(&mut conn).expect("repositories should load"),
+        vec![repository]
+    );
+    assert_eq!(
+        get_all_repository_workspaces(&mut conn).expect("workspaces should load"),
+        vec![workspace]
     );
 }
 
@@ -520,6 +552,7 @@ fn malformed_repository_workspace_row_returns_error() {
         created_at: now,
         last_opened_at: now,
         sort_index: 0,
+        expanded: true,
     };
     save_repository(&mut conn, repository).expect("repository should save");
     conn.batch_execute(
@@ -550,6 +583,7 @@ fn repository_row(id: &str, path: &str) -> Repository {
         created_at: now,
         last_opened_at: now,
         sort_index: 0,
+        expanded: true,
     }
 }
 
@@ -1029,6 +1063,7 @@ fn repository_workspace_row(
         worktree_path: worktree_path.to_string(),
         created_at: now,
         last_opened_at: now,
+        expanded: true,
     }
 }
 
@@ -1096,6 +1131,7 @@ fn repository_workspace_rows_support_crud_and_repository_restrict() {
         created_at,
         last_opened_at: created_at,
         sort_index: 0,
+        expanded: true,
     };
     save_repository(&mut conn, repository.clone()).expect("repository should save");
     let mut workspace = RepositoryWorkspace {
@@ -1106,6 +1142,7 @@ fn repository_workspace_rows_support_crud_and_repository_restrict() {
         worktree_path: "/tmp/zap-workspace-crud-main".to_string(),
         created_at,
         last_opened_at: created_at,
+        expanded: true,
     };
 
     save_repository_workspace(&mut conn, workspace.clone()).expect("workspace should save");
