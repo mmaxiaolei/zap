@@ -5,14 +5,20 @@ use std::path::{Path, PathBuf};
 
 use ai::skills::SkillProvider;
 use warp_core::ui::appearance::Appearance;
+use warp_core::ui::color::CLAUDE_ORANGE;
+use warp_core::ui::icons::Icon as WarpIcon;
 use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::WarpTheme;
 use warpui::{
+    color::ColorU,
     elements::{
-        Border, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
-        Container, CornerRadius, CrossAxisAlignment, Element, Fill as ElementFill, Flex, Hoverable,
-        MainAxisSize, MouseStateHandle, Padding, ParentElement, Radius, SavePosition, ScrollTarget,
-        ScrollToPositionMode, ScrollbarWidth, Shrinkable, Text,
+        Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
+        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Empty,
+        Fill as ElementFill, Flex, Hoverable, MainAxisSize, MouseStateHandle, OffsetPositioning,
+        Padding, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
+        ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Text, Wrap,
     },
+    geometry::vector::vec2f,
     platform::Cursor,
     text_layout::ClipConfig,
     AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
@@ -39,11 +45,20 @@ const FILTER_BUTTON_CORNER_RADIUS: f32 = 4.0;
 // 取 4:典型侧栏宽度下「全部」加约 4 个短来源名仍可平铺。布局引擎是单遍保留树,
 // 无法按实测像素宽度自适应折叠,故以来源数量作为折叠阈值。
 const FILTER_TABS_INLINE_MAX: usize = 4;
+const SOURCE_TAG_HEIGHT: f32 = 20.0;
+const SOURCE_TAG_PIP: f32 = 6.0;
+const SOURCE_TAG_CHECK: f32 = 10.0;
 
 #[derive(Clone, Debug)]
 pub enum SkillManagerPanelAction {
     SelectProviderFilter(Option<SkillProvider>),
     EditSkill(PathBuf),
+    /// 点来源标签. `open` 为 true 时同时打开该文件.
+    PinSkillSource {
+        name: String,
+        path: PathBuf,
+        open: bool,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -53,12 +68,15 @@ pub enum SkillManagerPanelEvent {
 
 pub struct SkillManagerPanel {
     selected_path: Option<PathBuf>,
+    /// 每个 skill 名字当前要打开的那一份. 缺省时用生效的那份.
+    pinned_paths: HashMap<String, PathBuf>,
     provider_filter: Option<SkillProvider>,
     query_editor: ViewHandle<EditorView>,
     // 折叠态(来源数 > FILTER_TABS_INLINE_MAX)收纳各来源 tab 的「来源」下拉。
     source_dropdown: ViewHandle<Dropdown<SkillManagerPanelAction>>,
     filter_mouse_states: RefCell<HashMap<Option<SkillProvider>, MouseStateHandle>>,
     row_mouse_states: RefCell<HashMap<PathBuf, MouseStateHandle>>,
+    tag_mouse_states: RefCell<HashMap<PathBuf, MouseStateHandle>>,
     list_scroll_state: ClippedScrollStateHandle,
 }
 
@@ -138,11 +156,13 @@ impl SkillManagerPanel {
 
         let mut me = Self {
             selected_path: None,
+            pinned_paths: HashMap::new(),
             provider_filter: None,
             query_editor,
             source_dropdown,
             filter_mouse_states: RefCell::new(HashMap::new()),
             row_mouse_states: RefCell::new(HashMap::new()),
+            tag_mouse_states: RefCell::new(HashMap::new()),
             list_scroll_state: ClippedScrollStateHandle::default(),
         };
         me.rebuild_source_dropdown(ctx);
@@ -228,7 +248,15 @@ impl SkillManagerPanel {
                     .cloned()
                     .collect::<Vec<_>>();
 
-                let default_skill = duplicates.first()?.clone();
+                if duplicates.is_empty() {
+                    return None;
+                }
+                // 过滤后仍保留真正生效的那份, 避免「默认」被换成剩余列表的第一项.
+                let default_skill = duplicates
+                    .iter()
+                    .find(|duplicate| duplicate.path == item.default_skill.path)
+                    .cloned()
+                    .unwrap_or_else(|| duplicates[0].clone());
                 Some(SkillInventoryItem {
                     name: item.name.clone(),
                     default_skill,
@@ -238,27 +266,77 @@ impl SkillManagerPanel {
             .collect()
     }
 
-    fn selected_path_is_visible(path: &Path, items: &[SkillInventoryItem]) -> bool {
-        items
+    /// 悬停中的来源优先, 其次是点选记住的那份, 最后是生效的那份.
+    fn resolve_shown_duplicate<'a>(
+        item: &'a SkillInventoryItem,
+        pinned_path: Option<&Path>,
+        hovered_path: Option<&Path>,
+    ) -> &'a SkillInventoryDuplicate {
+        if let Some(path) = hovered_path {
+            if let Some(duplicate) = item
+                .duplicates
+                .iter()
+                .find(|duplicate| duplicate.path.as_path() == path)
+            {
+                return duplicate;
+            }
+        }
+        if let Some(path) = pinned_path {
+            if let Some(duplicate) = item
+                .duplicates
+                .iter()
+                .find(|duplicate| duplicate.path.as_path() == path)
+            {
+                return duplicate;
+            }
+        }
+        item.duplicates
             .iter()
-            .flat_map(|item| item.duplicates.iter())
-            .any(|duplicate| duplicate.path.as_path() == path)
+            .find(|duplicate| duplicate.path == item.default_skill.path)
+            .unwrap_or(&item.duplicates[0])
     }
 
-    fn skill_row_position_id(path: &Path) -> String {
-        format!("skill-manager-row:{}", path.to_string_lossy())
+    fn source_content_differs(
+        duplicate: &SkillInventoryDuplicate,
+        default_skill: &SkillInventoryDuplicate,
+    ) -> bool {
+        duplicate.path != default_skill.path && duplicate.content != default_skill.content
+    }
+
+    fn provider_pip_color(provider: SkillProvider, theme: &WarpTheme) -> ColorU {
+        match provider {
+            SkillProvider::Agents | SkillProvider::Github => {
+                theme.main_text_color(theme.background()).into_solid()
+            }
+            SkillProvider::Zap => theme.accent().into_solid(),
+            SkillProvider::Claude => CLAUDE_ORANGE,
+            SkillProvider::Codex => theme.ansi_fg_green(),
+            SkillProvider::Cursor => theme.ansi_fg_cyan(),
+            SkillProvider::Gemini => theme.ansi_fg_blue(),
+            SkillProvider::Copilot => theme.ansi_fg_magenta(),
+            SkillProvider::Droid => theme.ansi_fg_yellow(),
+            SkillProvider::OpenCode => theme.ansi_fg_red(),
+        }
+    }
+
+    fn skill_row_position_id(name: &str) -> String {
+        format!("skill-manager-row:{name}")
     }
 
     fn scroll_selected_path_into_view(&self, items: &[SkillInventoryItem]) {
         let Some(path) = self.selected_path.as_deref() else {
             return;
         };
-        if !Self::selected_path_is_visible(path, items) {
+        let Some(item) = items.iter().find(|item| {
+            item.duplicates
+                .iter()
+                .any(|duplicate| duplicate.path.as_path() == path)
+        }) else {
             return;
-        }
+        };
 
         self.list_scroll_state.scroll_to_position(ScrollTarget {
-            position_id: Self::skill_row_position_id(path),
+            position_id: Self::skill_row_position_id(&item.name),
             mode: ScrollToPositionMode::FullyIntoView,
         });
     }
@@ -284,6 +362,56 @@ impl SkillManagerPanel {
             .entry(path.to_path_buf())
             .or_default()
             .clone()
+    }
+
+    fn tag_mouse_state_for(&self, path: &Path) -> MouseStateHandle {
+        self.tag_mouse_states
+            .borrow_mut()
+            .entry(path.to_path_buf())
+            .or_default()
+            .clone()
+    }
+
+    fn hovered_tag_path(&self, item: &SkillInventoryItem) -> Option<PathBuf> {
+        for duplicate in &item.duplicates {
+            let hovered = self
+                .tag_mouse_states
+                .borrow()
+                .get(&duplicate.path)
+                .and_then(|state| state.lock().ok().map(|mouse| mouse.is_hovered()))
+                .unwrap_or(false);
+            if hovered {
+                return Some(duplicate.path.clone());
+            }
+        }
+        None
+    }
+
+    fn render_dot(color: ColorU, diameter: f32) -> Box<dyn Element> {
+        Container::new(
+            ConstrainedBox::new(Empty::new().finish())
+                .with_width(diameter)
+                .with_height(diameter)
+                .finish(),
+        )
+        .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
+        .with_background_color(color)
+        .finish()
+    }
+
+    fn with_diff_dot(tag: Box<dyn Element>, color: ColorU) -> Box<dyn Element> {
+        Stack::new()
+            .with_child(tag)
+            .with_positioned_child(
+                Self::render_dot(color, SOURCE_TAG_PIP),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(SOURCE_TAG_PIP / 2.0, -(SOURCE_TAG_PIP / 2.0)),
+                    ParentOffsetBounds::Unbounded,
+                    ParentAnchor::TopRight,
+                    ChildAnchor::TopRight,
+                ),
+            )
+            .finish()
     }
 
     fn render_label(
@@ -422,55 +550,178 @@ impl SkillManagerPanel {
             .finish()
     }
 
-    fn render_skill_row(
+    fn render_source_tag(
         &self,
+        item: &SkillInventoryItem,
         duplicate: &SkillInventoryDuplicate,
-        is_selected: bool,
-        is_default: bool,
-        has_duplicates: bool,
+        pinned_path: &Path,
+        any_tag_hovered: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let path = duplicate.path.display().to_string();
-        let mut meta = format!("{} · {}", duplicate.provider, duplicate.scope);
-        if has_duplicates {
-            if is_default {
-                meta.push_str(" · ");
-                meta.push_str(&crate::t!("skill-manager-meta-default"));
+        let tag_path = duplicate.path.clone();
+        let pinned_path = pinned_path.to_path_buf();
+        let skill_name = item.name.clone();
+        let label = duplicate.provider.to_string();
+        let is_effective = duplicate.path == item.default_skill.path;
+        let content_differs = Self::source_content_differs(duplicate, &item.default_skill);
+        let pip_color = Self::provider_pip_color(duplicate.provider, theme);
+        let diff_color = theme.ui_yellow_color();
+        let state = self.tag_mouse_state_for(&duplicate.path);
+
+        let tag = Hoverable::new(state, move |mouse| {
+            let is_shown = if any_tag_hovered {
+                mouse.is_hovered()
             } else {
-                meta.push_str(" · ");
-                meta.push_str(&crate::t!("skill-manager-meta-duplicate"));
+                tag_path == pinned_path
+            };
+            let text_color = if is_shown {
+                theme.main_text_color(theme.background())
+            } else {
+                theme.sub_text_color(theme.background())
+            };
+            let mut row = Flex::row()
+                .with_main_axis_size(MainAxisSize::Min)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(4.0)
+                .with_child(Self::render_dot(pip_color, SOURCE_TAG_PIP))
+                .with_child(Self::render_label(
+                    label.clone(),
+                    appearance,
+                    appearance.ui_font_footnote(),
+                    text_color,
+                ));
+            if is_effective {
+                row.add_child(
+                    ConstrainedBox::new(WarpIcon::Check.to_warpui_icon(text_color).finish())
+                        .with_width(SOURCE_TAG_CHECK)
+                        .with_height(SOURCE_TAG_CHECK)
+                        .finish(),
+                );
             }
-        }
+            let mut tag = Container::new(row.finish())
+                .with_padding_left(6.0)
+                .with_padding_right(6.0)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
+            if is_shown {
+                tag = tag.with_background(internal_colors::fg_overlay_3(theme));
+            } else {
+                tag = tag.with_border(Border::all(1.0).with_border_fill(theme.surface_3()));
+            }
+            let tag = ConstrainedBox::new(tag.finish())
+                .with_height(SOURCE_TAG_HEIGHT)
+                .finish();
+            if content_differs {
+                Self::with_diff_dot(tag, diff_color)
+            } else {
+                tag
+            }
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click({
+            let name = skill_name.clone();
+            let path = duplicate.path.clone();
+            move |ctx, _, _| {
+                ctx.dispatch_typed_action(SkillManagerPanelAction::PinSkillSource {
+                    name: name.clone(),
+                    path: path.clone(),
+                    open: false,
+                });
+            }
+        })
+        .on_double_click({
+            let path = duplicate.path.clone();
+            move |ctx, _, _| {
+                ctx.dispatch_typed_action(SkillManagerPanelAction::PinSkillSource {
+                    name: skill_name.clone(),
+                    path: path.clone(),
+                    open: true,
+                });
+            }
+        })
+        .finish();
+        tag
+    }
+
+    fn render_skill_row(
+        &self,
+        item: &SkillInventoryItem,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let pinned = Self::resolve_shown_duplicate(
+            item,
+            self.pinned_paths.get(&item.name).map(PathBuf::as_path),
+            None,
+        );
+        let hovered_path = self.hovered_tag_path(item);
+        let shown = Self::resolve_shown_duplicate(
+            item,
+            Some(pinned.path.as_path()),
+            hovered_path.as_deref(),
+        );
+        let is_selected = self.selected_path.as_deref().is_some_and(|path| {
+            item.duplicates
+                .iter()
+                .any(|duplicate| duplicate.path.as_path() == path)
+        });
+        let description_color = if shown.description != item.default_skill.description {
+            theme.ui_yellow_color()
+        } else {
+            theme.sub_text_color(theme.background()).into_solid()
+        };
 
         let title = Self::render_label(
-            duplicate.name.clone(),
+            item.name.clone(),
             appearance,
             appearance.ui_font_body_large(),
             theme.main_text_color(theme.background()),
         );
         let description = Self::render_label(
-            duplicate.description.clone(),
+            shown.description.clone(),
             appearance,
             appearance.ui_font_footnote(),
-            theme.sub_text_color(theme.background()),
+            description_color,
         );
-        let meta = Self::render_label(
-            meta,
-            appearance,
-            appearance.ui_font_footnote(),
-            theme.sub_text_color(theme.background()),
-        );
-        let path = Self::render_label(
-            path,
+        let path_label = Self::render_label(
+            shown.path.display().to_string(),
             appearance,
             appearance.ui_font_footnote(),
             theme.sub_text_color(theme.background()),
         );
 
-        let action = SkillManagerPanelAction::EditSkill(duplicate.path.clone());
-        let position_id = Self::skill_row_position_id(&duplicate.path);
-        let state = self.row_mouse_state_for(&duplicate.path);
+        let mut column = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_spacing(2.0)
+            .with_child(title)
+            .with_child(description);
+        if item.has_duplicates() {
+            let mut tags = Wrap::row()
+                .with_spacing(4.0)
+                .with_run_spacing(4.0)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center);
+            for duplicate in &item.duplicates {
+                tags.extend(std::iter::once(self.render_source_tag(
+                    item,
+                    duplicate,
+                    pinned.path.as_path(),
+                    hovered_path.is_some(),
+                    appearance,
+                )));
+            }
+            column.add_child(
+                Container::new(tags.finish())
+                    .with_padding_top(4.0)
+                    .with_padding_bottom(2.0)
+                    .finish(),
+            );
+        }
+        column.add_child(path_label);
+
+        let action = SkillManagerPanelAction::EditSkill(pinned.path.clone());
+        let position_id = Self::skill_row_position_id(&item.name);
+        let state = self.row_mouse_state_for(&item.default_skill.path);
+        // 标签自己处理点击. 行的按下只在点到标签以外时打开当前记住的那份.
         let row = Hoverable::new(state, move |mouse| {
             let background = if is_selected && mouse.is_hovered() {
                 Some(internal_colors::fg_overlay_4(theme))
@@ -486,16 +737,7 @@ impl SkillManagerPanel {
             let content = Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_cross_axis_alignment(CrossAxisAlignment::Start)
-                .with_child(
-                    Flex::column()
-                        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                        .with_spacing(2.0)
-                        .with_child(title)
-                        .with_child(description)
-                        .with_child(meta)
-                        .with_child(path)
-                        .finish(),
-                )
+                .with_child(column.finish())
                 .finish();
             let mut row = Container::new(content)
                 .with_padding_top(ROW_PADDING_VERTICAL)
@@ -508,6 +750,7 @@ impl SkillManagerPanel {
             }
             row.finish()
         })
+        .with_defer_events_to_children()
         .with_cursor(Cursor::PointingHand)
         .on_mouse_down(move |ctx, _, _| {
             ctx.dispatch_typed_action(action.clone());
@@ -539,21 +782,7 @@ impl SkillManagerPanel {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_spacing(2.0);
         for item in items {
-            let has_duplicates = item.has_duplicates();
-            for duplicate in &item.duplicates {
-                let is_selected = self
-                    .selected_path
-                    .as_deref()
-                    .is_some_and(|path| path == duplicate.path.as_path());
-                let is_default = duplicate.path == item.default_skill.path;
-                rows.add_child(self.render_skill_row(
-                    duplicate,
-                    is_selected,
-                    is_default,
-                    has_duplicates,
-                    appearance,
-                ));
-            }
+            rows.add_child(self.render_skill_row(item, appearance));
         }
 
         let theme = appearance.theme();
@@ -585,12 +814,25 @@ impl TypedActionView for SkillManagerPanel {
                 ctx.notify();
             }
             SkillManagerPanelAction::EditSkill(path) => {
-                self.selected_path = Some(path.clone());
-                self.scroll_selected_path_into_view_with_ctx(ctx);
-                ctx.emit(SkillManagerPanelEvent::OpenSkillFile { path: path.clone() });
+                self.open_skill_file(path.clone(), ctx);
+                ctx.notify();
+            }
+            SkillManagerPanelAction::PinSkillSource { name, path, open } => {
+                self.pinned_paths.insert(name.clone(), path.clone());
+                if *open {
+                    self.open_skill_file(path.clone(), ctx);
+                }
                 ctx.notify();
             }
         }
+    }
+}
+
+impl SkillManagerPanel {
+    fn open_skill_file(&mut self, path: PathBuf, ctx: &mut ViewContext<Self>) {
+        self.selected_path = Some(path.clone());
+        self.scroll_selected_path_into_view_with_ctx(ctx);
+        ctx.emit(SkillManagerPanelEvent::OpenSkillFile { path });
     }
 }
 
@@ -632,3 +874,7 @@ impl View for SkillManagerPanel {
 impl Entity for SkillManagerPanel {
     type Event = SkillManagerPanelEvent;
 }
+
+#[cfg(test)]
+#[path = "panel_tests.rs"]
+mod tests;
