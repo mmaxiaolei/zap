@@ -10023,9 +10023,18 @@ impl TerminalView {
                                     // Detect CLI agent and create session before
                                     // showing the footer, so the session drives
                                     // the footer rather than the other way around.
-                                    let detection = {
+                                    let (detection, model_label) = {
                                         let model = me.model.lock();
-                                        me.detect_cli_agent_from_model(&model, ctx)
+                                        let detection =
+                                            me.detect_cli_agent_from_model(&model, ctx);
+                                        let command = model
+                                            .block_list()
+                                            .active_block()
+                                            .command_with_secrets_obfuscated(false);
+                                        // Store raw flag value; tree chip shortens and tooltips the fuller string.
+                                        let model_label =
+                                            CLIAgent::model_flag_from_command(&command);
+                                        (detection, model_label)
                                     };
                                     let view_id = me.view_id;
                                     CLIAgentSessionsModel::handle(ctx).update(
@@ -10044,7 +10053,10 @@ impl TerminalView {
                                                         agent,
                                                         status: CLIAgentSessionStatus::InProgress,
                                                         session_context:
-                                                            CLIAgentSessionContext::default(),
+                                                            CLIAgentSessionContext {
+                                                                model: model_label,
+                                                                ..Default::default()
+                                                            },
                                                         input_state: CLIAgentInputState::Closed,
                                                         should_auto_toggle_input: *AISettings::as_ref(
                                                             ctx,
@@ -10055,6 +10067,7 @@ impl TerminalView {
                                                         remote_host,
                                                         draft_text: None,
                                                         custom_command_prefix: custom_command_prefix.clone(),
+                                                        phase_changed_at: Instant::now(),
                                                     },
                                                     ctx,
                                                 );

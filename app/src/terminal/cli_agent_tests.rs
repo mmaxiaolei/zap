@@ -545,3 +545,22 @@ fn grok_has_brand_icon() {
         Some(crate::ui_components::icons::Icon::GrokLogo)
     );
 }
+
+#[test]
+fn model_flag_from_command_parses_long_and_short_forms() {
+    assert_eq!(
+        CLIAgent::model_flag_from_command("claude --model opus").as_deref(),
+        Some("opus")
+    );
+    assert_eq!(
+        CLIAgent::model_flag_from_command("claude --model=sonnet").as_deref(),
+        Some("sonnet")
+    );
+    assert_eq!(
+        CLIAgent::model_flag_from_command("codex -m gpt-5").as_deref(),
+        Some("gpt-5")
+    );
+    assert_eq!(CLIAgent::model_flag_from_command("claude"), None);
+    assert_eq!(CLIAgent::model_flag_from_command("claude --model"), None);
+    assert_eq!(CLIAgent::model_flag_from_command("claude --model --resume x"), None);
+}

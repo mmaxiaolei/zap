@@ -33,6 +33,9 @@ pub(crate) struct IconWithStatusSizing {
 const DEEPSEEK_LOGO_PATH: &str = "bundled/svg/deepseek.svg";
 const ANTIGRAVITY_LOGO_PATH: &str = "bundled/svg/antigravity.svg";
 const OMP_LOGO_PATH: &str = "bundled/svg/omp.svg";
+const CLAUDE_LOGO_PATH: &str = "bundled/svg/claude.svg";
+const OPENAI_LOGO_PATH: &str = "bundled/svg/openai.svg";
+const GROK_LOGO_PATH: &str = "bundled/png/grok.png";
 
 pub(crate) fn render_cli_agent_logo(
     agent: CLIAgent,
@@ -43,6 +46,10 @@ pub(crate) fn render_cli_agent_logo(
         CLIAgent::DeepSeek => Some(DEEPSEEK_LOGO_PATH),
         CLIAgent::Antigravity => Some(ANTIGRAVITY_LOGO_PATH),
         CLIAgent::Omp => Some(OMP_LOGO_PATH),
+        // Orca 对齐: Claude / Codex / Grok 使用烘焙色或 PNG,不再走 #FF0000 重着色。
+        CLIAgent::Claude => Some(CLAUDE_LOGO_PATH),
+        CLIAgent::Codex => Some(OPENAI_LOGO_PATH),
+        CLIAgent::Grok => Some(GROK_LOGO_PATH),
         _ => None,
     };
     if let Some(path) = multi_color_logo_path {
@@ -157,8 +164,14 @@ pub(crate) fn render_icon_with_status(
                 .finish();
             let background: ElementFill = if matches!(
                 agent,
-                CLIAgent::DeepSeek | CLIAgent::Antigravity | CLIAgent::Omp
+                CLIAgent::DeepSeek
+                    | CLIAgent::Antigravity
+                    | CLIAgent::Omp
+                    | CLIAgent::Claude
+                    | CLIAgent::Codex
+                    | CLIAgent::Grok
             ) {
+                // 多色 / Orca 品牌标:透明圆底用主题背景,避免橙底叠橙标。
                 theme.background().into()
             } else {
                 ThemeFill::Solid(brand_color).into()

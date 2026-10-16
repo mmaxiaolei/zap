@@ -16,6 +16,8 @@ fn grok_running() -> WorkspaceAgentActivity {
     WorkspaceAgentActivity {
         identity: WorkspaceAgentIdentity::Cli(CLIAgent::Grok),
         phase: WorkspaceAgentPhase::InProgress,
+        phase_changed_at: None,
+        model_label: None,
     }
 }
 
@@ -23,6 +25,8 @@ fn oz_blocked() -> WorkspaceAgentActivity {
     WorkspaceAgentActivity {
         identity: WorkspaceAgentIdentity::Oz { ambient: false },
         phase: WorkspaceAgentPhase::Blocked,
+        phase_changed_at: None,
+        model_label: None,
     }
 }
 
@@ -337,6 +341,13 @@ fn tab_node_busy_covers_agent_and_running_dot() {
     assert!(TabNodeActivity::Agent(grok_running()).is_busy());
     assert!(TabNodeActivity::RunningDot.is_busy());
     assert!(!TabNodeActivity::Idle.is_busy());
+    let done = WorkspaceAgentActivity {
+        identity: WorkspaceAgentIdentity::Cli(CLIAgent::Grok),
+        phase: WorkspaceAgentPhase::Done,
+        phase_changed_at: None,
+        model_label: None,
+    };
+    assert!(!TabNodeActivity::Agent(done).is_busy());
 }
 
 #[test]

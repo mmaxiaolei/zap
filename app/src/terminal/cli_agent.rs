@@ -236,6 +236,15 @@ impl CLIAgent {
         }
     }
 
+    /// 树 / Orca 风格短名:空标题时回退用,不带 "Code" 等后缀。
+    pub fn tree_label(&self) -> &'static str {
+        match self {
+            CLIAgent::Claude => "Claude",
+            CLIAgent::Unknown => "Agent",
+            other => other.display_name(),
+        }
+    }
+
     /// Returns the Icon for this CLI agent, or `None` for unknown/custom agents.
     pub fn icon(&self) -> Option<Icon> {
         match self {
@@ -399,6 +408,31 @@ impl CLIAgent {
                     || (matches!(agent, CLIAgent::Claude)
                         && Self::is_aifx_agent_run_claude(&resolved_command, ctx))
             })
+    }
+
+    /// Extract `--model` / `-m` value from a CLI agent launch command.
+    ///
+    /// Used for the Orca-style model chip on agent tab rows. Returns `None` when
+    /// the flag is absent or empty.
+    pub fn model_flag_from_command(command: &str) -> Option<String> {
+        let mut tokens = command.split_whitespace();
+        while let Some(token) = tokens.next() {
+            if token == "--model" || token == "-m" {
+                let value = tokens.next()?.trim();
+                if value.is_empty() || value.starts_with('-') {
+                    return None;
+                }
+                return Some(value.to_owned());
+            }
+            if let Some(value) = token.strip_prefix("--model=") {
+                let value = value.trim();
+                if value.is_empty() {
+                    return None;
+                }
+                return Some(value.to_owned());
+            }
+        }
+        None
     }
 
     /// Returns true if the resolved command is `aifx agent run claude` (Uber's

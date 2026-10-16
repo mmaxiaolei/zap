@@ -93,3 +93,35 @@ fn test_human_readable_approx_duration() {
         "9 years ago".to_owned()
     );
 }
+
+#[test]
+fn format_short_time_ago_matches_orca() {
+    assert_eq!(format_short_time_ago_secs(0), "now");
+    assert_eq!(format_short_time_ago_secs(10), "now");
+    assert_eq!(format_short_time_ago_secs(59), "now");
+    assert_eq!(format_short_time_ago_secs(60), "1m");
+    assert_eq!(format_short_time_ago_secs(5 * 60), "5m");
+    assert_eq!(format_short_time_ago_secs(59 * 60), "59m");
+    assert_eq!(format_short_time_ago_secs(60 * 60), "1h");
+    assert_eq!(format_short_time_ago_secs(20 * 60 * 60), "20h");
+    assert_eq!(format_short_time_ago_secs(24 * 60 * 60), "1d");
+    assert_eq!(format_short_time_ago_secs(2 * 24 * 60 * 60), "2d");
+}
+
+#[test]
+fn secs_until_next_short_time_ago_change_boundaries() {
+    assert_eq!(secs_until_next_short_time_ago_change(0), 60);
+    assert_eq!(secs_until_next_short_time_ago_change(10), 50);
+    assert_eq!(secs_until_next_short_time_ago_change(59), 1);
+    // Exact minute boundary: label is already Nm, next flip in 60s.
+    assert_eq!(secs_until_next_short_time_ago_change(60), 60);
+    assert_eq!(secs_until_next_short_time_ago_change(61), 59);
+    assert_eq!(secs_until_next_short_time_ago_change(5 * 60 + 15), 45);
+    assert_eq!(secs_until_next_short_time_ago_change(59 * 60), 60);
+    // 1h exact → next hour boundary in 3600s (1h → 2h).
+    assert_eq!(secs_until_next_short_time_ago_change(3600), 3600);
+    assert_eq!(secs_until_next_short_time_ago_change(3600 + 100), 3500);
+    assert_eq!(secs_until_next_short_time_ago_change(20 * 3600 + 1), 3599);
+    assert_eq!(secs_until_next_short_time_ago_change(86400), 86400);
+    assert_eq!(secs_until_next_short_time_ago_change(86400 + 10), 86390);
+}

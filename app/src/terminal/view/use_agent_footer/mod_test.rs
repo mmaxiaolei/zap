@@ -376,6 +376,7 @@ fn cli_agent_footer_renders_for_viewer_of_shared_ambient_agent_session() {
                         remote_host: None,
                         draft_text: None,
                         custom_command_prefix: None,
+                        phase_changed_at: instant::Instant::now(),
                         should_auto_toggle_input: false,
                     },
                     ctx,

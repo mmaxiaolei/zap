@@ -4880,13 +4880,22 @@ impl Workspace {
             &self.tabs,
             self.active_tab_index,
             |tab, _index, is_active| {
+                let activity = tab_node_activity(
+                    self.tab_agent_activity(tab, ctx),
+                    self.tab_has_long_running_terminal(tab, ctx),
+                );
+                let label = self.resolve_workspace_tab_label(tab, ctx);
+                // Orca: 无会话名/prompt 时回退 agent 类型名,不把 Idle/Done 拼进标题。
+                let label = match (&label, activity.agent()) {
+                    (ResolvedWorkspaceTabLabel::IdleTerminal, Some(agent)) => {
+                        ResolvedWorkspaceTabLabel::Named(agent.identity.tree_label().to_owned())
+                    }
+                    _ => label,
+                };
                 (
                     ProjectTreeTabId(tab.pane_group.id()),
-                    self.resolve_workspace_tab_label(tab, ctx),
-                    tab_node_activity(
-                        self.tab_agent_activity(tab, ctx),
-                        self.tab_has_long_running_terminal(tab, ctx),
-                    ),
+                    label,
+                    activity,
                     is_active,
                 )
             },
@@ -5097,7 +5106,15 @@ impl Workspace {
 
             let cli = CLIAgentSessionsModel::as_ref(ctx)
                 .session(terminal_view_id)
-                .map(|session| (session.agent, session.status.clone()));
+                .map(|session| {
+                    (
+                        session.agent,
+                        session.status.clone(),
+                        Some(session.phase_changed_at),
+                        // Raw model; chip shortens at display, tooltip keeps fuller id.
+                        session.model_label().map(str::to_owned),
+                    )
+                });
             let history = BlocklistAIHistoryModel::as_ref(ctx);
             let oz = history
                 .active_conversation(terminal_view_id)
@@ -5108,6 +5125,9 @@ impl Workspace {
                     is_ambient: history
                         .get_conversation_metadata(&conversation.id())
                         .is_some_and(|metadata| metadata.is_ambient_agent_conversation()),
+                    phase_changed_at: Some(conversation.phase_changed_at()),
+                    // Raw model; chip shortens at display, tooltip keeps fuller id.
+                    model_label: conversation.latest_model_chip_label(),
                 });
 
             activities.extend(activities_from_terminal_sources(cli, oz, false));

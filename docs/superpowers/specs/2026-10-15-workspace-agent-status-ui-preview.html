@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Zap workspace agent status — UI preview v3</title>
+<style>
+  :root {
+    --bg: #0f0f10; --panel: #161618; --sidebar: #1a1a1c; --row-active: #2a2a2e;
+    --border: #2e2e32; --text: #e8e8ea; --muted: #8b8b93; --dim: #6a6a72;
+    --green: #3dd68c; --emerald: #10b981; --yellow: #e6b84d; --red: #ef4444;
+    --idle: rgba(163,163,163,.4);
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); padding:28px 32px 48px; }
+  h1 { font-size:15px; font-weight:600; margin:0 0 6px; }
+  .intro { color:var(--muted); font-size:13px; margin:0 0 22px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start; max-width:760px; }
+  @media (max-width:720px) { .grid { grid-template-columns:1fr; } }
+  .col-label { font-size:12px; color:var(--muted); margin:0 0 8px; }
+  .col-label strong { color:var(--text); }
+  .sidebar { max-width:320px; background:var(--sidebar); border:1px solid var(--border); border-radius:10px; overflow:hidden; box-shadow:0 8px 28px rgba(0,0,0,.35); }
+  .side-head { display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border-bottom:1px solid var(--border); font-size:12px; font-weight:600; }
+  .add { color:var(--muted); font-size:11px; border:1px solid var(--border); border-radius:6px; padding:3px 8px; }
+  .tree { padding:6px 0 12px; font-size:12px; }
+  .row { display:flex; align-items:center; gap:6px; padding:4px 10px 4px 8px; min-height:26px; border-radius:6px; margin:1px 6px; }
+  .row .name { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .row .badge { flex-shrink:0; min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:#2c2c30; color:var(--muted); font-size:10px; display:inline-flex; align-items:center; justify-content:center; }
+  .row.repo { font-weight:600; }
+  .row.ws.active, .row.tab.selected { background:var(--row-active); }
+  .row.ws.active { outline:1px solid #3a3a40; }
+  .chev { width:10px; color:var(--dim); flex-shrink:0; font-size:9px; }
+  .indent-ws { padding-left:18px; }
+  .indent-tab { padding-left:28px; }
+  .dot6 { width:6px; height:6px; border-radius:50%; background:var(--green); flex-shrink:0; }
+  .dollar { width:14px; color:var(--muted); flex-shrink:0; font-size:11px; text-align:center; }
+  .dollar.live { color:var(--green); font-weight:700; }
+  .st { width:12px; height:12px; flex-shrink:0; display:inline-flex; align-items:center; justify-content:center; }
+  .st-idle { width:6px; height:6px; border-radius:50%; background:var(--idle); }
+  .st-done { width:11px; height:11px; color:var(--emerald); }
+  .st-done svg { width:11px; height:11px; display:block; }
+  .st-work { width:8px; height:8px; border-radius:50%; border:1.5px solid var(--yellow); border-top-color:transparent; animation:spin .9s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .brand { width:14px; height:14px; flex-shrink:0; display:inline-flex; align-items:center; justify-content:center; border-radius:2px; }
+  .brand img, .brand svg { width:14px; height:14px; display:block; }
+  .brand.openai { color:#e8e8ea; }
+  .title-main { color:var(--text); }
+  .title-dim { color:var(--muted); }
+  .model { flex-shrink:0; max-width:72px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:ui-monospace,Menlo,monospace; font-size:10px; color:var(--dim); }
+  .time { flex-shrink:0; font-size:10px; color:var(--dim); font-variant-numeric:tabular-nums; }
+  .legend { margin-top:28px; max-width:760px; padding:14px 16px; background:var(--panel); border:1px solid var(--border); border-radius:10px; font-size:12.5px; line-height:1.55; color:var(--muted); }
+  .legend h2 { margin:0 0 8px; font-size:12px; color:var(--text); }
+  .legend ul { margin:0; padding-left:18px; }
+  .legend li { margin:4px 0; }
+  .legend code { font-family:ui-monospace,Menlo,monospace; font-size:11px; color:#c8c8d0; }
+</style>
+</head>
+<body>
+  <h1>Zap · agent 状态 UI 预览 v3（Orca 品牌图标）</h1>
+  <p class="intro">左：当前 Zap · 右：修订方案；品牌图标直接取自 <code>stablyai/orca</code>（Grok PNG · Claude SVG · OpenAI SVG）</p>
+
+  <div class="grid">
+    <div>
+      <div class="col-label"><strong>当前 Zap</strong></div>
+      <div class="sidebar">
+        <div class="side-head"><span>Repositories</span><span class="add">+ Add</span></div>
+        <div class="tree">
+          <div class="row repo"><span class="chev">▼</span><span class="name">index-platform-backend</span><span class="badge">5</span></div>
+          <div class="row ws indent-ws active"><span class="chev">▼</span><span class="name">release-602</span><span class="badge">4</span></div>
+          <div class="row tab indent-tab"><span class="dollar live">$</span><span class="name">lg</span></div>
+          <div class="row tab indent-tab"><span class="dollar live">$</span><span class="name">grok</span></div>
+          <div class="row tab indent-tab selected"><span class="dollar live">$</span><span class="name">mvn clean package -DskipTests</span></div>
+          <div class="row tab indent-tab"><span class="dollar">$</span><span class="name">Terminal 2</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="col-label"><strong>修订方案</strong> · Orca 图标</div>
+      <div class="sidebar">
+        <div class="side-head"><span>Repositories</span><span class="add">+ Add</span></div>
+        <div class="tree">
+          <div class="row repo"><span class="chev">▼</span><span class="name">dip-agent</span><span class="badge">6</span></div>
+          <div class="row ws indent-ws active">
+            <span class="chev">▼</span>
+            <span class="st"><span class="st-work"></span></span>
+            <span class="name">release-602</span>
+            <span class="badge">5</span>
+          </div>
+
+          <div class="row tab indent-tab">
+            <span class="st" title="Idle"><span class="st-idle"></span></span>
+            <span class="brand" title="Grok"><img alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAMAAACdt4HsAAAAaVBMVEX///8AAABjY2M2Njb4+Pjy8vL7+/stLS0wMDCrq6tfX1+SkpKoqKiysrJPT0+EhITr6+vY2NjNzc0+Pj4fHx/l5eUoKCiMjIwMDAx7e3vExMSioqK9vb1XV1dGRkZpaWkVFRVxcXGamprh3+DVAAABoElEQVRYhe1V2ZaDIAwtreBSq9aKu7X1/z9yZAlgB1vry5wzh/sWws0lIYHDwcHB4a9B42w/2WvTAKFwJxtfIsRx3sPO4rtg3zq8RzsR7Dq97hBvR8FGSU++Z2dTKelPmzjBnsAKPT9KNprsmZOn9Ae2u7340lvE60dsQeLy4sATePxX1xJZAjmaeeAK6OV7OsMZtqoqaXrdbSl8/pDbO24SiIhQtVbdF3ii2A2vdKzo0RdTE849yjNo4dqRn2+nz7jy49NByU/8aO1XQQ46+Ttldl8s7+YDcl/xjeOUm8enUfQbl8eLaJ/la8WH94KoKdzwAqjOQTUvfsqjhLD4qZb0rvgDU7ueZlnWBPQkl9O3/F7RUcXszpCFyoi62JFqfs/s7GHKquhrQ+Ulmg8qIBuwBQz5jda5ooW+PV3sHFb5FwD99bC0RK7lIyZQlQHDTYUdPTPe9KZ8z9kkehQUCibrQUsMy5YI9b6G2UN5MgCtxWVhyGuzJTrNt90zgSeZdyL1TSmRf3KUiH7lJk8YCbd4WSphDc2O78XBwcHhX+MHkowR/Jk9Ot8AAAAASUVORK5CYII=" /></span>
+            <span class="name title-dim">Grok</span>
+            <span class="time">now</span>
+          </div>
+          <div class="row tab indent-tab">
+            <span class="st" title="Idle"><span class="st-idle"></span></span>
+            <span class="brand" title="Grok"><img alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAMAAACdt4HsAAAAaVBMVEX///8AAABjY2M2Njb4+Pjy8vL7+/stLS0wMDCrq6tfX1+SkpKoqKiysrJPT0+EhITr6+vY2NjNzc0+Pj4fHx/l5eUoKCiMjIwMDAx7e3vExMSioqK9vb1XV1dGRkZpaWkVFRVxcXGamprh3+DVAAABoElEQVRYhe1V2ZaDIAwtreBSq9aKu7X1/z9yZAlgB1vry5wzh/sWws0lIYHDwcHB4a9B42w/2WvTAKFwJxtfIsRx3sPO4rtg3zq8RzsR7Dq97hBvR8FGSU++Z2dTKelPmzjBnsAKPT9KNprsmZOn9Ae2u7340lvE60dsQeLy4sATePxX1xJZAjmaeeAK6OV7OsMZtqoqaXrdbSl8/pDbO24SiIhQtVbdF3ii2A2vdKzo0RdTE849yjNo4dqRn2+nz7jy49NByU/8aO1XQQ46+Ttldl8s7+YDcl/xjeOUm8enUfQbl8eLaJ/la8WH94KoKdzwAqjOQTUvfsqjhLD4qZb0rvgDU7ueZlnWBPQkl9O3/F7RUcXszpCFyoi62JFqfs/s7GHKquhrQ+Ulmg8qIBuwBQz5jda5ooW+PV3sHFb5FwD99bC0RK7lIyZQlQHDTYUdPTPe9KZ8z9kkehQUCibrQUsMy5YI9b6G2UN5MgCtxWVhyGuzJTrNt90zgSeZdyL1TSmRf3KUiH7lJk8YCbd4WSphDc2O78XBwcHhX+MHkowR/Jk9Ot8AAAAASUVORK5CYII=" /></span>
+            <span class="name title-dim">Grok</span>
+            <span class="time">now</span>
+          </div>
+
+          <div class="row tab indent-tab">
+            <span class="st" title="Done"><span class="st-done"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span></span>
+            <span class="brand" title="Claude"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z" fill="#D97757" fill-rule="nonzero"/></svg></span>
+            <span class="name title-dim">修一下登录竞态并补测试</span>
+            <span class="time">3h</span>
+          </div>
+
+          <div class="row tab indent-tab selected">
+            <span class="st" title="Working"><span class="st-work"></span></span>
+            <span class="brand openai" title="Codex / OpenAI"><svg fill="currentColor" fill-rule="evenodd" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z"/></svg></span>
+            <span class="name title-main">你是什么模型? …</span>
+            <span class="model">gpt-6-astra</span>
+            <span class="time">now</span>
+          </div>
+
+          <div class="row tab indent-tab"><span class="dot6"></span><span class="name">mvn clean package -DskipTests</span></div>
+          <div class="row tab indent-tab"><span class="dollar">$</span><span class="name title-dim">Terminal 2</span></div>
+
+          <div class="row ws indent-ws"><span class="chev">▶</span><span class="dot6"></span><span class="name">dgraph5_build_opt</span><span class="badge">2</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h2>相对 v2 的增量</h2>
+    <ul>
+      <li><strong>品牌图标</strong>：改用 Orca 同款 — <code>src/shared/agent-icons/grok.png</code>、<code>ClaudeIcon</code>（#D97757）、<code>OpenAIIcon</code>（Codex）。落地时直接复用 / 移植这些资源，替换 Zap 现有 CLI logo。</li>
+      <li>其余仍按 v2：状态点在前、无英文状态词、无 Agents/Terminals 分组、标题优先 prompt。</li>
+    </ul>
+  </div>
+</body>
+</html>

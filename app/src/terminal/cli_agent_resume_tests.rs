@@ -19,6 +19,7 @@ fn session(agent: CLIAgent, session_id: Option<&str>, remote: bool) -> CLIAgentS
         remote_host: remote.then(|| "user@host".to_owned()),
         draft_text: None,
         custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
     }
 }
 

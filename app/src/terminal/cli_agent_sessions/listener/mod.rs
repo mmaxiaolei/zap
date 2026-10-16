@@ -524,6 +524,7 @@ mod tests {
             plugin_version: None,
             draft_text: None,
             custom_command_prefix: None,
+            phase_changed_at: instant::Instant::now(),
         };
 
         assert!(!session_supports_rich_status(&session));
@@ -545,6 +546,7 @@ mod tests {
             plugin_version: None,
             draft_text: None,
             custom_command_prefix: None,
+            phase_changed_at: instant::Instant::now(),
         };
 
         assert!(session_supports_rich_status(&session));

@@ -209,6 +209,8 @@ pub struct AIConversation {
     status: ConversationStatus,
     /// Optional detail for the current error status.
     status_error_message: Option<String>,
+    /// When `status` last changed; used for project-tree relative time.
+    phase_changed_at: instant::Instant,
 
     /// Tracks whether the code review has been opened at least once for this conversation.
     has_opened_code_review: bool,
@@ -329,6 +331,7 @@ impl AIConversation {
             todo_lists: vec![],
             status: ConversationStatus::InProgress,
             status_error_message: None,
+            phase_changed_at: instant::Instant::now(),
             has_opened_code_review: false,
             conversation_usage_metadata: ConversationUsageMetadata::default(),
             server_conversation_token: None,
@@ -579,6 +582,7 @@ impl AIConversation {
             task_store,
             status,
             status_error_message: None,
+            phase_changed_at: instant::Instant::now(),
             todo_lists,
             // TODO(alokedesai): Support session restoration for code review comments.
             code_review: None,
@@ -834,6 +838,35 @@ impl AIConversation {
     pub fn status_error_message(&self) -> Option<&str> {
         self.status_error_message.as_deref()
     }
+    pub fn phase_changed_at(&self) -> instant::Instant {
+        self.phase_changed_at
+    }
+
+    /// Best-effort model label for tree chips: prefer last `ModelUsed` display name,
+    /// then its model id, then the requested `exchange.model_id`.
+    pub fn latest_model_chip_label(&self) -> Option<String> {
+        for exchange in self.all_exchanges().into_iter().rev() {
+            if let Some(info) = exchange
+                .output_status
+                .output()
+                .and_then(|output| output.get().model_info.clone())
+            {
+                let from_display = info.display_name.trim();
+                if !from_display.is_empty() {
+                    return Some(from_display.to_owned());
+                }
+                let from_id = info.model_id.as_str().trim();
+                if !from_id.is_empty() {
+                    return Some(from_id.to_owned());
+                }
+            }
+            let requested = exchange.model_id.as_str().trim();
+            if !requested.is_empty() {
+                return Some(requested.to_owned());
+            }
+        }
+        None
+    }
 
     pub fn update_status(
         &mut self,
@@ -856,6 +889,9 @@ impl AIConversation {
         } else {
             None
         };
+        if self.status != status {
+            self.phase_changed_at = instant::Instant::now();
+        }
         self.status = status;
         ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationStatus {
             conversation_id: self.id,

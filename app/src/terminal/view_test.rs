@@ -930,6 +930,7 @@ fn submit_cli_agent_rich_input_restores_unlocked_input_config() {
                         plugin_version: None,
                         draft_text: None,
                         custom_command_prefix: None,
+                        phase_changed_at: instant::Instant::now(),
                     },
                     ctx,
                 );
@@ -995,6 +996,7 @@ fn unregister_cli_agent_session_restores_unlocked_input_config() {
                         plugin_version: None,
                         draft_text: None,
                         custom_command_prefix: None,
+                        phase_changed_at: instant::Instant::now(),
                     },
                     ctx,
                 );
@@ -4384,6 +4386,7 @@ fn submit_rich_input_and_collect_pty_writes(
                     plugin_version: None,
                     draft_text: None,
                     custom_command_prefix: None,
+                    phase_changed_at: instant::Instant::now(),
                 },
                 ctx,
             );
@@ -4415,6 +4418,7 @@ fn open_cli_agent_rich_input_for_agent(app: &mut App, agent: CLIAgent) -> ViewHa
                     plugin_version: None,
                     draft_text: None,
                     custom_command_prefix: None,
+                    phase_changed_at: instant::Instant::now(),
                 },
                 ctx,
             );
@@ -4617,6 +4621,7 @@ fn submit_without_auto_dismiss_keeps_rich_input_open() {
                         plugin_version: None,
                         draft_text: None,
                         custom_command_prefix: None,
+                        phase_changed_at: instant::Instant::now(),
                     },
                     ctx,
                 );
@@ -4679,6 +4684,7 @@ fn submit_with_plugin_and_auto_toggle_keeps_rich_input_open() {
                         plugin_version: Some("1.0.0".to_owned()),
                         draft_text: None,
                         custom_command_prefix: None,
+                        phase_changed_at: instant::Instant::now(),
                     },
                     ctx,
                 );
@@ -4733,6 +4739,7 @@ fn submit_with_plugin_but_auto_toggle_off_respects_auto_dismiss() {
                         plugin_version: Some("1.0.0".to_owned()),
                         draft_text: None,
                         custom_command_prefix: None,
+                        phase_changed_at: instant::Instant::now(),
                     },
                     ctx,
                 );
@@ -4787,6 +4794,7 @@ fn status_blocked_auto_closes_rich_input() {
                         plugin_version: Some("1.0.0".to_owned()),
                         draft_text: None,
                         custom_command_prefix: None,
+                        phase_changed_at: instant::Instant::now(),
                     },
                     ctx,
                 );
@@ -4862,6 +4870,7 @@ fn status_in_progress_auto_opens_rich_input_after_blocked() {
                         plugin_version: Some("1.0.0".to_owned()),
                         draft_text: None,
                         custom_command_prefix: None,
+                        phase_changed_at: instant::Instant::now(),
                     },
                     ctx,
                 );
@@ -4964,6 +4973,7 @@ fn cli_session_status_updates_active_child_conversation() {
                         plugin_version: None,
                         draft_text: None,
                         custom_command_prefix: None,
+                        phase_changed_at: instant::Instant::now(),
                     },
                     ctx,
                 );
@@ -5099,6 +5109,7 @@ fn manual_dismiss_disables_auto_toggle_for_session() {
                         plugin_version: Some("1.0.0".to_owned()),
                         draft_text: None,
                         custom_command_prefix: None,
+                        phase_changed_at: instant::Instant::now(),
                     },
                     ctx,
                 );

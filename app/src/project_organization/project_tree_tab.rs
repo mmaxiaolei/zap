@@ -10,7 +10,7 @@ use crate::project_organization::workspace_agent_activity::{
 pub(crate) struct ProjectTreeTabId(pub EntityId);
 
 /// 页签子节点左侧活动槽。
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum TabNodeActivity {
     Agent(WorkspaceAgentActivity),
     RunningDot,
@@ -249,23 +249,29 @@ fn is_env_assignment(token: &str) -> bool {
 }
 
 impl TabNodeActivity {
-    pub(crate) fn is_busy(self) -> bool {
+    /// 折叠父行绿点:仅进行中 / 阻塞 / shell 长任务,不计 Done/Idle 残留。
+    pub(crate) fn is_busy(&self) -> bool {
         match self {
-            Self::Agent(_) | Self::RunningDot => true,
+            Self::Agent(activity) => activity.counts_as_busy(),
+            Self::RunningDot => true,
             Self::Idle => false,
         }
     }
 
-    pub(crate) fn agent(self) -> Option<WorkspaceAgentActivity> {
+    pub(crate) fn agent(&self) -> Option<&WorkspaceAgentActivity> {
         match self {
             Self::Agent(activity) => Some(activity),
             Self::RunningDot | Self::Idle => None,
         }
     }
 
-    pub(crate) fn should_breathe(self) -> bool {
+    pub(crate) fn needs_status_spinner(&self) -> bool {
         self.agent()
-            .is_some_and(WorkspaceAgentActivity::should_breathe)
+            .is_some_and(WorkspaceAgentActivity::needs_status_spinner)
+    }
+
+    pub(crate) fn should_breathe(&self) -> bool {
+        self.needs_status_spinner()
     }
 }
 

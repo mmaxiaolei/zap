@@ -40,14 +40,13 @@ use super::{
     current_workspace_location, repository_add_workspace_position_id, repository_block_position_id,
     repository_drag_display_order, repository_drop_indices, repository_insert_index_for_centers,
     repository_remove_position_id, resolved_project_organization_tab_layout,
-    ring_color_contrasts_on_dark_brand, should_show_repository_hover_actions,
+    should_show_repository_hover_actions,
     should_show_workspace_hover_actions, synchronize_mouse_states, tab_count_badge_label,
     tab_name_offset, tab_status_icon_offset, tree_name_offset, tree_status_icon_offset,
-    workspace_count_pill_label, workspace_row_is_selected, workspace_row_position_id,
-    workspace_shows_branch_subtitle, ProjectTreeEvent, ProjectTreePanel, ProjectTreeState,
-    RepositoryTreeNode, TabLayout, WorkspaceTreeNode, WorkspaceVisualState,
-    TREE_TRAILING_ACTION_SPACING, WORKSPACE_ACTIVITY_SLOT_SIZE, WORKSPACE_AGENT_ICON_SIZING,
-    WORKSPACE_AGENT_RING_WIDTH,
+    tree_trailing_actions_width, workspace_count_pill_label, workspace_row_is_selected,
+    workspace_row_position_id, workspace_shows_branch_subtitle, ProjectTreeEvent,
+    ProjectTreePanel, ProjectTreeState, RepositoryTreeNode, TabLayout, WorkspaceTreeNode,
+    WorkspaceVisualState, TREE_TRAILING_ACTION_SPACING, TREE_TRAILING_META_WIDTH,
 };
 
 struct ProjectTreeTestHost {
@@ -546,6 +545,15 @@ fn repository_and_workspace_trailing_counts_share_action_spacing() {
 }
 
 #[test]
+fn tree_trailing_meta_and_actions_share_fixed_columns() {
+    // Meta column fits footnote labels like `99+` / `21m` / `now`.
+    assert_eq!(TREE_TRAILING_META_WIDTH, 32.);
+    // Two ICON_DIMENSIONS (24) slots + one spacing (8) = 56; keeps tab-count and
+    // relative time on the same right edge ahead of hover actions.
+    assert_eq!(tree_trailing_actions_width(), 24. + 8. + 24.);
+}
+
+#[test]
 fn workspace_count_pill_label_is_numeric() {
     assert_eq!(workspace_count_pill_label(0), "0");
     assert_eq!(workspace_count_pill_label(1), "1");
@@ -597,22 +605,17 @@ fn workspace_visual_state_hides_running_dot_when_agent_is_present() {
     let activity = WorkspaceAgentActivity {
         identity: WorkspaceAgentIdentity::Cli(CLIAgent::Grok),
         phase: WorkspaceAgentPhase::InProgress,
+        phase_changed_at: None,
+        model_label: None,
     };
-    let visual_state = WorkspaceVisualState::new(true, true, Some(activity));
+    let visual_state = WorkspaceVisualState::new(true, true, Some(activity.clone()));
     assert!(visual_state.should_render_selection_accent());
     assert!(!visual_state.should_render_running_indicator());
     assert_eq!(
         visual_state.activity_slot(),
         WorkspaceActivitySlot::Agent(activity)
     );
-    assert!(visual_state.should_breathe_agent_ring());
-}
-
-#[test]
-fn workspace_agent_avatar_inner_plus_ring_fits_activity_slot() {
-    let inner = WORKSPACE_AGENT_ICON_SIZING.icon_size + WORKSPACE_AGENT_ICON_SIZING.padding * 2.;
-    let ring = WORKSPACE_AGENT_RING_WIDTH * 2.;
-    assert_eq!(inner + ring, WORKSPACE_ACTIVITY_SLOT_SIZE);
+    assert!(visual_state.needs_agent_status_spinner());
 }
 
 #[test]
@@ -620,9 +623,11 @@ fn workspace_visual_state_blocked_agent_does_not_breathe() {
     let activity = WorkspaceAgentActivity {
         identity: WorkspaceAgentIdentity::Oz { ambient: false },
         phase: WorkspaceAgentPhase::Blocked,
+        phase_changed_at: None,
+        model_label: None,
     };
-    let visual_state = WorkspaceVisualState::new(false, false, Some(activity));
-    assert!(!visual_state.should_breathe_agent_ring());
+    let visual_state = WorkspaceVisualState::new(false, false, Some(activity.clone()));
+    assert!(!visual_state.needs_agent_status_spinner());
     assert_eq!(
         visual_state.activity_slot(),
         WorkspaceActivitySlot::Agent(activity)
@@ -630,17 +635,41 @@ fn workspace_visual_state_blocked_agent_does_not_breathe() {
 }
 
 #[test]
-fn dark_grok_brand_uses_fallback_ring_color() {
-    let grok = ColorU::new(0x14, 0x14, 0x14, 255);
-    let fallback = ColorU::new(255, 255, 255, 255);
-    assert_eq!(ring_color_contrasts_on_dark_brand(grok, fallback), fallback);
+fn done_residual_is_not_busy_for_parent_aggregation() {
+    let done = WorkspaceAgentActivity {
+        identity: WorkspaceAgentIdentity::Cli(CLIAgent::Grok),
+        phase: WorkspaceAgentPhase::Done,
+        phase_changed_at: None,
+        model_label: None,
+    };
+    assert!(!done.counts_as_busy());
+    let visual_state = WorkspaceVisualState::new(false, false, Some(done));
+    assert!(!visual_state.needs_agent_status_spinner());
 }
 
 #[test]
-fn bright_brand_keeps_ring_color() {
-    let bright = ColorU::new(255, 128, 0, 255);
-    let fallback = ColorU::new(255, 255, 255, 255);
-    assert_eq!(ring_color_contrasts_on_dark_brand(bright, fallback), bright);
+fn agent_activity_preserves_model_label_for_chip() {
+    let activity = WorkspaceAgentActivity {
+        identity: WorkspaceAgentIdentity::Cli(CLIAgent::Claude),
+        phase: WorkspaceAgentPhase::InProgress,
+        phase_changed_at: None,
+        model_label: Some("opus".to_owned()),
+    };
+    assert_eq!(activity.model_chip_label().as_deref(), Some("opus"));
+    assert_eq!(activity.model_chip_tooltip(), Some("opus"));
+    let visual_state = WorkspaceVisualState::new(false, false, Some(activity.clone()));
+    match visual_state.activity_slot() {
+        WorkspaceActivitySlot::Agent(slot) => {
+            assert_eq!(slot.model_chip_label().as_deref(), Some("opus"));
+        }
+        other => panic!("expected agent slot, got {other:?}"),
+    }
+    let without = WorkspaceAgentActivity {
+        model_label: None,
+        ..activity
+    };
+    assert_eq!(without.model_chip_label(), None);
+    assert_eq!(without.model_chip_tooltip(), None);
 }
 
 #[test]
@@ -966,6 +995,8 @@ fn project_tree_renders_running_grok_agent_avatar() {
                             WorkspaceAgentActivity {
                                 identity: WorkspaceAgentIdentity::Cli(CLIAgent::Grok),
                                 phase: WorkspaceAgentPhase::InProgress,
+                                phase_changed_at: None,
+                                model_label: None,
                             },
                         ),
                         is_active: true,

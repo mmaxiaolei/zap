@@ -119,6 +119,68 @@ fn truncated_quantity_with_unit(num: f64, unit: &str) -> String {
 
 /// Formats a monotonic `Instant` as a human-readable relative timestamp.
 /// (Uses `Instant` rather than wall-clock `DateTime` for elapsed-time display.)
+/// Orca-style compact relative age for agent rows: `now` / `5m` / `3h` / `2d`.
+pub fn format_short_time_ago_secs(elapsed_secs: u64) -> String {
+    if elapsed_secs < 60 {
+        return "now".to_owned();
+    }
+    let minutes = elapsed_secs / 60;
+    if minutes < 60 {
+        return format!("{minutes}m");
+    }
+    let hours = minutes / 60;
+    if hours < 24 {
+        return format!("{hours}h");
+    }
+    format!("{}d", hours / 24)
+}
+
+/// Compact relative age from a monotonic instant (see [`format_short_time_ago_secs`]).
+pub fn format_short_time_ago_since(created_at: instant::Instant) -> String {
+    format_short_time_ago_secs(created_at.elapsed().as_secs())
+}
+
+/// Seconds until [`format_short_time_ago_secs`] would produce a different label.
+///
+/// Boundaries: `now`→`1m` at 60s; then every minute; every hour after 1h; every day after 1d.
+/// Always returns at least 1 so callers never schedule a zero-delay repaint loop.
+pub fn secs_until_next_short_time_ago_change(elapsed_secs: u64) -> u64 {
+    let until = if elapsed_secs < 60 {
+        60 - elapsed_secs
+    } else if elapsed_secs < 3600 {
+        let rem = elapsed_secs % 60;
+        if rem == 0 {
+            60
+        } else {
+            60 - rem
+        }
+    } else if elapsed_secs < 86400 {
+        let rem = elapsed_secs % 3600;
+        if rem == 0 {
+            3600
+        } else {
+            3600 - rem
+        }
+    } else {
+        let rem = elapsed_secs % 86400;
+        if rem == 0 {
+            86400
+        } else {
+            86400 - rem
+        }
+    };
+    until.max(1)
+}
+
+/// Delay until the compact relative-time label for `created_at` should refresh.
+pub fn duration_until_next_short_time_ago_change(
+    created_at: instant::Instant,
+) -> std::time::Duration {
+    std::time::Duration::from_secs(secs_until_next_short_time_ago_change(
+        created_at.elapsed().as_secs(),
+    ))
+}
+
 pub fn format_elapsed_since(created_at: instant::Instant) -> String {
     let secs = created_at.elapsed().as_secs();
 

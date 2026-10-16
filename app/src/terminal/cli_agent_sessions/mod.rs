@@ -45,6 +45,8 @@ pub struct CLIAgentSessionContext {
     pub summary: Option<String>,
     pub query: Option<String>,
     pub response: Option<String>,
+    /// Model id/name from launch flags (e.g. `--model opus`) when known.
+    pub model: Option<String>,
 }
 
 /// State of the rich input editor for composing a prompt to send to a CLI agent.
@@ -141,11 +143,22 @@ pub struct CLIAgentSession {
     /// the first word of the command (the binary/alias the user typed).
     /// Used to customize plugin instructions and force manual install mode.
     pub custom_command_prefix: Option<String>,
+    /// Wall-clock-ish monotonic instant when `status` last changed (Orca relative time).
+    pub phase_changed_at: instant::Instant,
 }
 
 impl CLIAgentSession {
     pub fn is_remote(&self) -> bool {
         self.remote_host.is_some()
+    }
+
+    /// Compact model chip label when the session knows its model.
+    pub(crate) fn model_label(&self) -> Option<&str> {
+        self.session_context
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
     }
 
     /// Applies an event to this session, updating context and status.
@@ -213,6 +226,9 @@ impl CLIAgentSession {
             CLIAgentEventType::Unknown(_) => return None,
         };
 
+        if self.status != new_status {
+            self.phase_changed_at = instant::Instant::now();
+        }
         self.status = new_status.clone();
         Some(new_status)
     }
@@ -338,7 +354,10 @@ impl CLIAgentSessionsModel {
             .filter(|s| s.agent == agent)
         {
             // Upgrade existing session with plugin context.
-            session.status = CLIAgentSessionStatus::InProgress;
+            if session.status != CLIAgentSessionStatus::InProgress {
+                session.status = CLIAgentSessionStatus::InProgress;
+                session.phase_changed_at = instant::Instant::now();
+            }
             session.listener = Some(listener);
             session.plugin_version = plugin_version;
             session.remote_host = remote_host;
@@ -368,6 +387,7 @@ impl CLIAgentSessionsModel {
                 remote_host,
                 draft_text: None,
                 custom_command_prefix: None,
+                phase_changed_at: instant::Instant::now(),
             },
             ctx,
         );

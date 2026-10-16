@@ -257,6 +257,7 @@ fn apply_event_preserves_input_session() {
         plugin_version: None,
         draft_text: None,
         custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
     };
 
     let event = CLIAgentEvent {
@@ -293,6 +294,7 @@ fn stop_without_query_preserves_previous_prompt() {
         plugin_version: None,
         draft_text: None,
         custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
     };
 
     let event = CLIAgentEvent {
@@ -333,6 +335,7 @@ fn is_remote_returns_true_when_remote_host_is_set() {
         draft_text: None,
         remote_host: Some("user@devbox".to_owned()),
         custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
     };
     assert!(session.is_remote());
 }
@@ -350,8 +353,36 @@ fn is_remote_returns_false_when_remote_host_is_none() {
         plugin_version: None,
         draft_text: None,
         custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
     };
     assert!(!session.is_remote());
+}
+
+#[test]
+fn session_model_label_trims_and_hides_empty() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext {
+            model: Some("  opus  ".to_owned()),
+            ..Default::default()
+        },
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        remote_host: None,
+        plugin_version: None,
+        draft_text: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+    assert_eq!(session.model_label(), Some("opus"));
+
+    session.session_context.model = Some("   ".to_owned());
+    assert_eq!(session.model_label(), None);
+
+    session.session_context.model = None;
+    assert_eq!(session.model_label(), None);
 }
 
 #[test]
@@ -418,6 +449,7 @@ fn session_start_sets_plugin_version() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
     };
 
     let event = CLIAgentEvent {
@@ -450,6 +482,7 @@ fn session_start_without_plugin_version_leaves_none() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
     };
 
     let event = CLIAgentEvent {
@@ -464,4 +497,78 @@ fn session_start_without_plugin_version_leaves_none() {
 
     session.apply_event(&event);
     assert_eq!(session.plugin_version, None);
+}
+
+#[test]
+fn phase_changed_at_updates_when_status_changes() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+    let before = session.phase_changed_at;
+    std::thread::sleep(std::time::Duration::from_millis(5));
+
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::Stop,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Success)
+    );
+    assert_eq!(session.status, CLIAgentSessionStatus::Success);
+    assert!(session.phase_changed_at > before);
+}
+
+#[test]
+fn phase_changed_at_stays_when_status_unchanged() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+    let before = session.phase_changed_at;
+    std::thread::sleep(std::time::Duration::from_millis(5));
+
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::PromptSubmit,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload {
+            query: Some("follow up".to_owned()),
+            ..Default::default()
+        },
+    };
+
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::InProgress)
+    );
+    assert_eq!(session.phase_changed_at, before);
 }

@@ -8,15 +8,16 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::icons::Icon as WarpIcon;
-use warp_core::ui::theme::WarpTheme;
+use warp_core::ui::theme::{Fill as ThemeFill, WarpTheme};
 use warpui::{
     assets::asset_cache::AssetSource,
     elements::{
-        AcceptedByDropTarget, Border, CacheOption, ChildView, ClippedScrollStateHandle,
+        AcceptedByDropTarget, Border, CacheOption, ChildAnchor, ChildView, ClippedScrollStateHandle,
         ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DragAxis,
         Draggable, DraggableState, DropShadow, DropTarget, DropTargetData, Element, Empty, Fill,
-        Flex, Hoverable, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
-        Radius, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Text,
+        Flex, Hoverable, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentAnchor,
+        ParentElement, Radius, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
+        Shrinkable, Text,
     },
     platform::Cursor,
     text_layout::ClipConfig,
@@ -35,10 +36,11 @@ use crate::{
         },
     },
     ui_components::{
-        breathing_ring::{BreathingRing, BreathingStateHandle},
         buttons::icon_button,
-        icon_with_status::{render_icon_with_status, IconWithStatusSizing, IconWithStatusVariant},
+        icon_with_status::render_cli_agent_logo,
         icons,
+        relative_time_label::RelativeTimeLabel,
+        spinner::{BrailleSpinner, SpinnerStateHandle},
     },
     view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme},
 };
@@ -49,29 +51,31 @@ use crate::project_organization::domain::{
 use crate::project_organization::project_tree_tab::{
     workspace_parent_activity_slot, ProjectTreeTabId, ProjectTreeTabNode, TabNodeActivity,
 };
+use crate::project_organization::view::demoting_done_status_glyph::DemotingDoneStatusGlyph;
 
 const WORKSPACE_RUNNING_DOT_SIZE: f32 = 6.;
-const WORKSPACE_ACTIVITY_SLOT_SIZE: f32 = 16.;
 const WORKSPACE_TREE_RAIL_WIDTH: f32 = 2.;
 const WORKSPACE_GROUP_INDENT: f32 = 16.;
 const REPOSITORY_GROUP_SPACING: f32 = 10.;
-const WORKSPACE_AGENT_RING_WIDTH: f32 = 1.5;
 const TREE_CHEVRON_SIZE: f32 = 16.;
 const TREE_ROW_ICON_SIZE: f32 = 16.;
 const TREE_ICON_GAP: f32 = 6.;
 pub(crate) const TREE_TRAILING_ACTION_SPACING: f32 = 8.;
+/// Shared right-side meta column for workspace tab-count and agent relative time.
+/// Wide enough for `99+` / `59m` / `23h` / `now` at footnote size; text is end-aligned.
+pub(crate) const TREE_TRAILING_META_WIDTH: f32 = 32.;
+/// Workspace rows reserve two hover actions (new tab + delete). Tab rows use the same
+/// footprint (close end-aligned) so meta columns share one vertical edge.
+const TREE_TRAILING_ACTION_SLOTS: f32 = 2.;
 /// 页签图标与 workspace 分支图标对齐: 与 chevron 同宽,行内 Flex spacing 再补 gap。
 const TAB_UNDER_WORKSPACE_INDENT: f32 = TREE_CHEVRON_SIZE;
 const ITERM_PROMPT_ICON_PATH: &str = "bundled/svg/iterm-prompt.svg";
-
-const WORKSPACE_AGENT_ICON_SIZING: IconWithStatusSizing = IconWithStatusSizing {
-    icon_size: 8.,
-    padding: 2.5,
-    badge_icon_size: 8.,
-    badge_padding: 1.,
-    overall_size_override: Some(13.),
-    badge_offset: (0., 0.),
-};
+/// Orca CompactAgentRow: [状态点][品牌标]
+const TAB_AGENT_STATUS_SLOT_SIZE: f32 = 12.;
+const TAB_AGENT_BRAND_ICON_SIZE: f32 = 14.;
+const TAB_AGENT_LEADING_GAP: f32 = 4.;
+/// Orca model chip max width (preview / CompactAgentRow).
+const MODEL_CHIP_MAX_WIDTH: f32 = 72.;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TabLayout {
@@ -607,7 +611,7 @@ fn tab_name_offset() -> f32 {
     tab_status_icon_offset() + TREE_ROW_ICON_SIZE + TREE_ICON_GAP
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorkspaceVisualState {
     is_selected: bool,
     has_running_terminal: bool,
@@ -637,16 +641,17 @@ impl WorkspaceVisualState {
 
     /// 活动槽类型: agent 在场时绿点让位给头像。
     pub(crate) fn activity_slot(&self) -> WorkspaceActivitySlot {
-        workspace_activity_slot(self.agent_activity, self.has_running_terminal)
+        workspace_activity_slot(self.agent_activity.clone(), self.has_running_terminal)
     }
 
     pub(crate) fn should_render_running_indicator(&self) -> bool {
         matches!(self.activity_slot(), WorkspaceActivitySlot::RunningDot)
     }
 
-    pub(crate) fn should_breathe_agent_ring(&self) -> bool {
+    pub(crate) fn needs_agent_status_spinner(&self) -> bool {
         self.agent_activity
-            .is_some_and(WorkspaceAgentActivity::should_breathe)
+            .as_ref()
+            .is_some_and(WorkspaceAgentActivity::needs_status_spinner)
     }
 
     pub(crate) fn should_fill_idle_row(&self) -> bool {
@@ -654,59 +659,33 @@ impl WorkspaceVisualState {
     }
 }
 
-/// 品牌色过暗时换对比色, 避免深色侧栏上看不见环。
-fn ring_color_contrasts_on_dark_brand(brand: ColorU, fallback: ColorU) -> ColorU {
-    if (brand.r as u16) + (brand.g as u16) + (brand.b as u16) < 180 {
-        fallback
-    } else {
-        brand
+fn agent_status_dot_color(phase: WorkspaceAgentPhase, theme: &WarpTheme) -> ColorU {
+    match phase {
+        WorkspaceAgentPhase::Idle => ColorU::new(163, 163, 163, 102),
+        WorkspaceAgentPhase::InProgress => theme.ansi_fg_yellow(),
+        WorkspaceAgentPhase::Blocked | WorkspaceAgentPhase::Failed => theme.ansi_fg_red(),
+        WorkspaceAgentPhase::Waiting => theme.ansi_fg_yellow(),
+        WorkspaceAgentPhase::Done => theme.ansi_fg_green(),
     }
 }
 
-/// 活动槽呼吸环颜色: Blocked 为黄, InProgress CLI 用 brand, Oz 用 accent。
-fn agent_activity_ring_color(activity: WorkspaceAgentActivity, theme: &WarpTheme) -> ColorU {
-    match activity.phase {
-        WorkspaceAgentPhase::Blocked => theme.ansi_fg_yellow(),
-        WorkspaceAgentPhase::InProgress => match activity.identity {
-            WorkspaceAgentIdentity::Cli(agent) => {
-                let brand = agent
-                    .brand_color()
-                    .unwrap_or_else(|| theme.accent().into_solid_bias_right_color());
-                ring_color_contrasts_on_dark_brand(
-                    brand,
-                    theme
-                        .main_text_color(theme.background())
-                        .into_solid_bias_right_color(),
-                )
-            }
-            WorkspaceAgentIdentity::Oz { ambient: true }
-            | WorkspaceAgentIdentity::Oz { ambient: false } => {
-                theme.accent().into_solid_bias_right_color()
-            }
-        },
-    }
-}
-
-fn agent_activity_icon_variant(
-    identity: WorkspaceAgentIdentity,
-    theme: &WarpTheme,
-) -> IconWithStatusVariant {
-    match identity {
-        WorkspaceAgentIdentity::Oz { ambient } => IconWithStatusVariant::OzAgent {
-            status: None,
-            is_ambient: ambient,
-        },
-        WorkspaceAgentIdentity::Cli(agent) => match agent.brand_color() {
-            Some(_) => IconWithStatusVariant::CLIAgent {
-                agent,
-                status: None,
-            },
-            None => IconWithStatusVariant::Neutral {
-                icon: WarpIcon::Terminal,
-                icon_color: theme.sub_text_color(theme.background()),
-            },
-        },
-    }
+fn render_agent_brand_icon(identity: WorkspaceAgentIdentity, theme: &WarpTheme) -> Box<dyn Element> {
+    let sub_text = theme.sub_text_color(theme.background());
+    let icon = match identity {
+        WorkspaceAgentIdentity::Oz { ambient: true } => WarpIcon::OzCloud
+            .to_warpui_icon(theme.main_text_color(theme.background()))
+            .finish(),
+        WorkspaceAgentIdentity::Oz { ambient: false } => WarpIcon::Oz
+            .to_warpui_icon(theme.main_text_color(theme.background()))
+            .finish(),
+        WorkspaceAgentIdentity::Cli(agent) => {
+            render_cli_agent_logo(agent, theme.main_text_color(theme.background()), sub_text)
+        }
+    };
+    ConstrainedBox::new(icon)
+        .with_width(TAB_AGENT_BRAND_ICON_SIZE)
+        .with_height(TAB_AGENT_BRAND_ICON_SIZE)
+        .finish()
 }
 
 /// 固定 16×16 槽,把绿点 / 终端图标 / agent 头像都居中在和 workspace 分支图标同一列。
@@ -746,6 +725,32 @@ fn tab_count_badge_label(tab_count: usize) -> String {
     }
 }
 
+/// Width of the shared trailing action strip (two icon slots + spacing).
+pub(crate) fn tree_trailing_actions_width() -> f32 {
+    TREE_TRAILING_ACTION_SLOTS * icons::ICON_DIMENSIONS
+        + (TREE_TRAILING_ACTION_SLOTS - 1.) * TREE_TRAILING_ACTION_SPACING
+}
+
+/// Right-align `child` inside the shared meta column so tab-count and relative time share an edge.
+fn render_tree_trailing_meta(child: Box<dyn Element>) -> Box<dyn Element> {
+    ConstrainedBox::new(
+        Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(child)
+            .finish(),
+    )
+    .with_width(TREE_TRAILING_META_WIDTH)
+    .finish()
+}
+
+fn render_tree_trailing_actions(actions: Box<dyn Element>) -> Box<dyn Element> {
+    ConstrainedBox::new(actions)
+        .with_width(tree_trailing_actions_width())
+        .finish()
+}
+
 fn synchronize_mouse_states<Id, State>(mouse_states: &mut HashMap<Id, State>, ids: &HashSet<Id>)
 where
     Id: Copy + Eq + Hash,
@@ -768,7 +773,7 @@ pub struct ProjectTreePanel {
     tab_counts: HashMap<RepositoryWorkspaceId, usize>,
     tab_nodes: HashMap<RepositoryWorkspaceId, Vec<ProjectTreeTabNode>>,
     running_workspace_ids: HashSet<RepositoryWorkspaceId>,
-    tab_breathing_states: HashMap<ProjectTreeTabId, BreathingStateHandle>,
+    tab_spinner_states: HashMap<ProjectTreeTabId, SpinnerStateHandle>,
     repository_mouse_states: HashMap<RepositoryId, MouseStateHandle>,
     workspace_mouse_states: HashMap<RepositoryWorkspaceId, MouseStateHandle>,
     workspace_delete_mouse_states: HashMap<RepositoryWorkspaceId, MouseStateHandle>,
@@ -776,6 +781,8 @@ pub struct ProjectTreePanel {
     workspace_toggle_mouse_states: HashMap<RepositoryWorkspaceId, MouseStateHandle>,
     tab_mouse_states: HashMap<ProjectTreeTabId, MouseStateHandle>,
     tab_close_mouse_states: HashMap<ProjectTreeTabId, MouseStateHandle>,
+    tab_model_chip_mouse_states: HashMap<ProjectTreeTabId, MouseStateHandle>,
+    tab_status_mouse_states: HashMap<ProjectTreeTabId, MouseStateHandle>,
     repository_add_workspace_mouse_states: HashMap<RepositoryId, MouseStateHandle>,
     repository_remove_mouse_states: HashMap<RepositoryId, MouseStateHandle>,
     repository_drag_states: HashMap<RepositoryId, DraggableState>,
@@ -801,7 +808,7 @@ impl ProjectTreePanel {
             tab_counts: HashMap::new(),
             tab_nodes: HashMap::new(),
             running_workspace_ids: HashSet::new(),
-            tab_breathing_states: HashMap::new(),
+            tab_spinner_states: HashMap::new(),
             repository_mouse_states: HashMap::new(),
             workspace_mouse_states: HashMap::new(),
             workspace_delete_mouse_states: HashMap::new(),
@@ -809,6 +816,8 @@ impl ProjectTreePanel {
             workspace_toggle_mouse_states: HashMap::new(),
             tab_mouse_states: HashMap::new(),
             tab_close_mouse_states: HashMap::new(),
+            tab_model_chip_mouse_states: HashMap::new(),
+            tab_status_mouse_states: HashMap::new(),
             repository_add_workspace_mouse_states: HashMap::new(),
             repository_remove_mouse_states: HashMap::new(),
             repository_drag_states: HashMap::new(),
@@ -860,18 +869,18 @@ impl ProjectTreePanel {
         self.refresh_tree(ctx);
     }
 
-    fn sync_breathing_states(&mut self) {
-        let breathing_ids = self
+    fn sync_spinner_states(&mut self) {
+        let spinner_ids = self
             .tab_nodes
             .values()
             .flatten()
-            .filter(|tab| tab.activity.should_breathe())
+            .filter(|tab| tab.activity.needs_status_spinner())
             .map(|tab| tab.id)
             .collect::<HashSet<_>>();
-        self.tab_breathing_states
-            .retain(|id, _| breathing_ids.contains(id));
-        for id in breathing_ids {
-            self.tab_breathing_states.entry(id).or_default();
+        self.tab_spinner_states
+            .retain(|id, _| spinner_ids.contains(id));
+        for id in spinner_ids {
+            self.tab_spinner_states.entry(id).or_default();
         }
     }
 
@@ -989,11 +998,13 @@ impl ProjectTreePanel {
         synchronize_mouse_states(&mut self.workspace_toggle_mouse_states, &workspace_ids);
         synchronize_mouse_states(&mut self.tab_mouse_states, &tab_ids);
         synchronize_mouse_states(&mut self.tab_close_mouse_states, &tab_ids);
+        synchronize_mouse_states(&mut self.tab_model_chip_mouse_states, &tab_ids);
+        synchronize_mouse_states(&mut self.tab_status_mouse_states, &tab_ids);
         self.running_workspace_ids
             .retain(|workspace_id| workspace_ids.contains(workspace_id));
         self.tab_nodes
             .retain(|workspace_id, _| workspace_ids.contains(workspace_id));
-        self.sync_breathing_states();
+        self.sync_spinner_states();
         ctx.notify();
     }
 
@@ -1276,7 +1287,7 @@ impl ProjectTreePanel {
         visual_state: WorkspaceVisualState,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        match tab.activity {
+        match &tab.activity {
             TabNodeActivity::Idle => tree_status_slot(
                 ConstrainedBox::new(
                     Image::new(
@@ -1295,48 +1306,140 @@ impl ProjectTreePanel {
                 tree_status_slot(Self::render_workspace_running_dot(visual_state, appearance))
             }
             TabNodeActivity::Agent(activity) => {
-                tree_status_slot(self.render_tab_agent_avatar(tab.id, activity, appearance))
+                self.render_tab_agent_leading(tab.id, activity.clone(), appearance)
             }
         }
     }
 
-    fn render_tab_agent_avatar(
+    /// Orca 行序: [状态点] [品牌图标],状态与身份分离,无绕头像呼吸环。
+    fn render_tab_agent_leading(
         &self,
         tab_id: ProjectTreeTabId,
         activity: WorkspaceAgentActivity,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let avatar = render_icon_with_status(
-            agent_activity_icon_variant(activity.identity, theme),
-            &WORKSPACE_AGENT_ICON_SIZING,
-            theme,
-            theme.background(),
-        );
-        let ring_color = agent_activity_ring_color(activity, theme);
-        let animate = activity.should_breathe();
-        let handle = if animate {
-            self.tab_breathing_states
-                .get(&tab_id)
-                .expect("InProgress agent 必须先由 sync_breathing_states 插入呼吸环 handle")
-                .clone()
-        } else {
-            BreathingStateHandle::default()
-        };
-        // 透明度在 BreathingRing::paint 里按 elapsed 更新。
-        // repaint_after 不会重跑 View::render,不能把 alpha 写死在 Container 上。
-        let ringed_avatar = Box::new(BreathingRing::new(
-            avatar,
-            ring_color,
-            WORKSPACE_AGENT_RING_WIDTH,
-            animate,
-            handle,
-        ));
-        // 直接把 max=16 传给带边框环; 不能包 Flex, 否则主轴 max 变无限,槽宽会变成 19。
-        ConstrainedBox::new(ringed_avatar)
-            .with_width(WORKSPACE_ACTIVITY_SLOT_SIZE)
-            .with_height(WORKSPACE_ACTIVITY_SLOT_SIZE)
+        // Compute-on-read Done→Idle so glyph matches Idle after residual TTL.
+        let status = self.render_agent_status_glyph(tab_id, &activity, appearance);
+        let brand = render_agent_brand_icon(activity.identity, theme);
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(TAB_AGENT_LEADING_GAP)
+            .with_child(status)
+            .with_child(brand)
             .finish()
+    }
+
+    fn render_agent_status_glyph(
+        &self,
+        tab_id: ProjectTreeTabId,
+        activity: &WorkspaceAgentActivity,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let phase = activity.presentation_phase();
+        let color = agent_status_dot_color(phase, theme);
+        // Done with a timestamp: self-refreshing glyph flips to Idle at 24h without View::render.
+        let status_slot: Box<dyn Element> =
+            if activity.phase == WorkspaceAgentPhase::Done {
+                if let Some(since) = activity.phase_changed_at {
+                    Box::new(DemotingDoneStatusGlyph::new(
+                        since,
+                        agent_status_dot_color(WorkspaceAgentPhase::Idle, theme),
+                        theme.ansi_fg_green(),
+                        TAB_AGENT_STATUS_SLOT_SIZE,
+                    ))
+                } else {
+                    // No timestamp → keep static Done check (cannot age out).
+                    ConstrainedBox::new(
+                        Flex::row()
+                            .with_main_axis_size(MainAxisSize::Max)
+                            .with_main_axis_alignment(MainAxisAlignment::Center)
+                            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                            .with_child(
+                                ConstrainedBox::new(
+                                    WarpIcon::Check
+                                        .to_warpui_icon(ThemeFill::Solid(theme.ansi_fg_green()))
+                                        .finish(),
+                                )
+                                .with_width(11.)
+                                .with_height(11.)
+                                .finish(),
+                            )
+                            .finish(),
+                    )
+                    .with_width(TAB_AGENT_STATUS_SLOT_SIZE)
+                    .with_height(TAB_AGENT_STATUS_SLOT_SIZE)
+                    .finish()
+                }
+            } else {
+                let glyph: Box<dyn Element> = match phase {
+                    WorkspaceAgentPhase::InProgress => {
+                        let handle = self
+                            .tab_spinner_states
+                            .get(&tab_id)
+                            .expect("InProgress agent 必须先由 sync_spinner_states 插入 spinner handle")
+                            .clone();
+                        Box::new(BrailleSpinner::new(
+                            appearance.ui_font_family(),
+                            10.,
+                            color,
+                            handle,
+                        ))
+                    }
+                    WorkspaceAgentPhase::Done => ConstrainedBox::new(
+                        WarpIcon::Check
+                            .to_warpui_icon(ThemeFill::Solid(theme.ansi_fg_green()))
+                            .finish(),
+                    )
+                    .with_width(11.)
+                    .with_height(11.)
+                    .finish(),
+                    WorkspaceAgentPhase::Waiting => Text::new_inline(
+                        "?",
+                        appearance.ui_font_family(),
+                        appearance.ui_font_footnote(),
+                    )
+                    .with_color(color.into())
+                    .finish(),
+                    WorkspaceAgentPhase::Idle
+                    | WorkspaceAgentPhase::Blocked
+                    | WorkspaceAgentPhase::Failed => ConstrainedBox::new(
+                        Container::new(Empty::new().finish())
+                            .with_background(color)
+                            .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
+                            .finish(),
+                    )
+                    .with_width(6.)
+                    .with_height(6.)
+                    .finish(),
+                };
+                ConstrainedBox::new(
+                    Flex::row()
+                        .with_main_axis_size(MainAxisSize::Max)
+                        .with_main_axis_alignment(MainAxisAlignment::Center)
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_child(glyph)
+                        .finish(),
+                )
+                .with_width(TAB_AGENT_STATUS_SLOT_SIZE)
+                .with_height(TAB_AGENT_STATUS_SLOT_SIZE)
+                .finish()
+            };
+        // 行内只用图形;英文状态词走 hover tooltip(对齐 Orca AgentStateDot title)。
+        let status_mouse = self
+            .tab_status_mouse_states
+            .get(&tab_id)
+            .expect("tab status mouse state should be initialized during tree refresh")
+            .clone();
+        appearance.ui_builder().overlay_tool_tip_on_element(
+            phase.accessibility_label().to_owned(),
+            status_mouse,
+            status_slot,
+            ParentAnchor::BottomMiddle,
+            ChildAnchor::TopMiddle,
+            vec2f(0., 4.),
+        )
     }
 
     fn render_workspace_tab_count(
@@ -1352,7 +1455,7 @@ impl ProjectTreePanel {
                 .sub_text_color(theme.background())
                 .into_solid_bias_right_color()
         };
-        ConstrainedBox::new(
+        render_tree_trailing_meta(
             Text::new_inline(
                 tab_count_badge_label(tab_count),
                 appearance.ui_font_family(),
@@ -1361,8 +1464,6 @@ impl ProjectTreePanel {
             .with_color(color.into())
             .finish(),
         )
-        .with_min_width(14.)
-        .finish()
     }
 
     fn render_workspace_row(
@@ -1444,9 +1545,9 @@ impl ProjectTreePanel {
             matches!(parent_slot, WorkspaceActivitySlot::RunningDot),
             None,
         );
-        let activity_slot = self.render_workspace_activity_slot(visual_state, appearance);
+        let activity_slot = self.render_workspace_activity_slot(visual_state.clone(), appearance);
         let tab_count =
-            Self::render_workspace_tab_count(workspace.tab_count, visual_state, appearance);
+            Self::render_workspace_tab_count(workspace.tab_count, visual_state.clone(), appearance);
         let toggle_action = ProjectTreeAction::ToggleWorkspace { workspace_id };
         let chevron_icon = if workspace.expanded {
             icons::Icon::ChevronDown
@@ -1547,6 +1648,16 @@ impl ProjectTreePanel {
                 } else {
                     delete_placeholder
                 };
+                let actions = render_tree_trailing_actions(
+                    Flex::row()
+                        .with_main_axis_size(MainAxisSize::Max)
+                        .with_main_axis_alignment(MainAxisAlignment::End)
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_spacing(TREE_TRAILING_ACTION_SPACING)
+                        .with_child(new_tab)
+                        .with_child(delete)
+                        .finish(),
+                );
                 let row_content = Flex::row()
                     .with_main_axis_size(MainAxisSize::Max)
                     .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -1557,8 +1668,7 @@ impl ProjectTreePanel {
                             .with_cross_axis_alignment(CrossAxisAlignment::Center)
                             .with_spacing(TREE_TRAILING_ACTION_SPACING)
                             .with_child(tab_count)
-                            .with_child(new_tab)
-                            .with_child(delete)
+                            .with_child(actions)
                             .finish(),
                     )
                     .finish();
@@ -1602,7 +1712,7 @@ impl ProjectTreePanel {
         let visual_state = WorkspaceVisualState::new(
             tab.is_active,
             matches!(tab.activity, TabNodeActivity::RunningDot),
-            tab.activity.agent(),
+            tab.activity.agent().cloned(),
         );
         let label_color = if tab.is_active {
             selection_accent_color
@@ -1611,7 +1721,7 @@ impl ProjectTreePanel {
                 .main_text_color(theme.background())
                 .into_solid_bias_right_color()
         };
-        let activity_slot = self.render_tab_activity_slot(tab, visual_state, appearance);
+        let activity_slot = self.render_tab_activity_slot(tab, visual_state.clone(), appearance);
         let title = Text::new_inline(
             tab.title.clone(),
             appearance.ui_font_family(),
@@ -1620,6 +1730,52 @@ impl ProjectTreePanel {
         .with_clip(ClipConfig::ellipsis())
         .with_color(label_color.into())
         .finish();
+        let sub_text = theme
+            .sub_text_color(theme.background())
+            .into_solid_bias_right_color();
+        let model_chip = tab.activity.agent().and_then(|activity| {
+            let label = activity.model_chip_label()?;
+            let tooltip = activity
+                .model_chip_tooltip()
+                .unwrap_or(label.as_str())
+                .to_owned();
+            let chip = ConstrainedBox::new(
+                Text::new_inline(
+                    label,
+                    appearance.monospace_font_family(),
+                    appearance.ui_font_footnote(),
+                )
+                .with_clip(ClipConfig::ellipsis())
+                .with_color(sub_text.into())
+                .finish(),
+            )
+            .with_max_width(MODEL_CHIP_MAX_WIDTH)
+            .finish();
+            // Orca CompactAgentRow: title={model} on the truncated chip.
+            let chip_mouse = self
+                .tab_model_chip_mouse_states
+                .get(&tab.id)
+                .expect("tab model chip mouse state should be initialized during tree refresh")
+                .clone();
+            Some(appearance.ui_builder().overlay_tool_tip_on_element(
+                tooltip,
+                chip_mouse,
+                chip,
+                ParentAnchor::BottomMiddle,
+                ChildAnchor::TopMiddle,
+                vec2f(0., 4.),
+            ))
+        });
+        let relative_time = tab.activity.agent().and_then(|activity| {
+            activity.phase_changed_at.map(|since| {
+                render_tree_trailing_meta(Box::new(RelativeTimeLabel::new(
+                    since,
+                    appearance.ui_font_family(),
+                    appearance.ui_font_footnote(),
+                    sub_text,
+                )))
+            })
+        });
         let labeled_content = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(TREE_ICON_GAP)
@@ -1678,12 +1834,32 @@ impl ProjectTreePanel {
                 } else {
                     close_placeholder
                 };
+                // Match workspace trailing: [model?][meta][2-slot actions] so
+                // relative time and tab-count share one right-edge column.
+                let actions = render_tree_trailing_actions(
+                    Flex::row()
+                        .with_main_axis_size(MainAxisSize::Max)
+                        .with_main_axis_alignment(MainAxisAlignment::End)
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_child(close)
+                        .finish(),
+                );
+                let mut trailing = Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(TREE_TRAILING_ACTION_SPACING);
+                if let Some(model_chip) = model_chip {
+                    trailing = trailing.with_child(model_chip);
+                }
+                if let Some(relative_time) = relative_time {
+                    trailing = trailing.with_child(relative_time);
+                }
+                trailing = trailing.with_child(actions);
                 let row_content = Flex::row()
                     .with_main_axis_size(MainAxisSize::Max)
                     .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_child(Shrinkable::new(1.0, labeled_content).finish())
-                    .with_child(close)
+                    .with_child(trailing.finish())
                     .finish();
                 let mut row_container = Container::new(row_content)
                     .with_horizontal_padding(8.)
