@@ -11432,9 +11432,10 @@ impl TerminalView {
                 .is_some_and(|s| s.listener.is_some() && s.should_auto_toggle_input);
             if should_auto_toggle_input {
                 match status {
-                    CLIAgentSessionStatus::Blocked { .. } => {
-                        // Auto-close rich input when the agent is blocked
-                        // (it requires direct keyboard interaction in the terminal).
+                    CLIAgentSessionStatus::Waiting { .. }
+                    | CLIAgentSessionStatus::Blocked { .. } => {
+                        // Auto-close rich input when the agent needs the user
+                        // (permission/question require direct keyboard in the terminal).
                         self.close_cli_agent_rich_input(
                             CLIAgentRichInputCloseReason::AutoToggle,
                             ctx,
@@ -11464,13 +11465,13 @@ impl TerminalView {
             .or(session_context.summary.as_deref().filter(|s| !s.is_empty()))
             .unwrap_or(agent.command_prefix())
             .to_owned();
-        let description = if let CLIAgentSessionStatus::Blocked { message } = status {
-            message.clone().unwrap_or_default()
+        let description = if let Some(message) = status.attention_message() {
+            message.to_owned()
         } else {
             session_context.response.clone().unwrap_or_default()
         };
 
-        let trigger = if matches!(status, CLIAgentSessionStatus::Blocked { .. }) {
+        let trigger = if status.needs_user_attention() {
             NotificationsTrigger::NeedsAttention
         } else {
             NotificationsTrigger::AgentTaskCompleted(true)

@@ -286,6 +286,9 @@ pub(crate) fn activities_from_terminal_sources(
 fn phase_from_cli_status(status: &CLIAgentSessionStatus) -> Option<WorkspaceAgentPhase> {
     match status {
         CLIAgentSessionStatus::InProgress => Some(WorkspaceAgentPhase::InProgress),
+        // Permission / question → yellow `?` (Orca waiting/permission).
+        CLIAgentSessionStatus::Waiting { .. } => Some(WorkspaceAgentPhase::Waiting),
+        // True stuck → red Blocked.
         CLIAgentSessionStatus::Blocked { .. } => Some(WorkspaceAgentPhase::Blocked),
         // Done 残留:成功后仍保留品牌图标 + 完成勾。
         CLIAgentSessionStatus::Success => Some(WorkspaceAgentPhase::Done),
@@ -295,7 +298,8 @@ fn phase_from_cli_status(status: &CLIAgentSessionStatus) -> Option<WorkspaceAgen
 fn phase_from_conversation_status(status: &ConversationStatus) -> Option<WorkspaceAgentPhase> {
     match status {
         ConversationStatus::InProgress => Some(WorkspaceAgentPhase::InProgress),
-        ConversationStatus::Blocked { .. } => Some(WorkspaceAgentPhase::Blocked),
+        // Oz "blocked by the user" is a permission/confirm gate → Waiting `?`, not red.
+        ConversationStatus::Blocked { .. } => Some(WorkspaceAgentPhase::Waiting),
         ConversationStatus::Success => Some(WorkspaceAgentPhase::Done),
         ConversationStatus::Error => Some(WorkspaceAgentPhase::Failed),
         // 取消后仍保留身份,降为 Idle(灰点),不把 Cancelled 拼进标题。

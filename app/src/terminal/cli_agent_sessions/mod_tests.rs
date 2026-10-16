@@ -572,3 +572,111 @@ fn phase_changed_at_stays_when_status_unchanged() {
     );
     assert_eq!(session.phase_changed_at, before);
 }
+
+#[test]
+fn permission_request_maps_to_waiting() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::PermissionRequest,
+        session_id: Some("abc".to_owned()),
+        cwd: Some("/tmp".to_owned()),
+        project: Some("tmp".to_owned()),
+        payload: CLIAgentEventPayload {
+            summary: Some("Wants to run Bash".to_owned()),
+            tool_name: Some("Bash".to_owned()),
+            ..Default::default()
+        },
+    };
+
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Waiting {
+            message: Some("Wants to run Bash".to_owned()),
+        })
+    );
+    assert!(session.status.needs_user_attention());
+    assert_eq!(session.status.attention_message(), Some("Wants to run Bash"));
+}
+
+#[test]
+fn question_asked_maps_to_waiting() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Grok,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Grok,
+        event: CLIAgentEventType::QuestionAsked,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Waiting {
+            message: Some("Waiting for your answer".to_owned()),
+        })
+    );
+}
+
+#[test]
+fn permission_replied_clears_waiting() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::Waiting {
+            message: Some("approve?".to_owned()),
+        },
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::PermissionReplied,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::InProgress)
+    );
+}

@@ -18,16 +18,37 @@ use event::{CLIAgentEvent, CLIAgentEventType};
 pub enum CLIAgentSessionStatus {
     InProgress,
     Success,
+    /// Permission / question: agent paused for user input (tree: Waiting `?`).
+    Waiting { message: Option<String> },
+    /// True stuck / non-interactive block (tree: Blocked red dot). Rare for CLI today.
     Blocked { message: Option<String> },
 }
 
 impl CLIAgentSessionStatus {
+    /// Permission, question, or true block — agent needs the user before continuing.
+    pub fn needs_user_attention(&self) -> bool {
+        matches!(
+            self,
+            Self::Waiting { .. } | Self::Blocked { .. }
+        )
+    }
+
+    /// Message carried by Waiting/Blocked, if any.
+    pub fn attention_message(&self) -> Option<&str> {
+        match self {
+            Self::Waiting { message } | Self::Blocked { message } => message.as_deref(),
+            _ => None,
+        }
+    }
+
     pub fn to_conversation_status(&self) -> crate::ai::agent::conversation::ConversationStatus {
         use crate::ai::agent::conversation::ConversationStatus;
         match self {
             CLIAgentSessionStatus::InProgress => ConversationStatus::InProgress,
             CLIAgentSessionStatus::Success => ConversationStatus::Success,
-            CLIAgentSessionStatus::Blocked { message } => ConversationStatus::Blocked {
+            // Oz ConversationStatus has no Waiting; both map to Blocked (user-gated).
+            CLIAgentSessionStatus::Waiting { message }
+            | CLIAgentSessionStatus::Blocked { message } => ConversationStatus::Blocked {
                 blocked_action: message.clone().unwrap_or_default(),
             },
         }
@@ -85,7 +106,7 @@ pub enum CLIAgentInputEntrypoint {
     CtrlG,
     /// User clicked the rich input button in the CLI agent footer.
     FooterButton,
-    /// Automatically opened when the CLI agent resumed work (left a blocked state)
+    /// Automatically opened when the CLI agent resumed work (left Waiting/Blocked)
     /// and the auto-show setting is enabled.
     AutoShow,
     /// Rich input was opened to mirror a shared-session participant's state.
@@ -181,7 +202,7 @@ impl CLIAgentSession {
                 CLIAgentSessionStatus::InProgress
             }
             CLIAgentEventType::ToolComplete => {
-                if !matches!(self.status, CLIAgentSessionStatus::Blocked { .. }) {
+                if !self.status.needs_user_attention() {
                     return None;
                 }
                 CLIAgentSessionStatus::InProgress
@@ -199,11 +220,12 @@ impl CLIAgentSession {
                 self.session_context.summary = event.payload.summary.clone();
                 self.session_context.tool_name = event.payload.tool_name.clone();
                 self.session_context.tool_input_preview = event.payload.tool_input_preview.clone();
-                CLIAgentSessionStatus::Blocked {
+                // Permission prompts are Waiting (?), not Blocked (red).
+                CLIAgentSessionStatus::Waiting {
                     message: event.payload.summary.clone(),
                 }
             }
-            CLIAgentEventType::QuestionAsked => CLIAgentSessionStatus::Blocked {
+            CLIAgentEventType::QuestionAsked => CLIAgentSessionStatus::Waiting {
                 message: event
                     .payload
                     .summary
@@ -211,7 +233,7 @@ impl CLIAgentSession {
                     .or_else(|| Some("Waiting for your answer".to_owned())),
             },
             CLIAgentEventType::PermissionReplied => {
-                if !matches!(self.status, CLIAgentSessionStatus::Blocked { .. }) {
+                if !self.status.needs_user_attention() {
                     return None;
                 }
                 CLIAgentSessionStatus::InProgress

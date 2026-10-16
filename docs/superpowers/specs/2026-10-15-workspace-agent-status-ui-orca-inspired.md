@@ -237,3 +237,25 @@ Done 残留超过 **24h**（`DONE_RESIDUAL_TTL`）后降级为 Idle：灰点 + �
 |----|------|
 | 终端图标 | `app/assets/bundled/svg/iterm-prompt.svg` 改为深色圆角窗口 + 绿色 `>` + 光标块（仍走 `ITERM_PROMPT_ICON_PATH`；agent 品牌标不动） |
 | 右侧 meta | `TREE_TRAILING_META_WIDTH`（32）右对齐页签数 / `now`·`Nm`；两侧共用 `tree_trailing_actions_width()` 两槽动作条（workspace：+ / ×；tab：关闭靠右），使 meta 右缘对齐 |
+
+## 18. Waiting vs Blocked 分流（2026-10-16）
+
+对齐 Orca：`permission` / `waiting` → 黄 `?`；真卡住 / 失败 → 红点。Zap 树相位：
+
+| 来源事件 / 状态 | `WorkspaceAgentPhase` | 字形 |
+|-----------------|----------------------|------|
+| CLI `PermissionRequest` | **Waiting** | `?` 黄 |
+| CLI `QuestionAsked` | **Waiting** | `?` 黄 |
+| CLI `CLIAgentSessionStatus::Waiting` | Waiting | `?` |
+| CLI `CLIAgentSessionStatus::Blocked`（真卡住，少见） | **Blocked** | 红点 |
+| Oz `ConversationStatus::Blocked`（用户闸门：权限/确认） | **Waiting** | `?` |
+| Oz `ConversationStatus::Error` | Failed | 红点 |
+
+实现要点：
+
+- `CLIAgentSessionStatus` 新增 `Waiting { message }`；权限/提问不再写入 `Blocked`。
+- `needs_user_attention()` / `attention_message()` 覆盖 Waiting+Blocked（通知、rich-input 自动关、桌面 NeedsAttention）。
+- `phase_from_cli_status` / `phase_from_conversation_status` 分流；a11y：Waiting=`Waiting for input`，Blocked=`Blocked`。
+- 折叠绿点：Waiting 仍 `counts_as_busy`（与 InProgress/Blocked 同）。
+
+未做：CLI 路径尚无产出「真 Blocked」的事件（红点留给未来/显式 stuck）；Failed 24h 降级另开。

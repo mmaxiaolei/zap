@@ -119,7 +119,7 @@ fn done_residual_is_not_busy() {
 }
 
 #[test]
-fn oz_blocked_is_collected() {
+fn oz_user_gated_blocked_maps_to_waiting() {
     let activities = activities_from_terminal_sources(
         None,
         Some(OzConversationSource {
@@ -138,10 +138,70 @@ fn oz_blocked_is_collected() {
         activities,
         vec![WorkspaceAgentActivity {
             identity: WorkspaceAgentIdentity::Oz { ambient: false },
+            phase: WorkspaceAgentPhase::Waiting,
+            phase_changed_at: None,
+            model_label: None,
+        }]
+    );
+}
+
+#[test]
+fn cli_waiting_maps_to_waiting_phase() {
+    let activities = activities_from_terminal_sources(
+        Some((
+            CLIAgent::Claude,
+            CLIAgentSessionStatus::Waiting {
+                message: Some("Approve Bash?".to_owned()),
+            },
+            None,
+            None,
+        )),
+        None,
+        false,
+    );
+    assert_eq!(
+        activities,
+        vec![WorkspaceAgentActivity {
+            identity: WorkspaceAgentIdentity::Cli(CLIAgent::Claude),
+            phase: WorkspaceAgentPhase::Waiting,
+            phase_changed_at: None,
+            model_label: None,
+        }]
+    );
+    assert!(activities[0].counts_as_busy());
+    assert!(!activities[0].needs_status_spinner());
+    assert_eq!(
+        activities[0].presentation_phase().accessibility_label(),
+        "Waiting for input"
+    );
+}
+
+#[test]
+fn cli_true_blocked_maps_to_blocked_phase() {
+    let activities = activities_from_terminal_sources(
+        Some((
+            CLIAgent::Claude,
+            CLIAgentSessionStatus::Blocked {
+                message: Some("stuck".to_owned()),
+            },
+            None,
+            None,
+        )),
+        None,
+        false,
+    );
+    assert_eq!(
+        activities,
+        vec![WorkspaceAgentActivity {
+            identity: WorkspaceAgentIdentity::Cli(CLIAgent::Claude),
             phase: WorkspaceAgentPhase::Blocked,
             phase_changed_at: None,
             model_label: None,
         }]
+    );
+    assert_eq!(
+        activities[0].presentation_phase().accessibility_label(),
+        "Blocked"
     );
 }
 

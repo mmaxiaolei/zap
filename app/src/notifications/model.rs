@@ -159,7 +159,8 @@ impl NotificationsModel {
                         ctx,
                     );
                 }
-                CLIAgentSessionStatus::Blocked { message } => {
+                CLIAgentSessionStatus::Waiting { message }
+                | CLIAgentSessionStatus::Blocked { message } => {
                     let title = session_context
                         .display_title()
                         .unwrap_or_else(|| format!("{} needs attention", agent.display_name()));
