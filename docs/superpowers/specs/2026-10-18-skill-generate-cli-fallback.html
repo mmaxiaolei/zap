@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Zap · Skill 生成 · CLI 复制兜底</title>
+<style>
+  :root {
+    --bg:#0c0c0d; --panel:#141416; --elev:#1a1a1d; --line:rgba(255,255,255,.07);
+    --text:#f2f2f4; --muted:#8e8e98; --faint:#5c5c66;
+    --accent:#7aa2ff; --accent-strong:#5b8cff; --accent-soft:rgba(122,162,255,.14);
+    --ok:#3ecf8e; --ok-soft:rgba(62,207,142,.12);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:28px 32px 56px;font-family:system-ui,-apple-system,"PingFang SC",sans-serif;
+    background:radial-gradient(900px 500px at 10% -10%,#1a2233,var(--bg) 55%);color:var(--text);line-height:1.45}
+  h1{font-size:17px;margin:0 0 6px}
+  .lead{color:var(--muted);font-size:13px;max-width:720px;margin:0 0 22px}
+  .row{display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start}
+  .shell{width:380px;min-height:560px;background:linear-gradient(180deg,#17171a,#121214);
+    border:1px solid var(--line);border-radius:16px;overflow:hidden;
+    box-shadow:0 24px 80px rgba(0,0,0,.45);display:flex;flex-direction:column}
+  .top{display:flex;align-items:center;gap:10px;padding:14px 16px 10px}
+  .icon{width:28px;height:28px;display:grid;place-items:center;color:var(--muted);font-size:16px}
+  .title{font-size:13px;font-weight:600;flex:1}
+  .progress{height:2px;margin:0 16px 4px;background:rgba(255,255,255,.06);border-radius:99px}
+  .progress>i{display:block;height:100%;width:100%;background:linear-gradient(90deg,var(--accent),#a8c4ff);border-radius:99px}
+  .meta{padding:0 16px 12px;font-size:11px;color:var(--faint);display:flex;justify-content:space-between}
+  .body{padding:8px 16px 0;flex:1;display:flex;flex-direction:column;gap:12px}
+  .h{font-size:18px;font-weight:600;letter-spacing:-.02em;line-height:1.3}
+  .sub{font-size:12.5px;color:var(--muted);margin-top:-4px}
+  .banner{font-size:12px;color:#c9d4ff;background:var(--accent-soft);border-radius:10px;padding:10px 12px}
+  .prompt{
+    background:var(--elev);border:1px solid var(--line);border-radius:12px;padding:12px;
+    font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#c8c8d0;
+    max-height:180px;overflow:auto;white-space:pre-wrap;line-height:1.5
+  }
+  .steps{font-size:12px;color:var(--muted);padding:0;margin:0 0 0 18px}
+  .steps li{margin:4px 0}
+  .foot{padding:14px 16px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:center;background:rgba(0,0,0,.15)}
+  .ghost{border:none;background:transparent;color:var(--muted);font-size:12.5px;padding:8px 4px}
+  .spacer{flex:1}
+  .cta{border:none;border-radius:10px;padding:10px 14px;font-size:13px;font-weight:600}
+  .cta.primary{background:linear-gradient(180deg,#8eb0ff,var(--accent-strong));color:#0a1020;
+    box-shadow:0 6px 20px rgba(91,140,255,.35)}
+  .cta.secondary{background:rgba(255,255,255,.06);color:var(--text)}
+  .copied{font-size:11.5px;color:var(--ok);background:var(--ok-soft);border-radius:8px;padding:8px 10px}
+  .cap{max-width:300px;font-size:13px;color:var(--muted);padding-top:6px}
+  .cap strong{display:block;color:var(--text);margin-bottom:8px;font-size:14px}
+  .pill{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+    color:var(--accent);background:var(--accent-soft);padding:3px 8px;border-radius:999px;margin-bottom:10px}
+  .cap li{margin:6px 0}
+</style>
+</head>
+<body>
+  <h1>Skill 生成 · 无 BYOP 时的 CLI 兜底</h1>
+  <p class="lead">启动「AI 草拟」若没有可用模型，不再报错卡住；改成复制完整 Prompt，用户贴到 Claude Code / Codex / 自己的 agent CLI 一键生成，写完再回向导打开 SKILL.md。</p>
+  <div class="row">
+    <div class="shell">
+      <div class="top"><div class="icon">←</div><div class="title">生成 Skill</div></div>
+      <div class="progress"><i></i></div>
+      <div class="meta"><span>第 5 步 · 共 5 步</span><span>CLI 兜底</span></div>
+      <div class="body">
+        <div class="h">用你自己的 Agent CLI 草拟</div>
+        <div class="sub">当前未配置 BYOP，Zap 内无法直接唤起 create-skill。</div>
+        <div class="banner">已准备好完整 Prompt（含目标、落点路径与 create-skill 说明）。复制后粘贴到终端里的 agent 即可。</div>
+        <div class="prompt">请按 create-skill 为我起草一个新 skill。
+· 目标：用中文总结 PR 变更并标出风险
+· 类型提示：workflow
+· description 要点：当用户提到 PR / 审查变更时
+· 建议 name：summarize-pr-zh
+· 写入：/Users/…/repo/.agents/skills/summarize-pr-zh/SKILL.md
+· 允许覆盖：否
+· 语言：中文
+· 先产出可运行的单文件 SKILL.md</div>
+        <ol class="steps">
+          <li>点「复制 Prompt」</li>
+          <li>在 Claude Code / Codex / 其它 agent CLI 里粘贴并运行</li>
+          <li>生成完成后回这里点「打开 SKILL.md」</li>
+        </ol>
+        <div class="copied">✓ 已复制到剪贴板</div>
+      </div>
+      <div class="foot">
+        <button class="ghost">返回上一步</button>
+        <div class="spacer"></div>
+        <button class="cta secondary">打开 SKILL.md</button>
+        <button class="cta primary">复制 Prompt</button>
+      </div>
+    </div>
+    <div class="cap">
+      <span class="pill">交互要点</span>
+      <strong>主按钮永远是「复制 Prompt」</strong>
+      <ul>
+        <li>Launch 步：有 BYOP →「启动 AI」；无 BYOP → 直接进本页（或 Launch 上主按钮改成「复制给 CLI」）</li>
+        <li>Prompt 与发给 create-skill 的 <code>user_query</code> 同一份</li>
+        <li>复制成功给轻反馈，不打断</li>
+        <li>「打开 SKILL.md」走现有 Review 路径（路径存在才有用）</li>
+        <li>可选次要：「去配置 BYOP」链到设置</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>

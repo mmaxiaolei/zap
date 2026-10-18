@@ -4828,6 +4828,15 @@ impl Workspace {
     }
 
     fn sync_project_tree(&mut self, ctx: &mut ViewContext<Self>) {
+        let repo_root = self.active_repository_workspace_id().and_then(|workspace_id| {
+            crate::project_organization::model::ProjectOrganizationModel::as_ref(ctx)
+                .workspace(workspace_id)
+                .map(|workspace| workspace.worktree_path.clone())
+        });
+        self.left_panel_view.update(ctx, |left_panel, ctx| {
+            left_panel.set_skill_generate_repo_root(repo_root, ctx);
+        });
+
         if !FeatureFlag::RepositoryWorkspaces.is_enabled() {
             return;
         }
@@ -20923,6 +20932,48 @@ impl TypedActionView for Workspace {
                             // The modify-settings skill should always be available for
                             // production builds.
                             if let Some(skill) = modify_settings_skill {
+                                terminal_view.ai_controller().update(
+                                    terminal_view_ctx,
+                                    |controller, ctx| {
+                                        controller.send_slash_command_request(
+                                            SlashCommandRequest::InvokeSkill {
+                                                skill,
+                                                user_query: Some(query),
+                                            },
+                                            ctx,
+                                        );
+                                    },
+                                );
+                            } else if let Some(conversation_id) =
+                                terminal_view.active_conversation_id(terminal_view_ctx)
+                            {
+                                terminal_view.ai_controller().update(
+                                    terminal_view_ctx,
+                                    |controller, ctx| {
+                                        controller.send_user_query_in_conversation(
+                                            query,
+                                            conversation_id,
+                                            None,
+                                            ctx,
+                                        );
+                                    },
+                                );
+                            }
+                        });
+                    }
+                });
+            }
+            CreateSkillWithOz { user_query } => {
+                use crate::ai::skills::SkillManager;
+                let create_skill = SkillManager::as_ref(ctx)
+                    .active_bundled_skill("create-skill", ctx)
+                    .cloned();
+                let query = user_query.clone();
+                self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                    pane_group.add_terminal_pane_in_agent_mode(None, None, ctx);
+                    if let Some(terminal_view) = pane_group.focused_session_view(ctx) {
+                        terminal_view.update(ctx, |terminal_view, terminal_view_ctx| {
+                            if let Some(skill) = create_skill {
                                 terminal_view.ai_controller().update(
                                     terminal_view_ctx,
                                     |controller, ctx| {

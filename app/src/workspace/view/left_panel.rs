@@ -778,6 +778,16 @@ impl LeftPanelView {
         });
     }
 
+    pub fn set_skill_generate_repo_root(
+        &mut self,
+        repo_root: Option<std::path::PathBuf>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.skill_manager_view.update(ctx, |panel, ctx| {
+            panel.set_generate_repo_root(repo_root, ctx);
+        });
+    }
+
     pub fn reveal_project_tree_workspace(
         &mut self,
         workspace_id: RepositoryWorkspaceId,

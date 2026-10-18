@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Zap · Skill 生成向导（create-skill AI）— UI 预览</title>
+<style>
+  :root {
+    --bg: #0f0f10;
+    --panel: #161618;
+    --sidebar: #1a1a1c;
+    --row: #1e1e22;
+    --row-active: #2a2a2e;
+    --row-hover: #222226;
+    --border: #2e2e32;
+    --border-soft: #26262a;
+    --text: #e8e8ea;
+    --muted: #8b8b93;
+    --dim: #6a6a72;
+    --accent: #6ea8fe;
+    --accent-dim: rgba(110,168,254,.15);
+    --green: #3dd68c;
+    --emerald: #10b981;
+    --yellow: #e6b84d;
+    --yellow-dim: rgba(230,184,77,.12);
+    --red: #ef4444;
+    --chip: #2c2c30;
+    --input: #121214;
+    --focus: #4d8dff;
+    --pip-agents: #6ea8fe;
+    --pip-zap: #3dd68c;
+    --pip-claude: #D97757;
+    --spin: #e6b84d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 28px 32px 56px;
+    line-height: 1.45;
+  }
+  h1 { font-size: 16px; font-weight: 600; margin: 0 0 6px; }
+  .intro { color: var(--muted); font-size: 13px; margin: 0 0 22px; max-width: 960px; }
+  .intro code {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 11.5px; color: #c8c8d0; background: var(--chip);
+    padding: 1px 5px; border-radius: 4px;
+  }
+  .scene-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
+  .scene-tab {
+    border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+    font-size: 12px; padding: 6px 12px; border-radius: 8px; cursor: pointer;
+  }
+  .scene-tab:hover { color: var(--text); background: var(--row-hover); }
+  .scene-tab.active {
+    color: var(--text); border-color: #3d5a80; background: var(--accent-dim);
+  }
+  .scene { display: none; }
+  .scene.active { display: block; }
+
+  .frame {
+    display: grid; grid-template-columns: 200px 1fr;
+    max-width: 1000px; min-height: 540px;
+    background: var(--sidebar); border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden;
+    box-shadow: 0 12px 40px rgba(0,0,0,.4);
+  }
+  .frame.split { grid-template-columns: 200px 1fr 1.05fr; max-width: 1100px; }
+  .nav {
+    border-right: 1px solid var(--border); background: #151517;
+    padding: 14px 10px; font-size: 12.5px;
+  }
+  .nav-title {
+    font-size: 11px; color: var(--dim); text-transform: uppercase;
+    letter-spacing: .04em; padding: 4px 8px 10px;
+  }
+  .nav-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-radius: 7px; color: var(--muted); margin-bottom: 2px;
+  }
+  .nav-item.active { background: var(--row-active); color: var(--text); }
+  .nav-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); }
+  .nav-item.active .nav-dot { background: var(--accent); }
+
+  .main { display: flex; flex-direction: column; background: var(--panel); min-width: 0; }
+  .topbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+  }
+  .topbar h2 { margin: 0; font-size: 14px; font-weight: 600; }
+  .topbar .search {
+    flex: 1; display: flex; align-items: center; gap: 6px;
+    background: var(--input); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 10px; color: var(--dim); font-size: 12.5px;
+  }
+  .topbar .search input {
+    flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12.5px;
+  }
+  .btn {
+    border: 1px solid var(--border); background: var(--row); color: var(--text);
+    font-size: 12.5px; padding: 7px 12px; border-radius: 8px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn:hover { background: var(--row-hover); }
+  .btn.primary { background: #3d6fd4; border-color: #4d7fe0; color: #fff; }
+  .btn.primary:hover { background: #4a7ae0; }
+  .btn.ghost { background: transparent; color: var(--muted); }
+  .btn.ghost:hover { color: var(--text); background: var(--row-hover); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .plus { font-weight: 700; }
+
+  .filters { display: flex; gap: 6px; padding: 10px 16px; flex-wrap: wrap; }
+  .chip {
+    font-size: 11.5px; padding: 4px 10px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--muted); background: transparent;
+  }
+  .chip.on { background: var(--accent-dim); border-color: #3d5a80; color: var(--text); }
+  .list { padding: 0 10px 16px; }
+  .skill-row {
+    display: flex; gap: 10px; align-items: flex-start;
+    padding: 10px 8px; border-radius: 8px;
+  }
+  .skill-row:hover { background: var(--row-hover); }
+  .pip { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+  .skill-name { font-size: 13px; font-weight: 550; }
+  .skill-name .prov {
+    font-size: 10.5px; font-weight: 500; color: var(--dim);
+    border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; margin-left: 6px;
+  }
+  .skill-desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .skill-path {
+    font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--dim); margin-top: 3px;
+  }
+  .empty { text-align: center; color: var(--muted); font-size: 12.5px; }
+  .empty h3 { margin: 0 0 6px; color: var(--text); font-weight: 600; }
+  .empty p { margin: 0 0 12px; }
+
+  .wiz-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+  }
+  .wiz-head h2 { margin: 0; font-size: 14px; font-weight: 600; flex: 1; }
+  .steps { display: flex; gap: 4px; padding: 14px 16px 0; flex-wrap: wrap; }
+  .step-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11.5px; color: var(--dim);
+    padding: 4px 10px; border-radius: 999px; border: 1px solid transparent;
+  }
+  .step-pill .n {
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--chip); color: var(--muted);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 600;
+  }
+  .step-pill.done .n { background: rgba(61,214,140,.2); color: var(--green); }
+  .step-pill.current { color: var(--text); border-color: #3d5a80; background: var(--accent-dim); }
+  .step-pill.current .n { background: var(--accent); color: #0f0f10; }
+  .step-pill.ai.current { border-color: rgba(230,184,77,.45); background: var(--yellow-dim); }
+  .step-pill.ai.current .n { background: var(--spin); color: #1a1408; }
+
+  .wiz-body { padding: 18px 20px 8px; flex: 1; overflow: auto; }
+  .wiz-foot {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 16px; border-top: 1px solid var(--border); background: #141416;
+  }
+  .wiz-foot .spacer { flex: 1; }
+  .hint { font-size: 11.5px; color: var(--dim); }
+
+  .field { margin-bottom: 16px; }
+  .field label { display: block; font-size: 12px; font-weight: 550; margin-bottom: 6px; }
+  .field .help { font-size: 11.5px; color: var(--muted); margin: -2px 0 8px; }
+  .field input[type="text"], .field textarea {
+    width: 100%; background: var(--input); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); font-size: 13px; padding: 9px 11px;
+    outline: none; font-family: inherit;
+  }
+  .field textarea { min-height: 88px; resize: vertical; line-height: 1.5; }
+  .field input:focus, .field textarea:focus {
+    border-color: var(--focus); box-shadow: 0 0 0 3px rgba(77,141,255,.15);
+  }
+
+  .intent-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .intent-card {
+    border: 1px solid var(--border); background: var(--row); border-radius: 9px;
+    padding: 12px 13px; cursor: pointer; text-align: left; color: inherit;
+  }
+  .intent-card:hover { background: var(--row-hover); }
+  .intent-card.selected { border-color: #3d5a80; background: var(--accent-dim); }
+  .intent-card .t { font-size: 13px; font-weight: 550; margin-bottom: 4px; }
+  .intent-card .d { font-size: 11.5px; color: var(--muted); }
+
+  .scope-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .scope-card {
+    border: 1px solid var(--border); background: var(--row); border-radius: 10px;
+    padding: 14px; cursor: pointer; position: relative; text-align: left; color: inherit; width: 100%;
+  }
+  .scope-card:hover { background: var(--row-hover); }
+  .scope-card.selected { border-color: #3d5a80; background: var(--accent-dim); }
+  .scope-card .radio {
+    position: absolute; top: 12px; right: 12px; width: 14px; height: 14px;
+    border-radius: 50%; border: 1.5px solid var(--dim);
+  }
+  .scope-card.selected .radio {
+    border-color: var(--accent); box-shadow: inset 0 0 0 3px var(--accent);
+  }
+  .scope-card .t { font-size: 13.5px; font-weight: 600; }
+  .scope-card .d { font-size: 12px; color: var(--muted); margin: 8px 0 6px; }
+  .scope-card .path {
+    font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--dim);
+    background: var(--input); padding: 5px 8px; border-radius: 5px; word-break: break-all;
+  }
+
+  .alert {
+    display: flex; gap: 10px; align-items: flex-start;
+    padding: 10px 12px; border-radius: 8px; font-size: 12.5px; margin-top: 10px;
+  }
+  .alert.warn { background: var(--yellow-dim); border: 1px solid rgba(230,184,77,.35); color: #f0d78a; }
+  .alert.info { background: var(--accent-dim); border: 1px solid rgba(110,168,254,.3); color: #b8d4ff; }
+  .alert.ok { background: rgba(61,214,140,.1); border: 1px solid rgba(61,214,140,.3); color: #9eecc0; }
+  .alert .ico { flex-shrink: 0; }
+  .alert strong { color: var(--text); }
+  .alert .win { margin-top: 6px; font-size: 11.5px; color: var(--muted); }
+  .alert .win code, .mono {
+    font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #c8c8d0;
+  }
+  .slug-preview {
+    font-size: 11.5px; color: var(--dim); margin-top: 6px;
+    font-family: ui-monospace, Menlo, monospace;
+  }
+
+  .agent-pane {
+    background: #0c0c0e; border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; min-width: 0;
+  }
+  .agent-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px; border-bottom: 1px solid var(--border-soft);
+    background: #121214; font-size: 12px;
+  }
+  .agent-bar .badge {
+    font-size: 10.5px; padding: 2px 7px; border-radius: 999px;
+    background: rgba(230,184,77,.15); color: var(--yellow); border: 1px solid rgba(230,184,77,.35);
+  }
+  .agent-bar .badge.done {
+    background: rgba(61,214,140,.15); color: var(--green); border-color: rgba(61,214,140,.35);
+  }
+  .agent-stream { padding: 14px; flex: 1; overflow: auto; font-size: 12.5px; }
+  .bubble {
+    background: var(--row); border: 1px solid var(--border-soft);
+    border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; max-width: 95%;
+  }
+  .bubble.user { background: var(--accent-dim); border-color: rgba(110,168,254,.25); }
+  .bubble .who { font-size: 11px; color: var(--dim); margin-bottom: 4px; }
+  .bubble .skill-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; padding: 2px 8px; border-radius: 6px;
+    background: #1a2430; color: var(--accent); border: 1px solid rgba(110,168,254,.3);
+    margin-bottom: 6px;
+  }
+  .typing {
+    display: inline-flex; gap: 4px; align-items: center; color: var(--yellow); font-size: 12px;
+  }
+  .typing .dot {
+    width: 5px; height: 5px; border-radius: 50%; background: var(--spin);
+    animation: pulse 1s infinite ease-in-out;
+  }
+  .typing .dot:nth-child(2) { animation-delay: .15s; }
+  .typing .dot:nth-child(3) { animation-delay: .3s; }
+  @keyframes pulse { 0%,100% { opacity: .35; transform: scale(.9); } 50% { opacity: 1; transform: scale(1.1); } }
+
+  .status-card {
+    border: 1px solid rgba(230,184,77,.35); background: var(--yellow-dim);
+    border-radius: 10px; padding: 14px; margin-bottom: 12px;
+  }
+  .status-card h3 { margin: 0 0 6px; font-size: 13px; color: var(--text); display: flex; gap: 8px; align-items: center; }
+  .status-card p { margin: 0; font-size: 12px; color: #e6d5a0; }
+  .status-card .meta {
+    margin-top: 10px; font-family: ui-monospace, Menlo, monospace;
+    font-size: 11px; color: var(--muted); line-height: 1.6;
+  }
+
+  .preview-layout {
+    display: grid; grid-template-columns: 1fr 1.15fr; gap: 14px; min-height: 280px;
+  }
+  @media (max-width: 720px) {
+    .preview-layout, .intent-grid, .scope-grid { grid-template-columns: 1fr; }
+    .frame.split { grid-template-columns: 1fr; }
+  }
+  .preview-meta .kv {
+    display: grid; grid-template-columns: 72px 1fr; gap: 4px 10px; font-size: 12px; margin-bottom: 10px;
+  }
+  .preview-meta .k { color: var(--dim); }
+  .preview-meta .v { color: var(--text); word-break: break-all; }
+  .md-pane {
+    background: #0c0c0e; border: 1px solid var(--border); border-radius: 9px;
+    overflow: hidden; display: flex; flex-direction: column; min-height: 280px;
+  }
+  .md-pane .bar {
+    display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+    border-bottom: 1px solid var(--border-soft); background: #121214;
+    font-size: 11px; color: var(--dim);
+  }
+  .md-pane .bar .dot { width: 7px; height: 7px; border-radius: 50%; background: #3a3a40; }
+  .md-pane .bar .fname { font-family: ui-monospace, Menlo, monospace; color: var(--muted); }
+  .md-pane pre {
+    margin: 0; padding: 12px 14px; overflow: auto; flex: 1;
+    font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; line-height: 1.55;
+    color: #c9cdd6; white-space: pre-wrap; word-break: break-word;
+  }
+  .md-pane .fm { color: #9ecbff; }
+  .md-pane .key { color: #e6b84d; }
+  .md-pane .str { color: #a8e6b0; }
+  .md-pane .hd { color: #c4b5fd; font-weight: 600; }
+  .md-pane .cm { color: #6a6a72; }
+
+  .legend {
+    margin-top: 24px; max-width: 1000px; padding: 14px 16px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 10px;
+    font-size: 12.5px; color: var(--muted); line-height: 1.55;
+  }
+  .legend h2 { margin: 0 0 8px; font-size: 12px; color: var(--text); }
+  .legend ul { margin: 0; padding-left: 18px; }
+  .legend li { margin: 4px 0; }
+  .legend code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #c8c8d0; }
+</style>
+</head>
+<body>
+  <h1>Zap · Skill 生成向导 — UI 预览（本期含 create-skill AI）</h1>
+  <p class="intro">
+    向导只收集意图 / 触发 / 落点 / 命名；正文由 bundled <code>create-skill</code> 经
+    <code>InvokeSkill</code> 代写（对标 <code>FixSettingsWithOz</code>）。
+    设计说明见 <code>2026-10-16-skill-generate-with-create-skill.md</code>。
+  </p>
+
+  <div class="scene-tabs">
+    <button type="button" class="scene-tab active" data-scene="manager">1 · 管理器入口</button>
+    <button type="button" class="scene-tab" data-scene="wizard">2 · 收集上下文（交互）</button>
+    <button type="button" class="scene-tab" data-scene="conflict">3 · 撞名告警</button>
+    <button type="button" class="scene-tab" data-scene="drafting">4 · AI 草拟中</button>
+    <button type="button" class="scene-tab" data-scene="review">5 · 审阅并确认写入</button>
+  </div>
+
+  <!-- Scene 1 -->
+  <div class="scene active" id="scene-manager">
+    <div class="frame">
+      <aside class="nav">
+        <div class="nav-title">设置</div>
+        <div class="nav-item"><span class="nav-dot"></span>外观</div>
+        <div class="nav-item active"><span class="nav-dot"></span>Skills</div>
+        <div class="nav-item"><span class="nav-dot"></span>MCP</div>
+      </aside>
+      <section class="main">
+        <div class="topbar">
+          <h2>Skills</h2>
+          <div class="search"><span>⌕</span><input type="text" placeholder="搜索名称或描述…" readonly /></div>
+          <button type="button" class="btn primary" onclick="showScene('wizard'); goStep(0)">
+            <span class="plus">＋</span> 生成 Skill
+          </button>
+        </div>
+        <div class="filters">
+          <span class="chip on">全部</span>
+          <span class="chip">仓库 Agents</span>
+          <span class="chip">个人 Zap</span>
+          <span class="chip">内置</span>
+        </div>
+        <div class="list">
+          <div class="skill-row">
+            <span class="pip" style="background:var(--pip-agents)"></span>
+            <div>
+              <div class="skill-name">create-pr <span class="prov">Agents</span></div>
+              <div class="skill-desc">从当前分支创建 PR。</div>
+              <div class="skill-path">~/code/dip-agent/.agents/skills/create-pr/SKILL.md</div>
+            </div>
+          </div>
+          <div class="skill-row">
+            <span class="pip" style="background:var(--pip-claude)"></span>
+            <div>
+              <div class="skill-name">create-skill <span class="prov">内置</span></div>
+              <div class="skill-desc">本期向导会 Invoke 本 skill 代写草稿（会话内可继续 eval）。</div>
+              <div class="skill-path">bundled/skills/create-skill/SKILL.md</div>
+            </div>
+          </div>
+          <div class="empty" style="padding:28px 16px 8px; border-top:1px dashed var(--border); margin-top:8px;">
+            <h3>用 AI 生成一份 Skill</h3>
+            <p>向导收集上下文 → 启动 <code style="font-size:11px;color:#c8c8d0;">create-skill</code> → 你审阅后写入。</p>
+            <button type="button" class="btn primary" onclick="showScene('wizard'); goStep(0)">
+              <span class="plus">＋</span> 生成 Skill
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- Scene 2: wizard collect -->
+  <div class="scene" id="scene-wizard">
+    <div class="frame">
+      <aside class="nav">
+        <div class="nav-title">设置</div>
+        <div class="nav-item active"><span class="nav-dot"></span>Skills</div>
+      </aside>
+      <section class="main">
+        <div class="wiz-head">
+          <button type="button" class="btn ghost" onclick="showScene('manager')">← 返回</button>
+          <h2>生成 Skill</h2>
+          <span class="hint">收集上下文 · 下一步启动 create-skill</span>
+        </div>
+        <div class="steps" id="step-pills"></div>
+        <div class="wiz-body" id="wiz-body"></div>
+        <div class="wiz-foot">
+          <button type="button" class="btn ghost" id="btn-prev" onclick="prevStep()">上一步</button>
+          <span class="spacer"></span>
+          <span class="hint" id="foot-hint"></span>
+          <button type="button" class="btn" id="btn-next" onclick="nextStep()">下一步</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- Scene 3: conflict -->
+  <div class="scene" id="scene-conflict">
+    <div class="frame">
+      <aside class="nav">
+        <div class="nav-title">设置</div>
+        <div class="nav-item active"><span class="nav-dot"></span>Skills</div>
+      </aside>
+      <section class="main">
+        <div class="wiz-head">
+          <button type="button" class="btn ghost" onclick="showScene('wizard'); goStep(3)">← 返回</button>
+          <h2>命名 · 撞名告警</h2>
+        </div>
+        <div class="steps">
+          <span class="step-pill done"><span class="n">✓</span> 意图</span>
+          <span class="step-pill done"><span class="n">✓</span> 触发</span>
+          <span class="step-pill done"><span class="n">✓</span> 落点</span>
+          <span class="step-pill current"><span class="n">4</span> 命名</span>
+          <span class="step-pill"><span class="n">5</span> AI 草拟</span>
+        </div>
+        <div class="wiz-body">
+          <div class="field">
+            <label>Skill 名称</label>
+            <input type="text" value="create-pr" readonly style="border-color:rgba(230,184,77,.55);" />
+            <div class="slug-preview">目标 → ~/code/dip-agent/.agents/skills/create-pr/SKILL.md</div>
+          </div>
+          <div class="alert warn">
+            <span class="ico">⚠</span>
+            <div>
+              已存在同名 <strong>create-pr</strong>（Agents）。
+              <div class="win">
+                当前生效：<code>~/code/dip-agent/.agents/skills/create-pr/SKILL.md</code>。
+                仍用此名启动 AI 时，预填 query 会要求 agent「写入前先确认覆盖」；或改名避免冲突。
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="wiz-foot">
+          <button type="button" class="btn ghost">上一步</button>
+          <span class="spacer"></span>
+          <button type="button" class="btn" onclick="showScene('drafting')">仍用此名 · 启动 AI</button>
+          <button type="button" class="btn primary">改名后继续</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- Scene 4: AI drafting -->
+  <div class="scene" id="scene-drafting">
+    <div class="frame split">
+      <aside class="nav">
+        <div class="nav-title">设置</div>
+        <div class="nav-item active"><span class="nav-dot"></span>Skills</div>
+      </aside>
+      <section class="main">
+        <div class="wiz-head">
+          <button type="button" class="btn ghost" onclick="showScene('wizard'); goStep(3)">← 向导</button>
+          <h2>AI 草拟中</h2>
+          <span class="hint">已打开 agent 页签</span>
+        </div>
+        <div class="steps">
+          <span class="step-pill done"><span class="n">✓</span> 意图</span>
+          <span class="step-pill done"><span class="n">✓</span> 触发</span>
+          <span class="step-pill done"><span class="n">✓</span> 落点</span>
+          <span class="step-pill done"><span class="n">✓</span> 命名</span>
+          <span class="step-pill current ai"><span class="n">5</span> AI 草拟</span>
+        </div>
+        <div class="wiz-body">
+          <div class="status-card">
+            <h3><span class="typing"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> 正在通过 create-skill 起草</h3>
+            <p>已向 Oz 发送 <code class="mono">InvokeSkill</code>，附带你在向导里填的目标、触发、名称与落点。</p>
+            <div class="meta">
+              skill: create-skill (bundled)<br/>
+              name: summarize-pr<br/>
+              path: ~/code/dip-agent/.agents/skills/summarize-pr/SKILL.md<br/>
+              tab: Agent · create-skill
+            </div>
+          </div>
+          <div class="alert info">
+            <span class="ico">ℹ</span>
+            <div>完整 eval / 改 description 可在右侧会话里继续；向导 UI 不强制跑 benchmark。</div>
+          </div>
+          <div style="margin-top:14px; display:flex; gap:8px;">
+            <button type="button" class="btn" onclick="document.getElementById('agent-focus')?.scrollIntoView()">跳到 agent 页签</button>
+            <button type="button" class="btn primary" onclick="showScene('review')">草稿就绪 · 去审阅</button>
+          </div>
+        </div>
+        <div class="wiz-foot">
+          <button type="button" class="btn ghost" onclick="showScene('wizard')">取消回向导</button>
+          <span class="spacer"></span>
+          <span class="hint">对标 FixSettingsWithOz 开 pane + InvokeSkill</span>
+        </div>
+      </section>
+      <aside class="agent-pane" id="agent-focus">
+        <div class="agent-bar">
+          <strong style="font-size:12.5px;">Agent</strong>
+          <span class="badge">Running · create-skill</span>
+          <span class="spacer"></span>
+          <span class="hint">Oz</span>
+        </div>
+        <div class="agent-stream">
+          <div class="bubble user">
+            <div class="who">你 · 预填自向导</div>
+            <div class="skill-chip">⚡ InvokeSkill · create-skill</div>
+            请按 create-skill 为我起草一个新 skill。<br/>
+            · 目标：用中文总结 PR / 变更，输出可粘贴 Markdown<br/>
+            · description 要点：用户提到 PR 总结、changelog、release note 时使用<br/>
+            · 建议 name：summarize-pr<br/>
+            · 写入：~/code/dip-agent/.agents/skills/summarize-pr/SKILL.md<br/>
+            · 先产出单文件 SKILL.md；除非我明确要求，否则先不跑完整 eval
+          </div>
+          <div class="bubble">
+            <div class="who">Oz · create-skill</div>
+            收到。我先按你的触发描述起草 frontmatter 和步骤正文，写到指定路径前会跟你确认一遍结构……
+            <div class="typing" style="margin-top:8px;"><span class="dot"></span><span class="dot"></span><span class="dot"></span> 起草中</div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- Scene 5: review -->
+  <div class="scene" id="scene-review">
+    <div class="frame">
+      <aside class="nav">
+        <div class="nav-title">设置</div>
+        <div class="nav-item active"><span class="nav-dot"></span>Skills</div>
+      </aside>
+      <section class="main">
+        <div class="wiz-head">
+          <button type="button" class="btn ghost" onclick="showScene('drafting')">← AI 会话</button>
+          <h2>审阅并确认写入</h2>
+        </div>
+        <div class="steps">
+          <span class="step-pill done"><span class="n">✓</span> 意图</span>
+          <span class="step-pill done"><span class="n">✓</span> 触发</span>
+          <span class="step-pill done"><span class="n">✓</span> 落点</span>
+          <span class="step-pill done"><span class="n">✓</span> 命名</span>
+          <span class="step-pill done"><span class="n">✓</span> AI 草拟</span>
+          <span class="step-pill current"><span class="n">✓</span> 审阅</span>
+        </div>
+        <div class="wiz-body">
+          <div class="alert ok">
+            <span class="ico">✓</span>
+            <div>Agent 已给出草稿（或已写入路径）。确认后打开编辑器；不自动 git commit。若需 eval，可回到 agent 会话继续。</div>
+          </div>
+          <div class="preview-layout" style="margin-top:12px;">
+            <div class="preview-meta">
+              <div class="kv">
+                <span class="k">名称</span><span class="v">summarize-pr</span>
+                <span class="k">来源</span><span class="v">create-skill · AI</span>
+                <span class="k">落点</span><span class="v">仓库 · Agents</span>
+                <span class="k">写入</span><span class="v mono">~/code/dip-agent/.agents/skills/summarize-pr/SKILL.md</span>
+              </div>
+              <div class="alert info">
+                <span class="ico">ℹ</span>
+                <div>若路径已存在文件，此处会再弹一次覆盖确认。</div>
+              </div>
+            </div>
+            <div class="md-pane">
+              <div class="bar">
+                <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                <span class="fname">SKILL.md · agent 草稿</span>
+              </div>
+              <pre><span class="fm">---</span>
+<span class="key">name</span>: <span class="str">summarize-pr</span>
+<span class="key">description</span>: <span class="str">用中文总结当前分支或指定 PR 的变更。用户提到 PR 总结、changelog、release note，或要求概括变更时务必使用本 skill。</span>
+<span class="fm">---</span>
+
+<span class="hd"># 总结 PR / 变更</span>
+
+<span class="cm">&lt;!-- drafted by create-skill from Skill 生成向导 --&gt;</span>
+
+## 步骤
+1. 确认范围（分支 / PR / commit）
+2. 收集 git log / diff
+3. 按主题用中文输出：动机 → 改动 → 风险 / 测试
+4. 若需贴 GitHub，给出可粘贴 Markdown
+</pre>
+            </div>
+          </div>
+        </div>
+        <div class="wiz-foot">
+          <button type="button" class="btn ghost" onclick="showScene('drafting')">回 agent 继续改</button>
+          <span class="spacer"></span>
+          <button type="button" class="btn">复制内容</button>
+          <button type="button" class="btn primary">确认写入并打开</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h2>交互说明（本期 = 向导 + create-skill AI）</h2>
+    <ul>
+      <li><strong>入口</strong>：Skill 管理器顶栏 / 空态 CTA「生成 Skill」（需 AI 可用）。</li>
+      <li><strong>前四步</strong>：意图 → 触发 description → 落点 → 命名（撞名告警）；不在此步用模板拼正文。</li>
+      <li><strong>AI 草拟</strong>：新 agent pane + <code>SlashCommandRequest::InvokeSkill</code>（bundled <code>create-skill</code>）+ 预填 query。</li>
+      <li><strong>审阅</strong>：用户确认写入 / 打开；路径已存在则二次确认覆盖；库存刷新。</li>
+      <li><strong>非目标</strong>：向导内强制 eval UI、自动 commit、改按名合并算法。</li>
+    </ul>
+  </div>
+
+<script>
+(function () {
+  const STEP_LABELS = ["意图", "触发", "落点", "命名", "启动 AI"];
+  let step = 0;
+  const state = {
+    intent: "workflow",
+    trigger: "用户提到 PR 总结、changelog、release note，或要求用中文概括变更时使用本 skill。",
+    goal: "用中文总结当前分支或指定 PR 的变更，输出可粘贴的 Markdown。",
+    scope: "agents",
+    name: "summarize-pr",
+  };
+  const intents = [
+    { id: "workflow", t: "工作流步骤", d: "多步流程；交给 create-skill 扩写正文" },
+    { id: "review", t: "代码审查", d: "审查清单与输出格式" },
+    { id: "docs", t: "文档 / 说明", d: "固定结构写作" },
+    { id: "other", t: "其它 / 让 AI 判断", d: "只给目标，由 create-skill 访谈补全" },
+  ];
+
+  window.showScene = function (id) {
+    document.querySelectorAll(".scene").forEach((el) => el.classList.remove("active"));
+    document.querySelectorAll(".scene-tab").forEach((el) => el.classList.remove("active"));
+    const scene = document.getElementById("scene-" + id);
+    if (scene) scene.classList.add("active");
+    const tab = document.querySelector('.scene-tab[data-scene="' + id + '"]');
+    if (tab) tab.classList.add("active");
+    if (id === "wizard") renderWizard();
+  };
+  document.querySelectorAll(".scene-tab").forEach((btn) => {
+    btn.addEventListener("click", () => showScene(btn.dataset.scene));
+  });
+
+  function writePath() {
+    return state.scope === "agents"
+      ? "~/code/dip-agent/.agents/skills/" + state.name + "/SKILL.md"
+      : "~/.warp/skills/" + state.name + "/SKILL.md";
+  }
+  function slugify(s) {
+    return String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64) || "my-skill";
+  }
+  function knownConflict(name) {
+    return name === "create-pr" || name === "create-skill" || name === "summarize-diff";
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+
+  function renderPills() {
+    document.getElementById("step-pills").innerHTML = STEP_LABELS.map((label, i) => {
+      let cls = "step-pill";
+      let n = String(i + 1);
+      if (i < step) { cls += " done"; n = "✓"; }
+      else if (i === step) { cls += i === 4 ? " current ai" : " current"; }
+      return '<span class="' + cls + '"><span class="n">' + n + "</span> " + label + "</span>";
+    }).join("");
+  }
+
+  function scopeCard(id, title, desc, path, pip) {
+    const sel = state.scope === id ? " selected" : "";
+    return (
+      '<button type="button" class="scope-card' + sel + '" onclick="pickScope(\'' + id + "')\">" +
+      '<span class="radio"></span><div class="t"><span class="pip" style="background:' + pip +
+      ';display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px"></span>' +
+      title + '</div><div class="d">' + desc + '</div><div class="path">' + path + "</div></button>"
+    );
+  }
+
+  function renderWizard() {
+    renderPills();
+    const body = document.getElementById("wiz-body");
+    const prev = document.getElementById("btn-prev");
+    const next = document.getElementById("btn-next");
+    const hint = document.getElementById("foot-hint");
+    prev.disabled = step === 0;
+    next.textContent = step === 4 ? "启动 create-skill" : "下一步";
+    next.className = step === 4 ? "btn primary" : "btn";
+    hint.textContent = "步骤 " + (step + 1) + " / 5 · 正文由 AI 写";
+
+    if (step === 0) {
+      body.innerHTML =
+        '<div class="field"><label>这个 Skill 要帮 agent 做什么？</label>' +
+        '<p class="help">类型只作提示；真正正文由 create-skill 起草。</p></div>' +
+        '<div class="intent-grid" id="intent-grid"></div>' +
+        '<div class="field" style="margin-top:16px"><label>一句话目标</label>' +
+        '<textarea id="goal-input">' + escapeHtml(state.goal) + "</textarea></div>";
+      const grid = document.getElementById("intent-grid");
+      intents.forEach((it) => {
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "intent-card" + (state.intent === it.id ? " selected" : "");
+        card.innerHTML = '<div class="t">' + it.t + '</div><div class="d">' + it.d + "</div>";
+        card.onclick = () => { state.intent = it.id; renderWizard(); };
+        grid.appendChild(card);
+      });
+      document.getElementById("goal-input").oninput = (e) => { state.goal = e.target.value; };
+    } else if (step === 1) {
+      body.innerHTML =
+        '<div class="field"><label>何时触发？（description 要点）</label>' +
+        '<p class="help">会写入预填 query，create-skill 据此写 frontmatter description。</p>' +
+        '<textarea id="trigger-input">' + escapeHtml(state.trigger) + "</textarea></div>";
+      document.getElementById("trigger-input").oninput = (e) => { state.trigger = e.target.value; };
+    } else if (step === 2) {
+      body.innerHTML =
+        '<div class="field"><label>写到哪里？</label>' +
+        '<p class="help">路径会放进 InvokeSkill 的 user_query，要求 agent 写到该处。</p></div>' +
+        '<div class="scope-grid">' +
+        scopeCard("agents", "仓库 · Agents", "跟随当前仓库", "~/code/dip-agent/.agents/skills/&lt;name&gt;/SKILL.md", "var(--pip-agents)") +
+        scopeCard("personal", "个人 · Zap", "本机跨仓库", "~/.warp/skills/&lt;name&gt;/SKILL.md", "var(--pip-zap)") +
+        "</div>";
+    } else if (step === 3) {
+      const conflict = knownConflict(state.name);
+      body.innerHTML =
+        '<div class="field"><label>Skill 名称</label>' +
+        '<input type="text" id="name-input" value="' + escapeHtml(state.name) + '"' +
+        (conflict ? ' style="border-color:rgba(230,184,77,.55)"' : "") + " />" +
+        '<div class="slug-preview">将交给 AI → <span style="color:' +
+        (conflict ? "var(--yellow)" : "var(--muted)") + '">' + escapeHtml(writePath()) +
+        "</span></div></div>" +
+        (conflict
+          ? '<div class="alert warn"><span class="ico">⚠</span><div>同名已存在。可改名，或仍启动 AI（query 要求写入前确认覆盖）。</div></div>'
+          : '<div class="alert info"><span class="ico">✓</span><div>名称可用。</div></div>');
+      const input = document.getElementById("name-input");
+      input.oninput = (e) => {
+        state.name = slugify(e.target.value);
+        e.target.value = state.name;
+        renderWizard();
+        const again = document.getElementById("name-input");
+        if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+      };
+    } else {
+      body.innerHTML =
+        '<div class="status-card"><h3>即将启动 create-skill</h3>' +
+        '<p>新开 agent 模式终端，发送 InvokeSkill + 预填上下文（对标 FixSettingsWithOz）。</p>' +
+        '<div class="meta">name: ' + escapeHtml(state.name) + "<br/>path: " +
+        escapeHtml(writePath()) + "<br/>goal: " + escapeHtml(state.goal.slice(0, 80)) +
+        (state.goal.length > 80 ? "…" : "") + "</div></div>" +
+        '<div class="alert info"><span class="ico">ℹ</span><div>点击「启动 create-skill」后进入「AI 草拟中」场景（预览）。</div></div>';
+    }
+  }
+
+  window.pickScope = function (id) { state.scope = id; renderWizard(); };
+  window.goStep = function (n) { step = Math.max(0, Math.min(4, n)); renderWizard(); };
+  window.nextStep = function () {
+    if (step === 4) { showScene("drafting"); return; }
+    step++;
+    renderWizard();
+  };
+  window.prevStep = function () { if (step > 0) step--; renderWizard(); };
+
+  renderWizard();
+})();
+</script>
+</body>
+</html>

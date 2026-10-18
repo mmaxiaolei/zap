@@ -626,6 +626,10 @@ pub enum WorkspaceAction {
     FixSettingsWithOz {
         error_description: String,
     },
+    /// Opens a new agent session and invokes bundled create-skill with a prefilled query.
+    CreateSkillWithOz {
+        user_query: String,
+    },
 }
 
 impl From<&WorkspaceAction> for LoginGatedFeature {
@@ -857,7 +861,8 @@ impl WorkspaceAction {
             | TabConfigSidecarEditConfig { .. }
             | TabConfigSidecarRemoveConfig { .. }
             | OpenSettingsFile
-            | FixSettingsWithOz { .. } => false,
+            | FixSettingsWithOz { .. }
+            | CreateSkillWithOz { .. } => false,
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => false,
             #[cfg(target_family = "wasm")]

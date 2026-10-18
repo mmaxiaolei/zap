@@ -180,3 +180,12 @@ pub fn lookup_byop(app: &AppContext, id: &ai::LLMId) -> Option<(AgentProvider, S
         .unwrap_or_default();
     Some((provider, api_key, model_id))
 }
+
+/// 是否已配置至少一个可用的 BYOP provider（有 base_url 且至少有一个非空 model）。
+///
+/// 与 [`build_byop_llm_infos`] 同一判定：未配置时 picker 只有占位项，Agent 请求会落到
+/// 「Zap requires a configured BYOP provider in Settings」。Skill 生成向导用此决定
+/// 走 Zap 内 create-skill 还是 CLI 复制兜底。
+pub fn has_configured_byop_provider(app: &AppContext) -> bool {
+    !build_byop_llm_infos(app).is_empty()
+}
