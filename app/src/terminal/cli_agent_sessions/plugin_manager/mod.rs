@@ -2,6 +2,7 @@ pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod deepseek;
 pub(crate) mod gemini;
+pub(crate) mod grok;
 pub(crate) mod opencode;
 
 use std::cmp::Ordering;
@@ -20,6 +21,7 @@ use claude::ClaudeCodePluginManager;
 use codex::CodexPluginManager;
 use deepseek::DeepSeekPluginManager;
 use gemini::GeminiPluginManager;
+use grok::GrokPluginManager;
 use opencode::OpenCodePluginManager;
 
 /// Distinguishes whether the plugin instructions modal should show install or update steps.
@@ -264,8 +266,8 @@ pub(crate) fn plugin_manager_for_with_shell(
         | CLIAgent::Goose
         | CLIAgent::Antigravity
         | CLIAgent::Omp
-        | CLIAgent::Grok
         | CLIAgent::Unknown => None,
+        CLIAgent::Grok => Some(Box::new(GrokPluginManager)),
     }
 }
 

@@ -74,6 +74,21 @@ impl ChannelState {
         cfg!(feature = "release_bundle")
     }
 
+    /// Whether startup should skip restoring the previous session (windows / agent tabs).
+    ///
+    /// Local/test `zap-oss` builds use [`Channel::Oss`] without the `release_bundle`
+    /// feature, while packaged Zap.app enables `release_bundle`. Both share the same
+    /// session DB under `.zap`, so skipping restore on unpackaged OSS keeps test
+    /// launches from resurrecting agent sessions left by Zap.app.
+    pub fn should_skip_session_restore() -> bool {
+        Self::should_skip_session_restore_for(Self::channel(), Self::is_release_bundle())
+    }
+
+    /// Pure/testable core of [`Self::should_skip_session_restore`].
+    pub fn should_skip_session_restore_for(channel: Channel, is_release_bundle: bool) -> bool {
+        matches!(channel, Channel::Oss) && !is_release_bundle
+    }
+
     pub fn enable_debug_features() -> bool {
         cfg!(debug_assertions) || matches!(Self::channel(), Channel::Local | Channel::Dev)
     }

@@ -24,8 +24,8 @@ trait CLIAgentSessionHandler {
 
     /// Whether this handler provides meaningful, fine-grained status
     /// (e.g. in-progress / blocked / success) that should be shown in the UI.
-    /// Handlers backed by the structured plugin protocol report rich status;
-    /// handlers that only forward opaque OS notifications (e.g. Codex) do not.
+    /// Handlers backed by the structured plugin protocol report rich status.
+    /// Codex OSC 9 reports Stop/approval and also opts in.
     fn supports_rich_status(&self) -> bool {
         true
     }
@@ -68,6 +68,7 @@ pub fn is_agent_supported(agent: &CLIAgent) -> bool {
             | CLIAgent::Pi
             | CLIAgent::DeepSeek
             | CLIAgent::Antigravity
+            | CLIAgent::Grok
     )
 }
 
@@ -85,6 +86,9 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         | CLIAgent::Auggie
         | CLIAgent::Pi
         | CLIAgent::Antigravity => Some(Box::new(DefaultSessionListener)),
+        // Grok: structured OSC 777 from zap-cli-agent hooks, plus native OSC 9
+        // turn_complete notifications (Warp auto protocol).
+        CLIAgent::Grok => Some(Box::new(GrokSessionHandler)),
         CLIAgent::Codex => Some(Box::new(CodexSessionHandler)),
         CLIAgent::DeepSeek => Some(Box::new(DeepSeekSessionHandler)),
         CLIAgent::Amp
@@ -93,8 +97,52 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         | CLIAgent::CursorCli
         | CLIAgent::Goose
         | CLIAgent::Omp
-        | CLIAgent::Grok
         | CLIAgent::Unknown => None,
+    }
+}
+
+/// Grok Build TUI handler: structured OSC 777 (zap-cli-agent hooks) and native
+/// OSC 9 desktop notifications (Warp auto protocol for turn_complete).
+struct GrokSessionHandler;
+
+impl GrokSessionHandler {
+    fn parse_osc9_text(body: &str) -> Option<CLIAgentEvent> {
+        let body = body.trim();
+        if body.is_empty() {
+            return None;
+        }
+        Some(CLIAgentEvent {
+            v: 1,
+            agent: CLIAgent::Grok,
+            event: CLIAgentEventType::Stop,
+            session_id: None,
+            cwd: None,
+            project: None,
+            payload: CLIAgentEventPayload {
+                query: Some(body.to_owned()),
+                ..Default::default()
+            },
+        })
+    }
+}
+
+impl CLIAgentSessionHandler for GrokSessionHandler {
+    fn try_parse(&self, title: Option<&str>, body: &str) -> Option<CLIAgentEvent> {
+        if let Some(parsed) = parse_event(title, body) {
+            return Some(parsed);
+        }
+        // Native Grok [ui.notifications] on Warp uses OSC 9 (no title).
+        if title.is_some() {
+            return None;
+        }
+        Self::parse_osc9_text(body)
+    }
+
+    fn handle_event(&mut self, event: CLIAgentEvent) -> Option<CLIAgentEvent> {
+        if event.event == CLIAgentEventType::SessionStart {
+            return None;
+        }
+        Some(event)
     }
 }
 
@@ -117,10 +165,10 @@ impl CLIAgentSessionHandler for DefaultSessionListener {
 /// into CLI agent events.
 ///
 /// Codex sends notifications via OSC 9 (`\x1b]9;message\x07`) with
-/// human-readable text. Since there's no way to distinguish notification types
-/// from the raw text, all OSC 9 notifications are treated as `Stop` (success).
-/// The notification body becomes the event's `query` so it surfaces as the
-/// notification title in the UI.
+/// human-readable text. Turn-complete bodies become `Stop` (Success/Done).
+/// Bodies that match Codex approval copy (`Approval requested…`,
+/// `Codex wants to edit…`) become `PermissionRequest` (Waiting) so the sidebar
+/// shows `?` instead of a false Done.
 struct CodexSessionHandler;
 
 impl CodexSessionHandler {
@@ -132,17 +180,34 @@ impl CodexSessionHandler {
             return None;
         }
 
+        let is_approval = body.starts_with("Approval requested")
+            || body.starts_with("Codex wants to edit");
+        let (event, payload) = if is_approval {
+            (
+                CLIAgentEventType::PermissionRequest,
+                CLIAgentEventPayload {
+                    summary: Some(body.to_owned()),
+                    ..Default::default()
+                },
+            )
+        } else {
+            (
+                CLIAgentEventType::Stop,
+                CLIAgentEventPayload {
+                    query: Some(body.to_owned()),
+                    ..Default::default()
+                },
+            )
+        };
+
         Some(CLIAgentEvent {
             v: 1,
             agent: CLIAgent::Codex,
-            event: CLIAgentEventType::Stop,
+            event,
             session_id: None,
             cwd: None,
             project: None,
-            payload: CLIAgentEventPayload {
-                query: Some(body.to_owned()),
-                ..Default::default()
-            },
+            payload,
         })
     }
 }
@@ -165,11 +230,16 @@ impl CLIAgentSessionHandler for CodexSessionHandler {
     }
 
     fn handle_event(&mut self, event: CLIAgentEvent) -> Option<CLIAgentEvent> {
+        // Structured SessionStart is handled at listener registration; skip here.
+        if event.event == CLIAgentEventType::SessionStart {
+            return None;
+        }
         Some(event)
     }
 
     fn supports_rich_status(&self) -> bool {
-        false
+        // PromptSubmit → InProgress, Stop → Success, approval → Waiting (hooks + OSC 9).
+        true
     }
 }
 
@@ -310,14 +380,30 @@ mod tests {
     }
 
     #[test]
-    fn codex_approval_text_still_becomes_stop() {
+    fn codex_approval_text_becomes_permission_request() {
         let event =
             CodexSessionHandler::parse_osc9_text("Approval requested: rm -rf /tmp/foo").unwrap();
-        assert_eq!(event.event, CLIAgentEventType::Stop);
+        assert_eq!(event.event, CLIAgentEventType::PermissionRequest);
         assert_eq!(
-            event.payload.query.as_deref(),
+            event.payload.summary.as_deref(),
             Some("Approval requested: rm -rf /tmp/foo")
         );
+    }
+
+    #[test]
+    fn codex_edit_approval_text_becomes_permission_request() {
+        let event =
+            CodexSessionHandler::parse_osc9_text("Codex wants to edit README.md").unwrap();
+        assert_eq!(event.event, CLIAgentEventType::PermissionRequest);
+        assert_eq!(
+            event.payload.summary.as_deref(),
+            Some("Codex wants to edit README.md")
+        );
+    }
+
+    #[test]
+    fn codex_supports_rich_status() {
+        assert!(agent_supports_rich_status(&CLIAgent::Codex));
     }
 
     #[test]
@@ -550,5 +636,22 @@ mod tests {
         };
 
         assert!(session_supports_rich_status(&session));
+    }
+}
+
+#[cfg(test)]
+mod grok_support_tests {
+    use super::*;
+    use crate::terminal::cli_agent_sessions::event::CLIAgentEventType;
+
+    #[test]
+    fn grok_is_supported_with_rich_status() {
+        assert!(is_agent_supported(&CLIAgent::Grok));
+        assert!(agent_supports_rich_status(&CLIAgent::Grok));
+        assert!(create_handler(&CLIAgent::Grok).is_some());
+        let osc9 = GrokSessionHandler::parse_osc9_text("Turn complete")
+            .expect("Grok OSC 9 should parse as Stop");
+        assert_eq!(osc9.event, CLIAgentEventType::Stop);
+        assert_eq!(osc9.agent, CLIAgent::Grok);
     }
 }

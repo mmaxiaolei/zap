@@ -1,0 +1,49 @@
+{
+  "description": "Zap sidebar status hooks for Codex",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.codex/hooks/zap-cli-agent/scripts/on-session-start.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.codex/hooks/zap-cli-agent/scripts/on-prompt-submit.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.codex/hooks/zap-cli-agent/scripts/on-stop.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.codex/hooks/zap-cli-agent/scripts/on-permission-request.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

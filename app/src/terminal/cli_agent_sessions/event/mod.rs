@@ -22,6 +22,8 @@ pub enum CLIAgentEventType {
     PermissionReplied,
     QuestionAsked,
     IdlePrompt,
+    /// Agent reported a failed / errored turn (tree: Failed red dot).
+    Error,
     Unknown(String),
 }
 

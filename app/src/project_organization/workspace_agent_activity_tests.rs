@@ -573,3 +573,62 @@ fn non_done_phases_are_not_demoted() {
     }
 }
 
+
+#[test]
+fn cli_idle_maps_to_idle_phase() {
+    let activities = activities_from_terminal_sources(
+        Some((
+            CLIAgent::Claude,
+            CLIAgentSessionStatus::Idle,
+            None,
+            None,
+        )),
+        None,
+        false,
+    );
+    assert_eq!(
+        activities,
+        vec![WorkspaceAgentActivity {
+            identity: WorkspaceAgentIdentity::Cli(CLIAgent::Claude),
+            phase: WorkspaceAgentPhase::Idle,
+            phase_changed_at: None,
+            model_label: None,
+        }]
+    );
+    assert!(!activities[0].counts_as_busy());
+    assert!(!activities[0].needs_status_spinner());
+    assert_eq!(
+        activities[0].presentation_phase().accessibility_label(),
+        "Idle"
+    );
+}
+
+#[test]
+fn cli_failed_maps_to_failed_phase() {
+    let activities = activities_from_terminal_sources(
+        Some((
+            CLIAgent::Claude,
+            CLIAgentSessionStatus::Failed {
+                message: Some("rate limited".to_owned()),
+            },
+            None,
+            None,
+        )),
+        None,
+        false,
+    );
+    assert_eq!(
+        activities,
+        vec![WorkspaceAgentActivity {
+            identity: WorkspaceAgentIdentity::Cli(CLIAgent::Claude),
+            phase: WorkspaceAgentPhase::Failed,
+            phase_changed_at: None,
+            model_label: None,
+        }]
+    );
+    assert!(!activities[0].counts_as_busy());
+    assert_eq!(
+        activities[0].presentation_phase().accessibility_label(),
+        "Failed"
+    );
+}

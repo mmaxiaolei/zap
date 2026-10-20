@@ -131,8 +131,8 @@ impl NotificationsModel {
                 status,
                 session_context,
             } => match status {
-                // agent 重新开始干活 → 之前的通知作废。
-                CLIAgentSessionStatus::InProgress => {
+                // agent 重新开始干活 / 回到空闲 → 之前的通知作废。
+                CLIAgentSessionStatus::InProgress | CLIAgentSessionStatus::Idle => {
                     self.remove_notification_by_source(
                         NotificationOrigin::CLISession(*terminal_view_id),
                         ctx,
@@ -170,6 +170,23 @@ impl NotificationsModel {
                             .clone()
                             .unwrap_or_else(|| "Waiting for input.".to_owned()),
                         NotificationCategory::Request,
+                        NotificationSourceAgent::CLI(*agent),
+                        NotificationOrigin::CLISession(*terminal_view_id),
+                        *terminal_view_id,
+                        vec![],
+                        ctx,
+                    );
+                }
+                CLIAgentSessionStatus::Failed { message } => {
+                    let title = session_context
+                        .display_title()
+                        .unwrap_or_else(|| format!("{} failed", agent.display_name()));
+                    self.add_notification(
+                        title,
+                        message
+                            .clone()
+                            .unwrap_or_else(|| "Task failed.".to_owned()),
+                        NotificationCategory::Error,
                         NotificationSourceAgent::CLI(*agent),
                         NotificationOrigin::CLISession(*terminal_view_id),
                         *terminal_view_id,

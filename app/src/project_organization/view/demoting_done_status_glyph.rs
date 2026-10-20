@@ -65,7 +65,7 @@ impl DemotingDoneStatusGlyph {
             .with_height(IDLE_DOT_SIZE)
             .finish(),
             _ => ConstrainedBox::new(
-                WarpIcon::Check
+                WarpIcon::CheckCircleBroken
                     .to_warpui_icon(ThemeFill::Solid(self.done_check_color))
                     .finish(),
             )

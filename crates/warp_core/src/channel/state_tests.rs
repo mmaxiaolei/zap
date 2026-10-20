@@ -10,3 +10,33 @@ use super::ChannelState;
 fn default_oss_state_is_cloud_disabled() {
     assert!(ChannelState::is_cloud_disabled());
 }
+
+#[test]
+fn unpackaged_oss_skips_session_restore() {
+    use super::Channel;
+    assert!(ChannelState::should_skip_session_restore_for(Channel::Oss, false));
+}
+
+#[test]
+fn packaged_oss_release_bundle_restores_session() {
+    use super::Channel;
+    assert!(!ChannelState::should_skip_session_restore_for(Channel::Oss, true));
+}
+
+#[test]
+fn non_oss_channels_do_not_skip_session_restore() {
+    use super::Channel;
+    for channel in [
+        Channel::Stable,
+        Channel::Preview,
+        Channel::Dev,
+        Channel::Local,
+        Channel::Integration,
+    ] {
+        assert!(
+            !ChannelState::should_skip_session_restore_for(channel, false),
+            "{channel:?} should not skip solely because unpackaged"
+        );
+        assert!(!ChannelState::should_skip_session_restore_for(channel, true));
+    }
+}

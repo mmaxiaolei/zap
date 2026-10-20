@@ -1,5 +1,6 @@
 pub mod event;
 pub mod listener;
+pub(crate) mod tui_status;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod plugin_manager;
 
@@ -16,12 +17,16 @@ use event::{CLIAgentEvent, CLIAgentEventType};
 /// Status of a tracked CLI agent session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CLIAgentSessionStatus {
+    /// At prompt with no active turn (tree: Idle gray dot).
+    Idle,
     InProgress,
     Success,
     /// Permission / question: agent paused for user input (tree: Waiting `?`).
     Waiting { message: Option<String> },
     /// True stuck / non-interactive block (tree: Blocked red dot). Rare for CLI today.
     Blocked { message: Option<String> },
+    /// Turn failed / error (tree: Failed red dot).
+    Failed { message: Option<String> },
 }
 
 impl CLIAgentSessionStatus {
@@ -33,10 +38,12 @@ impl CLIAgentSessionStatus {
         )
     }
 
-    /// Message carried by Waiting/Blocked, if any.
+    /// Message carried by Waiting/Blocked/Failed, if any.
     pub fn attention_message(&self) -> Option<&str> {
         match self {
-            Self::Waiting { message } | Self::Blocked { message } => message.as_deref(),
+            Self::Waiting { message }
+            | Self::Blocked { message }
+            | Self::Failed { message } => message.as_deref(),
             _ => None,
         }
     }
@@ -46,6 +53,9 @@ impl CLIAgentSessionStatus {
         match self {
             CLIAgentSessionStatus::InProgress => ConversationStatus::InProgress,
             CLIAgentSessionStatus::Success => ConversationStatus::Success,
+            // Oz has no Idle; Cancelled presents as Idle in the tree.
+            CLIAgentSessionStatus::Idle => ConversationStatus::Cancelled,
+            CLIAgentSessionStatus::Failed { .. } => ConversationStatus::Error,
             // Oz ConversationStatus has no Waiting; both map to Blocked (user-gated).
             CLIAgentSessionStatus::Waiting { message }
             | CLIAgentSessionStatus::Blocked { message } => ConversationStatus::Blocked {
@@ -238,9 +248,46 @@ impl CLIAgentSession {
                 }
                 CLIAgentSessionStatus::InProgress
             }
-            // IdlePrompt means the agent is sitting at its prompt waiting for input.
-            // This should not affect status — otherwise it would override Success after a Stop event.
-            CLIAgentEventType::IdlePrompt => return None,
+            // IdlePrompt: agent is at its prompt waiting for the next user input.
+            // - After a real turn (query/response already known, or on this event) → Success.
+            // - Cold prompt with no prior work → Idle.
+            // Do not override Success / Waiting / Blocked / Failed.
+            CLIAgentEventType::IdlePrompt => {
+                if event.payload.query.is_some() {
+                    self.session_context.query = event.payload.query.clone();
+                }
+                if event.payload.response.is_some() {
+                    self.session_context.response = event.payload.response.clone();
+                }
+                let had_turn = self.session_context.query.is_some()
+                    || self.session_context.response.is_some();
+                match &self.status {
+                    CLIAgentSessionStatus::InProgress | CLIAgentSessionStatus::Idle => {
+                        if had_turn {
+                            CLIAgentSessionStatus::Success
+                        } else if matches!(self.agent, CLIAgent::Grok)
+                            && matches!(self.status, CLIAgentSessionStatus::Idle)
+                        {
+                            // Grok only emits idle_prompt after ≥1 turn ended (docs).
+                            // PromptSubmit may have been missed, so Idle+idle_prompt ⇒ Done.
+                            CLIAgentSessionStatus::Success
+                        } else {
+                            CLIAgentSessionStatus::Idle
+                        }
+                    }
+                    CLIAgentSessionStatus::Success
+                    | CLIAgentSessionStatus::Waiting { .. }
+                    | CLIAgentSessionStatus::Blocked { .. }
+                    | CLIAgentSessionStatus::Failed { .. } => return None,
+                }
+            }
+            CLIAgentEventType::Error => CLIAgentSessionStatus::Failed {
+                message: event
+                    .payload
+                    .summary
+                    .clone()
+                    .or_else(|| Some("Agent error".to_owned())),
+            },
             CLIAgentEventType::SessionStart => {
                 self.plugin_version = event.payload.plugin_version.clone();
                 return None;
@@ -248,9 +295,10 @@ impl CLIAgentSession {
             CLIAgentEventType::Unknown(_) => return None,
         };
 
-        if self.status != new_status {
-            self.phase_changed_at = instant::Instant::now();
+        if self.status == new_status {
+            return None;
         }
+        self.phase_changed_at = instant::Instant::now();
         self.status = new_status.clone();
         Some(new_status)
     }
@@ -376,10 +424,8 @@ impl CLIAgentSessionsModel {
             .filter(|s| s.agent == agent)
         {
             // Upgrade existing session with plugin context.
-            if session.status != CLIAgentSessionStatus::InProgress {
-                session.status = CLIAgentSessionStatus::InProgress;
-                session.phase_changed_at = instant::Instant::now();
-            }
+            // Do not force InProgress — Grok/Claude sit Idle at the prompt until
+            // PromptSubmit; forcing spinner here caused perpetual Running.
             session.listener = Some(listener);
             session.plugin_version = plugin_version;
             session.remote_host = remote_host;
@@ -395,7 +441,8 @@ impl CLIAgentSessionsModel {
             terminal_view_id,
             CLIAgentSession {
                 agent,
-                status: CLIAgentSessionStatus::InProgress,
+                // Fresh listener registration: idle until PromptSubmit / OSC activity.
+                status: CLIAgentSessionStatus::Idle,
                 session_context: CLIAgentSessionContext {
                     cwd,
                     project,

@@ -566,11 +566,15 @@ fn phase_changed_at_stays_when_status_unchanged() {
         },
     };
 
-    assert_eq!(
-        session.apply_event(&event),
-        Some(CLIAgentSessionStatus::InProgress)
-    );
+    // Already InProgress: apply_event is idempotent (None) and must not bump
+    // phase_changed_at — otherwise Done residual / relative time would reset.
+    assert_eq!(session.apply_event(&event), None);
+    assert_eq!(session.status, CLIAgentSessionStatus::InProgress);
     assert_eq!(session.phase_changed_at, before);
+    assert_eq!(
+        session.session_context.query.as_deref(),
+        Some("follow up")
+    );
 }
 
 #[test]
@@ -679,4 +683,665 @@ fn permission_replied_clears_waiting() {
         session.apply_event(&event),
         Some(CLIAgentSessionStatus::InProgress)
     );
+}
+
+#[test]
+fn idle_prompt_promotes_in_progress_to_success() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext {
+            query: Some("do the thing".to_owned()),
+            ..Default::default()
+        },
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+    let before = session.phase_changed_at;
+    std::thread::sleep(std::time::Duration::from_millis(5));
+
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::IdlePrompt,
+        session_id: Some("abc".to_owned()),
+        cwd: Some("/tmp".to_owned()),
+        project: Some("tmp".to_owned()),
+        payload: CLIAgentEventPayload {
+            summary: Some("Claude is waiting for your input".to_owned()),
+            ..Default::default()
+        },
+    };
+
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Success)
+    );
+    assert_eq!(session.status, CLIAgentSessionStatus::Success);
+    assert!(session.phase_changed_at > before);
+}
+
+#[test]
+fn idle_prompt_does_not_override_success() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::Success,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+    let before = session.phase_changed_at;
+
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::IdlePrompt,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+
+    assert_eq!(session.apply_event(&event), None);
+    assert_eq!(session.status, CLIAgentSessionStatus::Success);
+    assert_eq!(session.phase_changed_at, before);
+}
+
+#[test]
+fn idle_prompt_does_not_clear_waiting() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::Waiting {
+            message: Some("approve?".to_owned()),
+        },
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::IdlePrompt,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+
+    assert_eq!(session.apply_event(&event), None);
+    assert!(matches!(
+        session.status,
+        CLIAgentSessionStatus::Waiting { .. }
+    ));
+}
+
+#[test]
+fn idle_prompt_without_prior_work_sets_idle() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::IdlePrompt,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload {
+            summary: Some("Claude is waiting for your input".to_owned()),
+            ..Default::default()
+        },
+    };
+
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Idle)
+    );
+    assert_eq!(session.status, CLIAgentSessionStatus::Idle);
+}
+
+#[test]
+fn idle_prompt_does_not_override_idle() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::Idle,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+    let before = session.phase_changed_at;
+
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::IdlePrompt,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+
+    assert_eq!(session.apply_event(&event), None);
+    assert_eq!(session.status, CLIAgentSessionStatus::Idle);
+    assert_eq!(session.phase_changed_at, before);
+}
+
+#[test]
+fn error_event_sets_failed() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext {
+            query: Some("boom".to_owned()),
+            ..Default::default()
+        },
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::Error,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload {
+            summary: Some("rate limited".to_owned()),
+            ..Default::default()
+        },
+    };
+
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Failed {
+            message: Some("rate limited".to_owned()),
+        })
+    );
+    assert!(matches!(
+        session.status,
+        CLIAgentSessionStatus::Failed { .. }
+    ));
+}
+
+#[test]
+fn idle_prompt_does_not_clear_failed() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::Failed {
+            message: Some("boom".to_owned()),
+        },
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::IdlePrompt,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+
+    assert_eq!(session.apply_event(&event), None);
+    assert!(matches!(
+        session.status,
+        CLIAgentSessionStatus::Failed { .. }
+    ));
+}
+
+#[test]
+fn parses_error_event_aliases() {
+    for name in ["error", "failed", "agent_error"] {
+        let body = format!(
+            r#"{{"v":1,"agent":"claude","event":"{name}","summary":"oops"}}"#
+        );
+        let event = parse_event(Some("warp://cli-agent"), &body)
+            .expect("parse error alias");
+        assert_eq!(event.event, CLIAgentEventType::Error);
+        assert_eq!(event.payload.summary.as_deref(), Some("oops"));
+    }
+}
+
+
+#[test]
+fn grok_stop_clears_in_progress_to_success() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Grok,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext {
+            query: Some("你是什么模型？".to_owned()),
+            ..Default::default()
+        },
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Grok,
+        event: CLIAgentEventType::Stop,
+        session_id: Some("01a1541a-77d5-7003-b431-5795baaaf94c".to_owned()),
+        cwd: Some(
+            "/Users/admin/.warp/worktrees/dip-agent/scm-conflict-2182582-4736303-release-602"
+                .to_owned(),
+        ),
+        project: Some("scm-conflict-2182582-4736303-release-602".to_owned()),
+        payload: CLIAgentEventPayload {
+            query: Some("你是什么模型？".to_owned()),
+            response: Some("我是 Grok 4.7".to_owned()),
+            ..Default::default()
+        },
+    };
+
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Success)
+    );
+    assert_eq!(session.status, CLIAgentSessionStatus::Success);
+}
+
+#[test]
+fn parse_grok_stop_notification() {
+    let body = r#"{"v":1,"agent":"grok","event":"stop","session_id":"abc","cwd":"/tmp/proj","project":"proj","query":"你是什么模型？","response":"我是 Grok 4.7"}"#;
+    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+    assert_eq!(notif.agent, CLIAgent::Grok);
+    assert_eq!(notif.event, CLIAgentEventType::Stop);
+    assert_eq!(notif.payload.query.as_deref(), Some("你是什么模型？"));
+}
+
+#[test]
+fn grok_idle_prompt_after_turn_sets_success() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Grok,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext {
+            query: Some("你是什么模型？".to_owned()),
+            response: Some("我是 Grok 4.7".to_owned()),
+            ..Default::default()
+        },
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Grok,
+        event: CLIAgentEventType::IdlePrompt,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload {
+            summary: Some("Grok is waiting for your input".to_owned()),
+            ..Default::default()
+        },
+    };
+
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Success)
+    );
+}
+
+
+#[test]
+fn grok_turn_complete_message_promotes_idle_to_success() {
+    // session_ready / turn_complete after a Q&A arrives as IdlePrompt (or Stop)
+    // while the session is still Idle (never saw PromptSubmit). Must be Done.
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Grok,
+        status: CLIAgentSessionStatus::Idle,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+
+    let body = r#"{"v":1,"agent":"grok","event":"stop","session_id":"01a1541a","query":"你是什么模型？","summary":"你是什么模型？"}"#;
+    let event = parse_event(Some("warp://cli-agent"), body).unwrap();
+    assert_eq!(event.event, CLIAgentEventType::Stop);
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Success)
+    );
+
+    // Same completion delivered as idle_prompt with the user query attached.
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Grok,
+        status: CLIAgentSessionStatus::Idle,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+    let body = r#"{"v":1,"agent":"grok","event":"idle_prompt","query":"你是什么模型？","summary":"Grok is waiting for your input"}"#;
+    let event = parse_event(Some("warp://cli-agent"), body).unwrap();
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Success)
+    );
+    assert_eq!(session.status, CLIAgentSessionStatus::Success);
+}
+
+#[test]
+fn grok_idle_prompt_without_local_query_still_succeeds() {
+    // Grok idle_prompt implies a turn already ended even if PromptSubmit was missed.
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Grok,
+        status: CLIAgentSessionStatus::Idle,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+    let body = r#"{"v":1,"agent":"grok","event":"idle_prompt","summary":"Grok is waiting for your input"}"#;
+    let event = parse_event(Some("warp://cli-agent"), body).unwrap();
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Success)
+    );
+    assert_eq!(session.status, CLIAgentSessionStatus::Success);
+}
+
+#[test]
+fn claude_cold_idle_prompt_without_query_stays_idle() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::Idle,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+    let body = r#"{"v":1,"agent":"claude","event":"idle_prompt","summary":"Claude is waiting for your input"}"#;
+    let event = parse_event(Some("warp://cli-agent"), body).unwrap();
+    assert_eq!(session.apply_event(&event), None);
+    assert_eq!(session.status, CLIAgentSessionStatus::Idle);
+}
+
+#[test]
+fn claude_stop_from_in_progress_sets_success() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext {
+            query: Some("refactor auth".to_owned()),
+            ..Default::default()
+        },
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+    let body = r#"{"v":1,"agent":"claude","event":"stop","query":"refactor auth","response":"done"}"#;
+    let event = parse_event(Some("warp://cli-agent"), body).unwrap();
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Success)
+    );
+    assert_eq!(session.status, CLIAgentSessionStatus::Success);
+}
+
+#[test]
+fn claude_prompt_submit_then_idle_prompt_sets_success() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::Idle,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+    let submit = parse_event(
+        Some("warp://cli-agent"),
+        r#"{"v":1,"agent":"claude","event":"prompt_submit","query":"hi"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        session.apply_event(&submit),
+        Some(CLIAgentSessionStatus::InProgress)
+    );
+    let idle = parse_event(
+        Some("warp://cli-agent"),
+        r#"{"v":1,"agent":"claude","event":"idle_prompt","summary":"Claude is waiting for your input"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        session.apply_event(&idle),
+        Some(CLIAgentSessionStatus::Success)
+    );
+    assert_eq!(session.status, CLIAgentSessionStatus::Success);
+}
+
+#[test]
+fn codex_osc9_stop_from_idle_sets_success() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Codex,
+        status: CLIAgentSessionStatus::Idle,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+    // Same shape CodexSessionHandler emits for turn-complete OSC 9.
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Codex,
+        event: CLIAgentEventType::Stop,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload {
+            query: Some("Agent turn complete".to_owned()),
+            ..Default::default()
+        },
+    };
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Success)
+    );
+    assert_eq!(session.status, CLIAgentSessionStatus::Success);
+}
+
+#[test]
+fn codex_approval_sets_waiting() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Codex,
+        status: CLIAgentSessionStatus::Idle,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Codex,
+        event: CLIAgentEventType::PermissionRequest,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload {
+            summary: Some("Approval requested: rm -rf /tmp/foo".to_owned()),
+            ..Default::default()
+        },
+    };
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Waiting {
+            message: Some("Approval requested: rm -rf /tmp/foo".to_owned())
+        })
+    );
+}
+
+#[test]
+fn codex_structured_prompt_submit_then_stop() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Codex,
+        status: CLIAgentSessionStatus::Idle,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+    let submit = parse_event(
+        Some("warp://cli-agent"),
+        r#"{"v":1,"agent":"codex","event":"prompt_submit","query":"你是什么模型？"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        session.apply_event(&submit),
+        Some(CLIAgentSessionStatus::InProgress)
+    );
+    let stop = parse_event(
+        Some("warp://cli-agent"),
+        r#"{"v":1,"agent":"codex","event":"stop","query":"你是什么模型？","response":"我是 Codex"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        session.apply_event(&stop),
+        Some(CLIAgentSessionStatus::Success)
+    );
+    assert_eq!(session.status, CLIAgentSessionStatus::Success);
+}
+
+
+#[test]
+fn prompt_submit_moves_idle_to_in_progress() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Codex,
+        status: CLIAgentSessionStatus::Idle,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Codex,
+        event: CLIAgentEventType::PromptSubmit,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload {
+            query: Some("hello".into()),
+            ..Default::default()
+        },
+    };
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::InProgress)
+    );
+    assert_eq!(session.status, CLIAgentSessionStatus::InProgress);
 }

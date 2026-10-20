@@ -285,13 +285,15 @@ pub(crate) fn activities_from_terminal_sources(
 
 fn phase_from_cli_status(status: &CLIAgentSessionStatus) -> Option<WorkspaceAgentPhase> {
     match status {
+        CLIAgentSessionStatus::Idle => Some(WorkspaceAgentPhase::Idle),
         CLIAgentSessionStatus::InProgress => Some(WorkspaceAgentPhase::InProgress),
         // Permission / question → yellow `?` (Orca waiting/permission).
         CLIAgentSessionStatus::Waiting { .. } => Some(WorkspaceAgentPhase::Waiting),
-        // True stuck → red Blocked.
+        // True stuck → red Blocked (same glyph family as Failed).
         CLIAgentSessionStatus::Blocked { .. } => Some(WorkspaceAgentPhase::Blocked),
         // Done 残留:成功后仍保留品牌图标 + 完成勾。
         CLIAgentSessionStatus::Success => Some(WorkspaceAgentPhase::Done),
+        CLIAgentSessionStatus::Failed { .. } => Some(WorkspaceAgentPhase::Failed),
     }
 }
 

@@ -129,6 +129,10 @@ use crate::terminal::cli_agent_sessions::event::{
     CLI_AGENT_NOTIFICATION_SENTINEL,
 };
 use crate::terminal::cli_agent_sessions::listener::{is_agent_supported, CLIAgentSessionListener};
+use crate::terminal::cli_agent_sessions::tui_status::{
+    needs_tui_mid_turn_inference, pty_bytes_look_like_submit, screen_indicates_agent_working,
+    status_can_start_turn,
+};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
 use crate::terminal::cli_agent_sessions::{
@@ -7522,6 +7526,12 @@ impl TerminalView {
 
         let bytes = data.into();
         let bytes_vec = bytes.to_vec();
+        // Codex/Grok/DeepSeek: typing Enter in the agent TUI often never delivers
+        // UserPromptSubmit OSC (hooks run off-PTY). Infer mid-turn so the sidebar
+        // spinner matches on-screen "Working".
+        if pty_bytes_look_like_submit(&bytes_vec) {
+            self.maybe_infer_cli_agent_prompt_submit_from_pty_enter(ctx);
+        }
         self.clear_selected_blocks(ctx);
         self.update_scroll_position_locking(ScrollPositionUpdate::AfterWriteUserBytesToPty, ctx);
         self.write_to_pty(bytes, ctx);
@@ -9730,7 +9740,11 @@ impl TerminalView {
                 );
             }
             ModelEvent::CursorBlinkingChange(_) => {}
-            ModelEvent::MouseCursorDirty => {}
+            ModelEvent::MouseCursorDirty => {
+                // Cheap backup when Enter inference missed (paste-submit, auto-continue):
+                // Codex paints "Working (… esc to interrupt)" on the alt screen.
+                self.maybe_infer_cli_agent_in_progress_from_screen(ctx);
+            }
             ModelEvent::Bell => {
                 if *TerminalSettings::as_ref(ctx).use_audible_bell {
                     if let Err(e) = AudibleBell::as_ref(ctx).ring() {
@@ -10047,11 +10061,17 @@ impl TerminalView {
                                             {
                                                 let remote_host =
                                                     me.active_session_remote_host(ctx);
+                                                // All CLI agents sit at a prompt until PromptSubmit
+                                                // (structured) or an OSC 9 completion (Codex/DeepSeek).
+                                                // Starting InProgress left a perpetual spinner when
+                                                // hooks/notifications never arrived — same class as
+                                                // the Grok cold-start bug.
+                                                let initial_status = CLIAgentSessionStatus::Idle;
                                                 sessions_model.set_session(
                                                     view_id,
                                                     CLIAgentSession {
                                                         agent,
-                                                        status: CLIAgentSessionStatus::InProgress,
+                                                        status: initial_status,
                                                         session_context:
                                                             CLIAgentSessionContext {
                                                                 model: model_label,
@@ -10076,11 +10096,23 @@ impl TerminalView {
                                         },
                                     );
 
-                                    // 使用 OSC 9 通知的 agent 不会发结构化 SessionStart 事件，
-                                    // 因此在命令检测时主动创建监听器。
-                                    if let Some((agent @ (CLIAgent::Codex | CLIAgent::DeepSeek), _)) =
-                                        detection
+                                    // Codex/DeepSeek/Grok: register listener without SessionStart.
+                                    // Grok + Codex: auto-install OSC 777 status hooks (PromptSubmit/
+                                    // Stop) so the sidebar shows Running → Done even when focused
+                                    // (Codex OSC 9 alone defaults to unfocused-only).
+                                    if let Some((
+                                        agent @ (CLIAgent::Codex
+                                        | CLIAgent::DeepSeek
+                                        | CLIAgent::Grok),
+                                        _,
+                                    )) = detection
                                     {
+                                        if matches!(agent, CLIAgent::Grok) {
+                                            let _ = crate::terminal::cli_agent_sessions::plugin_manager::grok::install_grok_hooks();
+                                        }
+                                        if matches!(agent, CLIAgent::Codex) {
+                                            let _ = crate::terminal::cli_agent_sessions::plugin_manager::codex::install_codex_hooks();
+                                        }
                                         me.register_cli_agent_listener_without_session_start_event(
                                             agent, ctx,
                                         );
@@ -11209,6 +11241,75 @@ impl TerminalView {
         ctx.notify();
     }
 
+    /// When the user presses Enter into a tracked CLI-agent TUI, move Idle/Done → InProgress.
+    /// Complements hooks that may never deliver PromptSubmit OSC into this PTY.
+    fn maybe_infer_cli_agent_prompt_submit_from_pty_enter(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(session) = CLIAgentSessionsModel::as_ref(ctx).session(self.view_id) else {
+            return;
+        };
+        if !needs_tui_mid_turn_inference(session.agent) {
+            return;
+        }
+        if !status_can_start_turn(&session.status) {
+            return;
+        }
+        let agent = session.agent;
+        let event = CLIAgentEvent {
+            v: 1,
+            agent,
+            event: CLIAgentEventType::PromptSubmit,
+            session_id: session.session_context.session_id.clone(),
+            cwd: session.session_context.cwd.clone(),
+            project: session.session_context.project.clone(),
+            payload: CLIAgentEventPayload::default(),
+        };
+        CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions_model, ctx| {
+            sessions_model.update_from_event(self.view_id, &event, ctx);
+        });
+    }
+
+    /// If alt-screen text shows Codex-style Working, force InProgress while still Idle/Done.
+    fn maybe_infer_cli_agent_in_progress_from_screen(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(session) = CLIAgentSessionsModel::as_ref(ctx).session(self.view_id) else {
+            return;
+        };
+        if !needs_tui_mid_turn_inference(session.agent) {
+            return;
+        }
+        if !status_can_start_turn(&session.status) {
+            return;
+        }
+        let screen = {
+            let model = self.model.lock();
+            if !model.is_alt_screen_active() {
+                return;
+            }
+            model.alt_screen().output_to_string()
+        };
+        if !screen_indicates_agent_working(&screen) {
+            return;
+        }
+        let agent = session.agent;
+        let event = CLIAgentEvent {
+            v: 1,
+            agent,
+            event: CLIAgentEventType::PromptSubmit,
+            session_id: session.session_context.session_id.clone(),
+            cwd: session.session_context.cwd.clone(),
+            project: session.session_context.project.clone(),
+            payload: CLIAgentEventPayload::default(),
+        };
+        CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions_model, ctx| {
+            sessions_model.update_from_event(self.view_id, &event, ctx);
+        });
+    }
+
     /// Handles an OSC 777 event with the `warp://cli-agent` sentinel title.
     /// On `session_start`, creates a `CLIAgentSessionListener` that subscribes
     /// to subsequent events from this terminal's PTY.
@@ -11225,9 +11326,12 @@ impl TerminalView {
         if !is_agent_supported(&notification.agent) {
             return;
         }
-        if !self.register_cli_agent_listener_from_event(&notification, ctx) {
-            return;
-        }
+        // Ensure a listener exists for rich-status / toast suppression. Always
+        // apply the event here as well: relying solely on the listener subscription
+        // left InProgress stuck when IdlePrompt/Stop were delivered only on this
+        // path (or the listener missed a fan-out). apply_event is idempotent when
+        // the listener also handles the same OSC.
+        let _ = self.register_cli_agent_listener_from_event(&notification, ctx);
 
         CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions_model, ctx| {
             sessions_model.update_from_event(self.view_id, &notification, ctx);
@@ -11441,12 +11545,15 @@ impl TerminalView {
                             ctx,
                         );
                     }
-                    CLIAgentSessionStatus::InProgress | CLIAgentSessionStatus::Success => {
-                        // Auto-open rich input when the agent resumes or completes.
+                    CLIAgentSessionStatus::InProgress
+                    | CLIAgentSessionStatus::Success
+                    | CLIAgentSessionStatus::Idle => {
+                        // Auto-open rich input when the agent resumes, completes, or idles.
                         if !self.has_active_cli_agent_input_session(ctx) {
                             self.open_cli_agent_rich_input(CLIAgentInputEntrypoint::AutoShow, ctx);
                         }
                     }
+                    CLIAgentSessionStatus::Failed { .. } => {}
                 }
             }
         }
@@ -11454,7 +11561,10 @@ impl TerminalView {
         // Desktop notifications for CLI agents use the user's notification settings
         // directly. CLI agent notifications are explicit agent lifecycle events,
         // so they should still notify when Zap is focused.
-        if matches!(status, CLIAgentSessionStatus::InProgress) {
+        if matches!(
+            status,
+            CLIAgentSessionStatus::InProgress | CLIAgentSessionStatus::Idle
+        ) {
             return;
         }
 

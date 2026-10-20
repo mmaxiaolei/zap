@@ -744,6 +744,25 @@ impl TerminalView {
             return;
         }
 
+        // Same mid-turn status as rich-input submit: PromptSubmit → InProgress
+        // so the sidebar spinner starts even when hooks are slow/missing.
+        let view_id = self.view_id;
+        let event = CLIAgentEvent {
+            v: 1,
+            agent,
+            event: CLIAgentEventType::PromptSubmit,
+            session_id: None,
+            cwd: None,
+            project: None,
+            payload: CLIAgentEventPayload {
+                query: Some(String::from_utf8_lossy(&text_bytes).into_owned()),
+                ..Default::default()
+            },
+        };
+        CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions_model, ctx| {
+            sessions_model.update_from_event(view_id, &event, ctx);
+        });
+
         let strategy = rich_input_submit_strategy(agent);
         self.write_cli_agent_text_then_submit(text_bytes, strategy, ctx);
     }

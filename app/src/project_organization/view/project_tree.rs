@@ -1358,7 +1358,7 @@ impl ProjectTreePanel {
                             .with_cross_axis_alignment(CrossAxisAlignment::Center)
                             .with_child(
                                 ConstrainedBox::new(
-                                    WarpIcon::Check
+                                    WarpIcon::CheckCircleBroken
                                         .to_warpui_icon(ThemeFill::Solid(theme.ansi_fg_green()))
                                         .finish(),
                                 )
@@ -1388,19 +1388,37 @@ impl ProjectTreePanel {
                         ))
                     }
                     WorkspaceAgentPhase::Done => ConstrainedBox::new(
-                        WarpIcon::Check
+                        WarpIcon::CheckCircleBroken
                             .to_warpui_icon(ThemeFill::Solid(theme.ansi_fg_green()))
                             .finish(),
                     )
                     .with_width(11.)
                     .with_height(11.)
                     .finish(),
-                    WorkspaceAgentPhase::Waiting => Text::new_inline(
-                        "?",
-                        appearance.ui_font_family(),
-                        appearance.ui_font_footnote(),
+                    // Soft amber disc + "?" (north-star st-wait).
+                    WorkspaceAgentPhase::Waiting => ConstrainedBox::new(
+                        Container::new(
+                            Flex::row()
+                                .with_main_axis_size(MainAxisSize::Max)
+                                .with_main_axis_alignment(MainAxisAlignment::Center)
+                                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                                .with_child(
+                                    Text::new_inline(
+                                        "?",
+                                        appearance.ui_font_family(),
+                                        appearance.ui_font_footnote(),
+                                    )
+                                    .with_color(color.into())
+                                    .finish(),
+                                )
+                                .finish(),
+                        )
+                        .with_background(ColorU::new(240, 180, 41, 38))
+                        .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
+                        .finish(),
                     )
-                    .with_color(color.into())
+                    .with_width(11.)
+                    .with_height(11.)
                     .finish(),
                     WorkspaceAgentPhase::Idle
                     | WorkspaceAgentPhase::Blocked
