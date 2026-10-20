@@ -43,10 +43,12 @@ use super::{
     should_show_repository_hover_actions,
     should_show_workspace_hover_actions, synchronize_mouse_states, tab_count_badge_label,
     tab_name_offset, tab_status_icon_offset, tree_name_offset, tree_status_icon_offset,
-    tree_trailing_actions_width, workspace_count_pill_label, workspace_row_is_selected,
-    workspace_row_position_id, workspace_shows_branch_subtitle, ProjectTreeEvent,
-    ProjectTreePanel, ProjectTreeState, RepositoryTreeNode, TabLayout, WorkspaceTreeNode,
-    WorkspaceVisualState, TREE_TRAILING_ACTION_SPACING, TREE_TRAILING_META_WIDTH,
+    depth_stack_tab_fill, tree_trailing_actions_width, workspace_count_pill_label,
+    workspace_group_is_selected, workspace_row_is_selected, workspace_row_position_id,
+    workspace_row_shows_selection_accent, workspace_shows_branch_subtitle, DepthStackTabFill,
+    ProjectTreeEvent, ProjectTreePanel, ProjectTreeState, RepositoryTreeNode, TabLayout,
+    WorkspaceTreeNode, WorkspaceVisualState, DEPTH_STACK_CHIP_BG, DEPTH_STACK_TAB_HOVER_WASH,
+    TREE_TRAILING_ACTION_SPACING, TREE_TRAILING_META_WIDTH,
 };
 
 struct ProjectTreeTestHost {
@@ -580,24 +582,88 @@ fn tab_count_badge_label_is_numeric_and_caps_large_counts() {
 
 #[test]
 fn workspace_visual_state_keeps_selection_and_running_separate() {
+    // Depth Stack: selection accent-on-row is always off; chip / label are separate.
     let selected_static = WorkspaceVisualState::new(true, false, None);
-    assert!(selected_static.should_render_selection_accent());
+    assert!(!selected_static.should_render_selection_accent());
     assert!(!selected_static.should_render_selection_frame());
+    assert!(selected_static.should_render_active_tab_chip());
+    assert!(selected_static.should_emphasize_workspace_label());
     assert!(!selected_static.should_render_running_indicator());
 
     let running_unselected = WorkspaceVisualState::new(false, true, None);
     assert!(!running_unselected.should_render_selection_accent());
     assert!(!running_unselected.should_render_selection_frame());
+    assert!(!running_unselected.should_render_active_tab_chip());
+    assert!(!running_unselected.should_emphasize_workspace_label());
     assert!(running_unselected.should_render_running_indicator());
 
     let selected_running = WorkspaceVisualState::new(true, true, None);
-    assert!(selected_running.should_render_selection_accent());
+    assert!(!selected_running.should_render_selection_accent());
     assert!(!selected_running.should_render_selection_frame());
+    assert!(selected_running.should_render_active_tab_chip());
+    assert!(selected_running.should_emphasize_workspace_label());
     assert!(selected_running.should_render_running_indicator());
 
     let idle = WorkspaceVisualState::new(false, false, None);
     assert!(!idle.should_render_selection_accent());
+    assert!(!idle.should_render_active_tab_chip());
     assert!(!idle.should_fill_idle_row());
+}
+
+#[test]
+fn depth_stack_group_selection_matches_active_workspace() {
+    let selected = RepositoryWorkspaceId(uuid::Uuid::from_u128(1));
+    let other = RepositoryWorkspaceId(uuid::Uuid::from_u128(2));
+    assert!(workspace_group_is_selected(Some(selected), selected));
+    assert!(!workspace_group_is_selected(Some(selected), other));
+    assert!(!workspace_group_is_selected(None, selected));
+}
+
+#[test]
+fn depth_stack_tab_fill_keeps_chip_distinct_from_hover_wash() {
+    // Active always chip — even while hovered (no second wash layer).
+    assert_eq!(
+        depth_stack_tab_fill(true, false),
+        DepthStackTabFill::ActiveChip
+    );
+    assert_eq!(
+        depth_stack_tab_fill(true, true),
+        DepthStackTabFill::ActiveChip
+    );
+    assert_eq!(
+        depth_stack_tab_fill(false, true),
+        DepthStackTabFill::HoverWash
+    );
+    assert_eq!(depth_stack_tab_fill(false, false), DepthStackTabFill::None);
+
+    // Solid chip bg must not equal the translucent hover wash (different look on elevated group).
+    assert_ne!(DEPTH_STACK_CHIP_BG, DEPTH_STACK_TAB_HOVER_WASH);
+    assert!(DEPTH_STACK_CHIP_BG.a == 255, "chip is opaque elevated fill");
+    assert!(
+        DEPTH_STACK_TAB_HOVER_WASH.a <= 18,
+        "hover wash stays a light sweep"
+    );
+}
+
+#[test]
+fn depth_stack_never_paints_workspace_row_selection_accent() {
+    let workspace_id = RepositoryWorkspaceId(uuid::Uuid::from_u128(7));
+    let collapsed = WorkspaceTreeNode {
+        workspace_id,
+        display_name: "feat".into(),
+        branch: "feat".into(),
+        expanded: false,
+        tab_count: 2,
+        tabs: vec![],
+    };
+    let expanded = WorkspaceTreeNode {
+        expanded: true,
+        ..collapsed.clone()
+    };
+    // Whether collapsed or expanded, Depth Stack uses the group wrapper — not row accent.
+    assert!(!workspace_row_shows_selection_accent(&collapsed, true));
+    assert!(!workspace_row_shows_selection_accent(&expanded, true));
+    assert!(!workspace_row_shows_selection_accent(&collapsed, false));
 }
 
 #[test]
@@ -609,7 +675,8 @@ fn workspace_visual_state_hides_running_dot_when_agent_is_present() {
         model_label: None,
     };
     let visual_state = WorkspaceVisualState::new(true, true, Some(activity.clone()));
-    assert!(visual_state.should_render_selection_accent());
+    assert!(!visual_state.should_render_selection_accent());
+    assert!(visual_state.should_render_active_tab_chip());
     assert!(!visual_state.should_render_running_indicator());
     assert_eq!(
         visual_state.activity_slot(),

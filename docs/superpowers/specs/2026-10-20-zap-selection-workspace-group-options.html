@@ -1,0 +1,1109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Zap · Workspace 组卡片选中态 · 修订方案</title>
+<style>
+  /* ═══════════════════════════════════════════════════════════
+     修订版：选中容器必须包住「整个 workspace + 其下全部子 tab」
+     组内再单独高亮当前激活 tab。对齐用户反馈与 Orca 卡片感。
+     ═══════════════════════════════════════════════════════════ */
+  :root {
+    --z-bg:          #070708;
+    --z-surface-0:   #0a0a0a;
+    --z-surface-1:   #0f0f11;
+    --z-surface-2:   #141416;
+    --z-surface-3:   #1a1a1d;
+    --z-surface-4:   #222226;
+    --z-surface-5:   #2a2a2f;
+
+    --z-hairline:    rgba(255,255,255,.07);
+    --z-hairline-strong: rgba(255,255,255,.12);
+
+    --z-text:        #ececef;
+    --z-text-2:      #b4b4bc;
+    --z-muted:       #8a8a94;
+    --z-faint:       #5c5c66;
+
+    --z-accent:      #1677ff;
+    --z-accent-strong:#0958d9;
+    --z-accent-soft: rgba(22,119,255,.14);
+    --z-accent-softer: rgba(22,119,255,.08);
+
+    --orca-orange:   #f5a524;
+    --orca-orange-soft: rgba(245,165,36,.16);
+    --orca-orange-border: rgba(245,165,36,.38);
+
+    --z-idle:        rgba(163,163,170,.45);
+    --z-working:     #e6b84d;
+    --z-done:        #3dd68c;
+    --z-busy-dot:    #3dd68c;
+
+    --z-radius-sm:   6px;
+    --z-radius-md:   10px;
+    --z-radius-lg:   14px;
+    --z-radius-pill: 999px;
+
+    --font: system-ui, -apple-system, "PingFang SC", "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: var(--font);
+    background:
+      radial-gradient(1100px 520px at 12% -8%, #121826 0%, transparent 55%),
+      radial-gradient(900px 420px at 88% 4%, rgba(22,119,255,.07), transparent 50%),
+      var(--z-bg);
+    color: var(--z-text);
+    padding: 28px 28px 72px;
+    line-height: 1.45;
+    min-height: 100vh;
+  }
+
+  .page-head { max-width: 1480px; margin: 0 auto 18px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10px; font-weight: 650; letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--z-accent);
+    background: var(--z-accent-soft);
+    border: 1px solid rgba(22,119,255,.22);
+    padding: 3px 9px; border-radius: var(--z-radius-pill);
+    margin-bottom: 10px;
+  }
+  .pill i {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--z-accent);
+    box-shadow: 0 0 0 3px rgba(22,119,255,.2);
+  }
+  .page-head h1 {
+    margin: 0 0 6px;
+    font-size: 18px;
+    font-weight: 650;
+    letter-spacing: -.02em;
+  }
+  .page-head .lead {
+    margin: 0 0 10px;
+    max-width: 980px;
+    font-size: 13px;
+    color: var(--z-muted);
+  }
+  .page-head .lead code {
+    font-family: var(--mono); font-size: 11.5px;
+    color: #9ec5ff;
+    background: rgba(22,119,255,.1);
+    border: 1px solid rgba(22,119,255,.2);
+    border-radius: 4px; padding: 1px 5px;
+  }
+  .reject-banner {
+    max-width: 1480px; margin: 0 auto 18px;
+    padding: 10px 14px;
+    background: rgba(239,68,68,.07);
+    border: 1px solid rgba(239,68,68,.22);
+    border-radius: var(--z-radius-md);
+    font-size: 12.5px; color: #e8a0a0;
+  }
+  .reject-banner strong { color: #f0b4b4; }
+  .reject-banner em { color: #9ee0bc; font-style: normal; font-weight: 600; }
+
+  .options {
+    max-width: 1480px; margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+  }
+  @media (max-width: 1100px) {
+    .options { grid-template-columns: 1fr; }
+  }
+
+  .option {
+    background: rgba(255,255,255,.02);
+    border: 1px solid var(--z-hairline-strong);
+    border-radius: var(--z-radius-lg);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .option-meta {
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--z-hairline);
+    background: rgba(0,0,0,.25);
+  }
+  .option-meta .tagrow {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .opt-letter {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 7px;
+    font-size: 12px; font-weight: 750;
+    background: var(--z-accent);
+    color: #fff;
+  }
+  .opt-letter.orange { background: var(--orca-orange); color: #1a1200; }
+  .opt-letter.hybrid {
+    background: linear-gradient(135deg, var(--orca-orange) 45%, var(--z-accent) 55%);
+    color: #fff;
+  }
+  .opt-letter.soft {
+    background: var(--z-surface-5);
+    color: #9ec5ff;
+    border: 1px solid rgba(22,119,255,.35);
+  }
+  .opt-title {
+    font-size: 14px; font-weight: 650; letter-spacing: -.01em;
+  }
+  .opt-philosophy {
+    font-size: 11px; color: var(--z-faint);
+    font-family: var(--mono);
+  }
+  .opt-desc {
+    margin: 0 0 8px;
+    font-size: 12.5px; color: var(--z-text-2);
+  }
+  .procon {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    font-size: 11.5px;
+  }
+  .procon .box {
+    border-radius: var(--z-radius-sm);
+    padding: 7px 9px;
+    line-height: 1.4;
+  }
+  .procon .pro {
+    background: rgba(61,214,140,.08);
+    border: 1px solid rgba(61,214,140,.2);
+    color: #9ee0bc;
+  }
+  .procon .con {
+    background: rgba(239,68,68,.07);
+    border: 1px solid rgba(239,68,68,.18);
+    color: #e8a0a0;
+  }
+  .procon strong {
+    display: block; font-size: 10px; font-weight: 700;
+    letter-spacing: .04em; text-transform: uppercase;
+    margin-bottom: 3px; opacity: .85;
+  }
+
+  /* ── Mini app chrome ── */
+  .app {
+    background: var(--z-surface-1);
+    display: flex; flex-direction: column;
+    min-height: 420px;
+    flex: 1;
+  }
+  .titlebar {
+    display: flex; align-items: center; gap: 8px;
+    height: 32px; padding: 0 10px;
+    background: var(--z-surface-0);
+    border-bottom: 1px solid var(--z-hairline);
+    flex-shrink: 0;
+  }
+  .traffic { display: flex; gap: 5px; padding: 0 2px; }
+  .traffic span {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: #2a2a2e; border: 1px solid rgba(255,255,255,.06);
+  }
+  .traffic .r { background: #ff5f57; border-color: #e0443e; }
+  .traffic .y { background: #febc2e; border-color: #dea123; }
+  .traffic .g { background: #28c840; border-color: #1aad2f; }
+  .tb-title {
+    flex: 1; text-align: center;
+    font-size: 11px; font-weight: 550; color: var(--z-muted);
+  }
+
+  .body {
+    display: grid;
+    grid-template-columns: 228px 1fr;
+    flex: 1; min-height: 0;
+  }
+
+  .sidebar {
+    background: var(--z-surface-2);
+    border-right: 1px solid var(--z-hairline);
+    display: flex; flex-direction: column;
+    min-height: 0;
+    font-size: 11.5px;
+  }
+  .side-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 10px 6px;
+    font-size: 10.5px; font-weight: 650;
+    color: var(--z-text-2);
+  }
+  .side-add {
+    font-size: 10px; font-weight: 550;
+    color: var(--z-muted);
+    border: 1px solid var(--z-hairline);
+    background: var(--z-surface-3);
+    border-radius: 5px;
+    padding: 2px 6px;
+  }
+  .tree { padding: 2px 0 12px; overflow: auto; flex: 1; }
+
+  .row {
+    display: flex; align-items: center; gap: 5px;
+    padding: 2px 6px;
+    min-height: 24px;
+    border-radius: var(--z-radius-sm);
+    margin: 1px 5px;
+    color: var(--z-text-2);
+    position: relative;
+  }
+  .row .name {
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .row.repo { font-weight: 650; color: var(--z-text); margin-top: 2px; }
+  .chev { width: 9px; color: var(--z-faint); flex-shrink: 0; font-size: 8px; }
+  .badge {
+    flex-shrink: 0; min-width: 16px; height: 15px; padding: 0 4px;
+    border-radius: var(--z-radius-pill);
+    background: var(--z-surface-4);
+    color: var(--z-muted); font-size: 9px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .dot-busy {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--z-busy-dot); flex-shrink: 0;
+  }
+  .st {
+    width: 10px; height: 10px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .st-idle {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--z-idle);
+  }
+  .st-work {
+    width: 7px; height: 7px; border-radius: 50%;
+    border: 1.5px solid var(--z-working);
+    border-top-color: transparent;
+    animation: spin .85s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .brand {
+    width: 12px; height: 12px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 2px; font-size: 8px; font-weight: 700;
+  }
+  .brand.openai { color: var(--z-text); background: #2a2a2e; }
+  .brand.grok { color: #111; background: #ececef; border-radius: 50%; }
+  .brand.claude { color: #D97757; }
+  .term {
+    width: 12px; height: 12px; flex-shrink: 0;
+    border-radius: 2px;
+    background: #1e1e22;
+    border: 1px solid rgba(255,255,255,.08);
+    display: grid; place-items: center;
+    font-family: var(--mono); font-size: 7px; font-weight: 700;
+    color: var(--z-done); line-height: 1;
+  }
+  .title-main { color: var(--z-text); }
+  .title-dim { color: var(--z-muted); }
+  .brief {
+    width: 14px; height: 14px; flex-shrink: 0;
+    border-radius: 3px;
+    display: grid; place-items: center;
+    font-size: 9px;
+  }
+
+  /* ─── Workspace GROUP card (关键修复) ─── */
+  .ws-group {
+    margin: 4px 6px;
+    padding: 0;
+    border-radius: 0;
+    border: 1px solid transparent;
+    background: transparent;
+  }
+  .ws-group .ws-head {
+    display: flex; align-items: center; gap: 5px;
+    flex-wrap: wrap;
+    padding: 5px 8px 4px;
+    min-height: 26px;
+    color: var(--z-text-2);
+    font-weight: 550;
+    position: relative;
+  }
+  .ws-group .ws-head .name { flex: 1; min-width: 0; color: inherit; }
+  .ws-group .ws-sub {
+    display: flex; align-items: center; gap: 4px;
+    width: 100%;
+    font-size: 10px; color: var(--z-muted);
+    font-weight: 450; padding: 0 8px 4px 27px;
+  }
+  .ws-group .ws-sub .ok { color: var(--z-done); }
+
+  .ws-group .tab-row {
+    display: flex; align-items: center; gap: 5px;
+    padding: 3px 8px 3px 18px;
+    min-height: 24px;
+    margin: 1px 4px;
+    border-radius: var(--z-radius-sm);
+    color: var(--z-text-2);
+    position: relative;
+  }
+  .ws-group .tab-row .name {
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* Unselected sibling workspaces (outside any card) */
+  .ws-plain {
+    display: flex; align-items: center; gap: 5px;
+    padding: 2px 6px;
+    min-height: 24px;
+    border-radius: var(--z-radius-sm);
+    margin: 1px 5px;
+    color: var(--z-text-2);
+    padding-left: 14px;
+  }
+  .ws-plain .name {
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* Main pane (secondary — focus is sidebar group) */
+  .main {
+    background: var(--z-surface-3);
+    display: flex; flex-direction: column;
+    min-width: 0; min-height: 0;
+  }
+  .tabbar {
+    display: flex; align-items: stretch;
+    gap: 0;
+    padding: 0 6px;
+    height: 34px;
+    border-bottom: 1px solid var(--z-hairline);
+    background: rgba(0,0,0,.22);
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+  .tab {
+    display: flex; align-items: center; gap: 5px;
+    padding: 0 10px;
+    font-size: 11px;
+    color: var(--z-muted);
+    border: none; background: transparent;
+    position: relative;
+    white-space: nowrap;
+    max-width: 140px;
+  }
+  .tab .tlabel { overflow: hidden; text-overflow: ellipsis; }
+  .tab .x {
+    font-size: 10px; color: var(--z-faint); margin-left: 2px;
+    opacity: .55;
+  }
+  .tab .robot {
+    width: 12px; height: 12px; border-radius: 3px;
+    background: var(--z-surface-5);
+    display: grid; place-items: center;
+    font-size: 8px; flex-shrink: 0;
+  }
+  .tab.active-main {
+    color: var(--z-text);
+    background: rgba(255,255,255,.04);
+  }
+  .tab.active-main::before {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; top: 0;
+    height: 2px;
+    background: var(--z-accent);
+  }
+
+  .session {
+    flex: 1; padding: 12px 14px;
+    font-size: 11.5px; color: var(--z-text-2);
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .msg-user {
+    align-self: flex-end;
+    background: var(--z-surface-4);
+    border: 1px solid var(--z-hairline);
+    border-radius: var(--z-radius-md);
+    padding: 7px 10px;
+    color: var(--z-text);
+    max-width: 88%;
+  }
+  .msg-agent {
+    align-self: flex-start;
+    border-left: 2px solid rgba(22,119,255,.35);
+    padding: 2px 0 2px 10px;
+    max-width: 92%;
+  }
+  .msg-agent .role {
+    font-size: 9px; font-weight: 650;
+    color: var(--z-faint); letter-spacing: .04em;
+    text-transform: uppercase; margin-bottom: 3px;
+  }
+  .composer {
+    padding: 8px 10px 10px;
+    border-top: 1px solid var(--z-hairline);
+    background: rgba(0,0,0,.12);
+  }
+  .composer-box {
+    background: var(--z-surface-2);
+    border: 1px solid var(--z-hairline-strong);
+    border-radius: var(--z-radius-md);
+    padding: 7px 9px;
+    font-size: 11.5px; color: var(--z-faint);
+  }
+  .statusbar {
+    display: flex; align-items: center; gap: 10px;
+    height: 22px; padding: 0 10px;
+    background: var(--z-surface-0);
+    border-top: 1px solid var(--z-hairline);
+    font-size: 10px; color: var(--z-faint);
+    flex-shrink: 0;
+  }
+  .statusbar .sep {
+    width: 1px; height: 9px; background: var(--z-hairline-strong);
+  }
+
+  .callout {
+    font-size: 10px;
+    color: var(--z-faint);
+    padding: 4px 10px 0;
+    font-family: var(--mono);
+  }
+  .callout b { color: #9ec5ff; font-weight: 650; }
+
+  /* ════════════════════════════════
+     OPTION A — 蓝组卡片 + 左 pill 激活 tab
+     ════════════════════════════════ */
+  .a .ws-group.is-selected {
+    background: #161820;
+    border: 1px solid rgba(22,119,255,.32);
+    border-radius: var(--z-radius-md);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,.04) inset,
+      0 0 0 1px rgba(22,119,255,.06),
+      0 6px 18px rgba(22,119,255,.1),
+      0 2px 8px rgba(0,0,0,.35);
+    padding: 3px 0 5px;
+    margin: 4px 6px;
+  }
+  .a .ws-group.is-selected::before {
+    content: "";
+    position: absolute; /* will be relative to group if positioned */
+  }
+  .a .ws-group.is-selected {
+    position: relative;
+  }
+  .a .ws-group.is-selected > .group-rail {
+    position: absolute;
+    left: 0; top: 8px; bottom: 8px;
+    width: 3px;
+    border-radius: var(--z-radius-pill);
+    background: var(--z-accent);
+    box-shadow: 0 0 8px rgba(22,119,255,.5);
+  }
+  .a .ws-group.is-selected .ws-head {
+    color: var(--z-text);
+    padding-left: 12px;
+  }
+  .a .ws-group.is-selected .brief {
+    background: var(--z-accent-soft);
+    color: #69b1ff;
+  }
+  .a .ws-group.is-selected .ws-sub { padding-left: 31px; }
+  .a .ws-group.is-selected .tab-row {
+    padding-left: 22px;
+    color: var(--z-muted);
+  }
+  .a .ws-group.is-selected .tab-row.is-active {
+    background: rgba(22,119,255,.12);
+    color: var(--z-text);
+    box-shadow: inset 3px 0 0 var(--z-accent);
+    padding-left: 19px;
+  }
+  .a .ws-group.is-selected .tab-row.is-active .name {
+    color: var(--z-text); font-weight: 600;
+  }
+
+  /* ════════════════════════════════
+     OPTION B — 蓝组卡片 + 填充激活 tab
+     ════════════════════════════════ */
+  .b .ws-group.is-selected {
+    position: relative;
+    background: #17191f;
+    border: 1px solid rgba(22,119,255,.28);
+    border-radius: var(--z-radius-md);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,.04) inset,
+      0 6px 18px rgba(0,0,0,.4);
+    padding: 3px 0 5px;
+    margin: 4px 6px;
+  }
+  .b .ws-group.is-selected .ws-head {
+    color: var(--z-text);
+    background: rgba(22,119,255,.08);
+    border-radius: 8px 8px 0 0;
+    margin: -3px 0 2px;
+    padding: 7px 10px 5px;
+  }
+  .b .ws-group.is-selected .brief {
+    background: var(--z-accent-soft);
+    color: #69b1ff;
+  }
+  .b .ws-group.is-selected .ws-sub {
+    padding: 0 10px 6px 32px;
+    border-bottom: 1px solid rgba(255,255,255,.05);
+    margin-bottom: 3px;
+  }
+  .b .ws-group.is-selected .tab-row {
+    margin: 2px 6px;
+    padding-left: 14px;
+  }
+  .b .ws-group.is-selected .tab-row.is-active {
+    background: var(--z-accent);
+    color: #fff;
+    border-radius: 7px;
+    box-shadow: 0 2px 8px rgba(22,119,255,.35);
+  }
+  .b .ws-group.is-selected .tab-row.is-active .name {
+    color: #fff; font-weight: 650;
+  }
+  .b .ws-group.is-selected .tab-row.is-active .st-work {
+    border-color: #fff;
+    border-top-color: transparent;
+  }
+  .b .ws-group.is-selected .tab-row.is-active .brand.openai {
+    background: rgba(255,255,255,.2);
+    color: #fff;
+  }
+
+  /* ════════════════════════════════
+     OPTION C — 橙组卡片（Orca）+ 顶条激活 tab
+     ════════════════════════════════ */
+  .c .ws-group.is-selected {
+    position: relative;
+    background: #1c1c1f;
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: var(--z-radius-md);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,.05) inset,
+      0 6px 16px rgba(0,0,0,.4);
+    padding: 3px 0 5px;
+    margin: 4px 6px;
+  }
+  .c .ws-group.is-selected > .group-rail {
+    position: absolute;
+    left: 0; top: 8px; bottom: 8px;
+    width: 3px;
+    border-radius: var(--z-radius-pill);
+    background: var(--orca-orange);
+    box-shadow: 0 0 8px rgba(245,165,36,.45);
+  }
+  .c .ws-group.is-selected .ws-head {
+    color: var(--z-text);
+    padding-left: 12px;
+  }
+  .c .ws-group.is-selected .brief {
+    background: var(--orca-orange-soft);
+    color: var(--orca-orange);
+  }
+  .c .ws-group.is-selected .ws-sub { padding-left: 31px; }
+  .c .ws-group.is-selected .tab-row {
+    padding-left: 22px;
+    margin: 2px 5px;
+  }
+  .c .ws-group.is-selected .tab-row.is-active {
+    background: rgba(255,255,255,.06);
+    color: var(--z-text);
+    border-radius: 6px;
+    box-shadow: inset 0 2.5px 0 0 var(--orca-orange);
+    padding-top: 5px;
+  }
+  .c .ws-group.is-selected .tab-row.is-active .name {
+    color: var(--z-text); font-weight: 600;
+  }
+
+  /* ════════════════════════════════
+     OPTION D — 橙组边框 + 蓝填充激活 tab（双色分工）
+     ════════════════════════════════ */
+  .d .ws-group.is-selected {
+    position: relative;
+    background: linear-gradient(180deg, #1a1814 0%, #161616 40%);
+    border: 1px solid var(--orca-orange-border);
+    border-radius: var(--z-radius-md);
+    box-shadow:
+      0 1px 0 rgba(245,165,36,.08) inset,
+      0 6px 18px rgba(0,0,0,.4);
+    padding: 3px 0 5px;
+    margin: 4px 6px;
+  }
+  .d .ws-group.is-selected > .group-rail {
+    position: absolute;
+    left: 0; top: 8px; bottom: 8px;
+    width: 3px;
+    border-radius: var(--z-radius-pill);
+    background: var(--orca-orange);
+    box-shadow: 0 0 8px rgba(245,165,36,.4);
+  }
+  .d .ws-group.is-selected .ws-head {
+    color: var(--z-text);
+    padding-left: 12px;
+  }
+  .d .ws-group.is-selected .brief {
+    background: var(--orca-orange-soft);
+    color: var(--orca-orange);
+  }
+  .d .ws-group.is-selected .ws-sub { padding-left: 31px; }
+  .d .ws-group.is-selected .tab-row {
+    padding-left: 22px;
+    margin: 2px 5px;
+  }
+  .d .ws-group.is-selected .tab-row.is-active {
+    background: rgba(22,119,255,.18);
+    border: 1px solid rgba(22,119,255,.35);
+    color: var(--z-text);
+    border-radius: 7px;
+    box-shadow: inset 3px 0 0 var(--z-accent);
+    padding-left: 19px;
+  }
+  .d .ws-group.is-selected .tab-row.is-active .name {
+    color: #cfe2ff; font-weight: 650;
+  }
+
+  /* Legend */
+  .legend {
+    max-width: 1480px; margin: 24px auto 0;
+    padding: 16px 18px;
+    background: rgba(255,255,255,.02);
+    border: 1px solid var(--z-hairline-strong);
+    border-radius: var(--z-radius-lg);
+    font-size: 12.5px; color: var(--z-text-2);
+  }
+  .legend h2 {
+    margin: 0 0 8px; font-size: 13px; font-weight: 650; color: var(--z-text);
+  }
+  .legend ul { margin: 0; padding-left: 18px; }
+  .legend li { margin: 5px 0; }
+  .legend code {
+    font-family: var(--mono); font-size: 11px;
+    color: #c8d4ff;
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--z-hairline);
+    border-radius: 4px; padding: 1px 5px;
+  }
+  .swatches {
+    display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px;
+  }
+  .swatch {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 11px; color: var(--z-muted);
+  }
+  .swatch i {
+    width: 14px; height: 14px; border-radius: 4px;
+    display: block;
+  }
+  .swatch .blue { background: #1677ff; }
+  .swatch .orange { background: #f5a524; }
+  .swatch .elev { background: #17191f; border: 1px solid rgba(22,119,255,.35); }
+  .swatch .fill { background: #1677ff; border-radius: 6px; }
+  .note {
+    max-width: 1480px; margin: 14px auto 0;
+    font-size: 11.5px; color: var(--z-faint);
+  }
+</style>
+</head>
+<body>
+  <header class="page-head">
+    <div class="pill"><i></i> Revision · Workspace Group Card</div>
+    <h1>Zap · Workspace 组卡片选中态 · 修订四方案</h1>
+    <p class="lead">
+      关键修复：选中容器必须包住 <code>worktree 头行 + 其下全部子 tab</code> 成一块卡片；
+      组内再单独高亮当前激活 tab。其它 workspace 在卡片外、无选中态。
+      色板：Zap 蓝 <code>#1677ff</code> · 可选 Orca 橙 <code>#f5a524</code>。未实现 Rust。
+    </p>
+  </header>
+
+  <div class="reject-banner">
+    <strong>相对上一版被拒原因：</strong>
+    先前 A–D 的圆角/边框只罩在 worktree <em>单行</em>上，子 tab 落在容器外。
+    用户要求：<em>「包住的是 workspace 连同其下的所有 tab，同时需要能清晰看到当前选中的是哪个 tab」</em>。
+  </div>
+
+  <div class="options">
+
+    <!-- ═══════════ A ═══════════ -->
+    <section class="option a">
+      <div class="option-meta">
+        <div class="tagrow">
+          <span class="opt-letter">A</span>
+          <span class="opt-title">蓝组卡片 · 左 pill 激活 tab</span>
+          <span class="opt-philosophy">group card + left inset pill</span>
+        </div>
+        <p class="opt-desc">整组抬升蓝边卡片 + 左侧蓝竖轨；组内激活 tab 用淡蓝底 + 左侧 inset pill。未激活 tab 仍在卡内、低对比可读。</p>
+        <div class="procon">
+          <div class="box pro"><strong>优点</strong>组边界清晰；激活与组同色系、易扫；实现是「父容器 + 子行 inset」两层。</div>
+          <div class="box con"><strong>缺点</strong>蓝轨 + 蓝 pill 略同质；激活强度弱于实心填充。</div>
+        </div>
+      </div>
+      <div class="app">
+        <div class="titlebar">
+          <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <div class="tb-title">Zap · 方案 A · 组卡片</div>
+        </div>
+        <div class="body">
+          <aside class="sidebar">
+            <div class="side-head"><span>仓库</span><span class="side-add">+ 添加</span></div>
+            <div class="tree">
+              <div class="row repo"><span class="chev">▼</span><span class="name">dip-agent</span><span class="badge">6</span></div>
+
+              <!-- ★ SELECTED GROUP: header + ALL tabs inside one card -->
+              <div class="ws-group is-selected">
+                <div class="group-rail"></div>
+                <div class="ws-head">
+                  <span class="brief">📁</span>
+                  <span class="chev">▼</span>
+                  <span class="name">release-602</span>
+                  <span class="badge">5</span>
+                </div>
+                <div class="ws-sub"><span class="ok">✓</span> 已同步 · 干净</div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand grok">G</span>
+                  <span class="name title-dim">Grok</span>
+                </div>
+                <div class="tab-row is-active">
+                  <span class="st"><span class="st-work"></span></span>
+                  <span class="brand openai">◉</span>
+                  <span class="name">确认模型身份</span>
+                </div>
+                <div class="tab-row">
+                  <span class="term">›</span>
+                  <span class="name title-dim">mvn clean…</span>
+                </div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand claude">◆</span>
+                  <span class="name title-dim">Claude 审阅</span>
+                </div>
+              </div>
+              <div class="callout">↑ <b>组卡片</b>包住头 + 全部 tab · 蓝 pill = 当前 tab</div>
+
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="dot-busy"></span>
+                <span class="name">feature-603-dfg-check</span>
+                <span class="badge">2</span>
+              </div>
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="name">dgraph5_build_opt</span>
+                <span class="badge">2</span>
+              </div>
+            </div>
+          </aside>
+          <div class="main">
+            <div class="tabbar">
+              <div class="tab"><span class="robot">◎</span><span class="tlabel">Grok</span></div>
+              <div class="tab active-main"><span class="robot">◉</span><span class="tlabel">确认模型身份</span><span class="x">×</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">mvn clean…</span></div>
+            </div>
+            <div class="session">
+              <div class="msg-user">你是什么模型？</div>
+              <div class="msg-agent"><div class="role">Agent</div>OpenAI Codex · 会话进行中（示意）</div>
+            </div>
+            <div class="composer"><div class="composer-box">向 Codex 提问…</div></div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>release-602</span><span class="sep"></span><span>组内选中 · 确认模型身份</span>
+          <span style="flex:1"></span><span>885 MB</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ B ═══════════ -->
+    <section class="option b">
+      <div class="option-meta">
+        <div class="tagrow">
+          <span class="opt-letter soft">B</span>
+          <span class="opt-title">蓝组卡片 · 实心填充激活 tab</span>
+          <span class="opt-philosophy">group card + solid blue fill</span>
+        </div>
+        <p class="opt-desc">同「整组卡片」结构；组头略带淡蓝条带区分父级。激活 tab 用实心品牌蓝胶囊 —— 组内当前会话最醒目。</p>
+        <div class="procon">
+          <div class="box pro"><strong>优点</strong>「哪个 tab」辨识度最高；卡片内层级：头带 / 填充行清晰；品牌色强。</div>
+          <div class="box con"><strong>缺点</strong>实心蓝偏重，多 agent 时可能「抢戏」；与状态色（黄环）并置需留白。</div>
+        </div>
+      </div>
+      <div class="app">
+        <div class="titlebar">
+          <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <div class="tb-title">Zap · 方案 B · 组卡片</div>
+        </div>
+        <div class="body">
+          <aside class="sidebar">
+            <div class="side-head"><span>仓库</span><span class="side-add">+ 添加</span></div>
+            <div class="tree">
+              <div class="row repo"><span class="chev">▼</span><span class="name">dip-agent</span><span class="badge">6</span></div>
+
+              <div class="ws-group is-selected">
+                <div class="ws-head">
+                  <span class="brief">📁</span>
+                  <span class="chev">▼</span>
+                  <span class="name">release-602</span>
+                  <span class="badge">5</span>
+                </div>
+                <div class="ws-sub"><span class="ok">✓</span> 已同步 · 干净</div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand grok">G</span>
+                  <span class="name title-dim">Grok</span>
+                </div>
+                <div class="tab-row is-active">
+                  <span class="st"><span class="st-work"></span></span>
+                  <span class="brand openai">◉</span>
+                  <span class="name">确认模型身份</span>
+                </div>
+                <div class="tab-row">
+                  <span class="term">›</span>
+                  <span class="name title-dim">mvn clean…</span>
+                </div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand claude">◆</span>
+                  <span class="name title-dim">Claude 审阅</span>
+                </div>
+              </div>
+              <div class="callout">↑ <b>组卡片</b> · 实心蓝 = 当前 tab</div>
+
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="dot-busy"></span>
+                <span class="name">feature-603-dfg-check</span>
+                <span class="badge">2</span>
+              </div>
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="name">dgraph5_build_opt</span>
+                <span class="badge">2</span>
+              </div>
+            </div>
+          </aside>
+          <div class="main">
+            <div class="tabbar">
+              <div class="tab"><span class="robot">◎</span><span class="tlabel">Grok</span></div>
+              <div class="tab active-main"><span class="robot">◉</span><span class="tlabel">确认模型身份</span><span class="x">×</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">mvn clean…</span></div>
+            </div>
+            <div class="session">
+              <div class="msg-user">你是什么模型？</div>
+              <div class="msg-agent"><div class="role">Agent</div>OpenAI Codex · 会话进行中（示意）</div>
+            </div>
+            <div class="composer"><div class="composer-box">向 Codex 提问…</div></div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>release-602</span><span class="sep"></span><span>组内选中 · 确认模型身份</span>
+          <span style="flex:1"></span><span>885 MB</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ C ═══════════ -->
+    <section class="option c">
+      <div class="option-meta">
+        <div class="tagrow">
+          <span class="opt-letter orange">C</span>
+          <span class="opt-title">橙组卡片 · 顶条激活 tab</span>
+          <span class="opt-philosophy">orca orange card + top bar tab</span>
+        </div>
+        <p class="opt-desc">Orca 忠实：整组抬升灰卡 + 左侧橙竖轨。激活 tab 用顶橙条 + 浅底 —— 空间感像 Orca 选中 worktree 卡片。</p>
+        <div class="procon">
+          <div class="box pro"><strong>优点</strong>最接近 Orca 截图心智；橙轨扫描距离强；顶条与「页签」隐喻一致。</div>
+          <div class="box con"><strong>缺点</strong>橙偏离 Zap 品牌蓝；需接受壳内第二强调色。</div>
+        </div>
+      </div>
+      <div class="app">
+        <div class="titlebar">
+          <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <div class="tb-title">Zap · 方案 C · 组卡片</div>
+        </div>
+        <div class="body">
+          <aside class="sidebar">
+            <div class="side-head"><span>仓库</span><span class="side-add">+ 添加</span></div>
+            <div class="tree">
+              <div class="row repo"><span class="chev">▼</span><span class="name">dip-agent</span><span class="badge">6</span></div>
+
+              <div class="ws-group is-selected">
+                <div class="group-rail"></div>
+                <div class="ws-head">
+                  <span class="brief">📁</span>
+                  <span class="chev">▼</span>
+                  <span class="name">release-602</span>
+                  <span class="badge">5</span>
+                </div>
+                <div class="ws-sub"><span class="ok">✓</span> 已同步 · 干净</div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand grok">G</span>
+                  <span class="name title-dim">Grok</span>
+                </div>
+                <div class="tab-row is-active">
+                  <span class="st"><span class="st-work"></span></span>
+                  <span class="brand openai">◉</span>
+                  <span class="name">确认模型身份</span>
+                </div>
+                <div class="tab-row">
+                  <span class="term">›</span>
+                  <span class="name title-dim">mvn clean…</span>
+                </div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand claude">◆</span>
+                  <span class="name title-dim">Claude 审阅</span>
+                </div>
+              </div>
+              <div class="callout">↑ <b>橙组卡片</b> · 顶橙条 = 当前 tab</div>
+
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="dot-busy"></span>
+                <span class="name">feature-603-dfg-check</span>
+                <span class="badge">2</span>
+              </div>
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="name">dgraph5_build_opt</span>
+                <span class="badge">2</span>
+              </div>
+            </div>
+          </aside>
+          <div class="main">
+            <div class="tabbar">
+              <div class="tab"><span class="robot">◎</span><span class="tlabel">Grok</span></div>
+              <div class="tab active-main"><span class="robot">◉</span><span class="tlabel">确认模型身份</span><span class="x">×</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">mvn clean…</span></div>
+            </div>
+            <div class="session">
+              <div class="msg-user">你是什么模型？</div>
+              <div class="msg-agent"><div class="role">Agent</div>OpenAI Codex · 会话进行中（示意）</div>
+            </div>
+            <div class="composer"><div class="composer-box">向 Codex 提问…</div></div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>release-602</span><span class="sep"></span><span>组内选中 · 确认模型身份</span>
+          <span style="flex:1"></span><span>885 MB</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ D ═══════════ -->
+    <section class="option d">
+      <div class="option-meta">
+        <div class="tagrow">
+          <span class="opt-letter hybrid">D</span>
+          <span class="opt-title">橙组边框 · 蓝填充激活 tab</span>
+          <span class="opt-philosophy">orange where · blue which-tab</span>
+        </div>
+        <p class="opt-desc">整组用橙边/橙轨表「当前 workspace」；组内激活 tab 用蓝底 + 蓝 inset 表「当前会话」—— 哪里 / 哪个会话分工。</p>
+        <div class="procon">
+          <div class="box pro"><strong>优点</strong>同时满足「组一块」与「tab 一眼认」；双色语义清晰（空间 vs 会话）。</div>
+          <div class="box con"><strong>缺点</strong>两套强调色需文档；实现 token 比单色多；新手可能问为何一橙一蓝。</div>
+        </div>
+      </div>
+      <div class="app">
+        <div class="titlebar">
+          <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <div class="tb-title">Zap · 方案 D · 组卡片</div>
+        </div>
+        <div class="body">
+          <aside class="sidebar">
+            <div class="side-head"><span>仓库</span><span class="side-add">+ 添加</span></div>
+            <div class="tree">
+              <div class="row repo"><span class="chev">▼</span><span class="name">dip-agent</span><span class="badge">6</span></div>
+
+              <div class="ws-group is-selected">
+                <div class="group-rail"></div>
+                <div class="ws-head">
+                  <span class="brief">📁</span>
+                  <span class="chev">▼</span>
+                  <span class="name">release-602</span>
+                  <span class="badge">5</span>
+                </div>
+                <div class="ws-sub"><span class="ok">✓</span> 已同步 · 干净</div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand grok">G</span>
+                  <span class="name title-dim">Grok</span>
+                </div>
+                <div class="tab-row is-active">
+                  <span class="st"><span class="st-work"></span></span>
+                  <span class="brand openai">◉</span>
+                  <span class="name">确认模型身份</span>
+                </div>
+                <div class="tab-row">
+                  <span class="term">›</span>
+                  <span class="name title-dim">mvn clean…</span>
+                </div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand claude">◆</span>
+                  <span class="name title-dim">Claude 审阅</span>
+                </div>
+              </div>
+              <div class="callout">↑ <b>橙=workspace</b> · <b>蓝=当前 tab</b></div>
+
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="dot-busy"></span>
+                <span class="name">feature-603-dfg-check</span>
+                <span class="badge">2</span>
+              </div>
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="name">dgraph5_build_opt</span>
+                <span class="badge">2</span>
+              </div>
+            </div>
+          </aside>
+          <div class="main">
+            <div class="tabbar">
+              <div class="tab"><span class="robot">◎</span><span class="tlabel">Grok</span></div>
+              <div class="tab active-main"><span class="robot">◉</span><span class="tlabel">确认模型身份</span><span class="x">×</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">mvn clean…</span></div>
+            </div>
+            <div class="session">
+              <div class="msg-user">你是什么模型？</div>
+              <div class="msg-agent"><div class="role">Agent</div>OpenAI Codex · 会话进行中（示意）</div>
+            </div>
+            <div class="composer"><div class="composer-box">向 Codex 提问…</div></div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>release-602</span><span class="sep"></span><span>组内选中 · 确认模型身份</span>
+          <span style="flex:1"></span><span>885 MB</span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <section class="legend">
+    <h2>修订要点（对照被拒版）</h2>
+    <ul>
+      <li><strong>结构硬约束</strong>：每个方案的 DOM 都是 <code>.ws-group.is-selected</code> 包住 <code>.ws-head</code> + <em>全部</em> <code>.tab-row</code>；其它 workspace 用 <code>.ws-plain</code> 留在卡片外。</li>
+      <li><strong>双层选中</strong>：① 组卡片 = 哪个 workspace 聚焦；② <code>.tab-row.is-active</code> = 组内哪个 tab。二者必须同时可见。</li>
+      <li><strong>激活 tab 变化轴</strong>：A 左 pill · B 实心填充 · C 顶条 · D 橙组+蓝填充 —— 在同一「组卡片」骨架上只换组内 tab 强调手法。</li>
+      <li><strong>推荐讨论</strong>：要品牌统一 → A/B；要 Orca 扫描 → C；要「哪里/哪个会话」语义 → D。</li>
+      <li><strong>非目标</strong>：不改 Rust、不推远程、不改树数据模型。</li>
+    </ul>
+    <div class="swatches">
+      <span class="swatch"><i class="blue"></i> Zap 蓝 #1677ff</span>
+      <span class="swatch"><i class="orange"></i> Orca 橙 #f5a524</span>
+      <span class="swatch"><i class="elev"></i> 选中组卡片</span>
+      <span class="swatch"><i class="fill"></i> 实心激活 tab（B）</span>
+    </div>
+  </section>
+  <p class="note">路径：docs/superpowers/specs/2026-10-20-zap-selection-workspace-group-options.html · 2026-10-20 · 勿推送 · 上一版被拒文件仍保留作对照</p>
+</body>
+</html>

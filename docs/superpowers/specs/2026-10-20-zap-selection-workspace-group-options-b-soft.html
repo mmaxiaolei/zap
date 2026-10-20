@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Zap · 方案 B 软化 · 激活 tab 填充强度</title>
+<style>
+  /* ═══════════════════════════════════════════════════════════
+     方案 B 软化修订：保留蓝组卡片（蓝边 + 头行淡蓝条带），
+     仅把实心 #1677ff 激活 tab 换成 2–3 档更轻填充，并排对照。
+     ═══════════════════════════════════════════════════════════ */
+  :root {
+    --z-bg:          #070708;
+    --z-surface-0:   #0a0a0a;
+    --z-surface-1:   #0f0f11;
+    --z-surface-2:   #141416;
+    --z-surface-3:   #1a1a1d;
+    --z-surface-4:   #222226;
+    --z-surface-5:   #2a2a2f;
+
+    --z-hairline:    rgba(255,255,255,.07);
+    --z-hairline-strong: rgba(255,255,255,.12);
+
+    --z-text:        #ececef;
+    --z-text-2:      #b4b4bc;
+    --z-muted:       #8a8a94;
+    --z-faint:       #5c5c66;
+
+    --z-accent:      #1677ff;
+    --z-accent-strong:#0958d9;
+    --z-accent-soft: rgba(22,119,255,.14);
+    --z-accent-softer: rgba(22,119,255,.08);
+
+    --z-idle:        rgba(163,163,170,.45);
+    --z-working:     #e6b84d;
+    --z-done:        #3dd68c;
+    --z-busy-dot:    #3dd68c;
+
+    --z-radius-sm:   6px;
+    --z-radius-md:   10px;
+    --z-radius-lg:   14px;
+    --z-radius-pill: 999px;
+
+    --font: system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: var(--font);
+    background:
+      radial-gradient(1100px 520px at 12% -8%, #121826 0%, transparent 55%),
+      radial-gradient(900px 420px at 88% 4%, rgba(22,119,255,.07), transparent 50%),
+      var(--z-bg);
+    color: var(--z-text);
+    padding: 28px 28px 72px;
+    line-height: 1.45;
+    min-height: 100vh;
+  }
+
+  .page-head { max-width: 1480px; margin: 0 auto 18px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10px; font-weight: 650; letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--z-accent);
+    background: var(--z-accent-soft);
+    border: 1px solid rgba(22,119,255,.22);
+    padding: 3px 9px; border-radius: var(--z-radius-pill);
+    margin-bottom: 10px;
+  }
+  .pill i {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--z-accent);
+    box-shadow: 0 0 0 3px rgba(22,119,255,.2);
+  }
+  .page-head h1 {
+    margin: 0 0 6px;
+    font-size: 18px;
+    font-weight: 650;
+    letter-spacing: -.02em;
+  }
+  .page-head .lead {
+    margin: 0 0 10px;
+    max-width: 1060px;
+    font-size: 13px;
+    color: var(--z-muted);
+  }
+  .page-head .lead code {
+    font-family: var(--mono); font-size: 11.5px;
+    color: #9ec5ff;
+    background: rgba(22,119,255,.1);
+    border: 1px solid rgba(22,119,255,.2);
+    border-radius: 4px; padding: 1px 5px;
+  }
+  .note-banner {
+    max-width: 1480px; margin: 0 auto 18px;
+    padding: 10px 14px;
+    background: rgba(22,119,255,.07);
+    border: 1px solid rgba(22,119,255,.22);
+    border-radius: var(--z-radius-md);
+    font-size: 12.5px; color: #a8c8f0;
+  }
+  .note-banner strong { color: #cfe2ff; }
+  .note-banner em { color: #9ee0bc; font-style: normal; font-weight: 600; }
+
+  .options {
+    max-width: 1480px; margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+  }
+  @media (max-width: 1200px) {
+    .options { grid-template-columns: 1fr; }
+  }
+
+  .option {
+    background: rgba(255,255,255,.02);
+    border: 1px solid var(--z-hairline-strong);
+    border-radius: var(--z-radius-lg);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .option-meta {
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--z-hairline);
+    background: rgba(0,0,0,.25);
+  }
+  .option-meta .tagrow {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .opt-letter {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 36px; height: 22px; padding: 0 8px; border-radius: 7px;
+    font-size: 12px; font-weight: 750;
+    background: var(--z-surface-5);
+    color: #9ec5ff;
+    border: 1px solid rgba(22,119,255,.35);
+  }
+  .opt-letter.mid {
+    background: rgba(22,119,255,.22);
+    color: #fff;
+    border-color: rgba(22,119,255,.45);
+  }
+  .opt-letter.softest {
+    background: rgba(22,119,255,.12);
+    color: #b7d4ff;
+  }
+  .opt-title {
+    font-size: 14px; font-weight: 650; letter-spacing: -.01em;
+  }
+  .opt-philosophy {
+    font-size: 11px; color: var(--z-faint);
+    font-family: var(--mono);
+  }
+  .opt-desc {
+    margin: 0 0 8px;
+    font-size: 12.5px; color: var(--z-text-2);
+  }
+  .token-chip {
+    display: inline-block;
+    font-family: var(--mono); font-size: 10.5px;
+    color: #9ec5ff;
+    background: rgba(22,119,255,.1);
+    border: 1px solid rgba(22,119,255,.2);
+    border-radius: 4px; padding: 2px 6px;
+    margin: 0 2px 2px 0;
+  }
+
+  /* ── Mini app chrome ── */
+  .app {
+    background: var(--z-surface-1);
+    display: flex; flex-direction: column;
+    min-height: 420px;
+    flex: 1;
+  }
+  .titlebar {
+    display: flex; align-items: center; gap: 8px;
+    height: 32px; padding: 0 10px;
+    background: var(--z-surface-0);
+    border-bottom: 1px solid var(--z-hairline);
+    flex-shrink: 0;
+  }
+  .traffic { display: flex; gap: 5px; padding: 0 2px; }
+  .traffic span {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: #2a2a2e; border: 1px solid rgba(255,255,255,.06);
+  }
+  .traffic .r { background: #ff5f57; border-color: #e0443e; }
+  .traffic .y { background: #febc2e; border-color: #dea123; }
+  .traffic .g { background: #28c840; border-color: #1aad2f; }
+  .tb-title {
+    flex: 1; text-align: center;
+    font-size: 11px; font-weight: 550; color: var(--z-muted);
+  }
+
+  .body {
+    display: grid;
+    grid-template-columns: 228px 1fr;
+    flex: 1; min-height: 0;
+  }
+
+  .sidebar {
+    background: var(--z-surface-2);
+    border-right: 1px solid var(--z-hairline);
+    display: flex; flex-direction: column;
+    min-height: 0;
+    font-size: 11.5px;
+  }
+  .side-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 10px 6px;
+    font-size: 10.5px; font-weight: 650;
+    color: var(--z-text-2);
+  }
+  .side-add {
+    font-size: 10px; font-weight: 550;
+    color: var(--z-muted);
+    border: 1px solid var(--z-hairline);
+    background: var(--z-surface-3);
+    border-radius: 5px;
+    padding: 2px 6px;
+  }
+  .tree { padding: 2px 0 12px; overflow: auto; flex: 1; }
+
+  .row {
+    display: flex; align-items: center; gap: 5px;
+    padding: 2px 6px;
+    min-height: 24px;
+    border-radius: var(--z-radius-sm);
+    margin: 1px 5px;
+    color: var(--z-text-2);
+  }
+  .row .name {
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .row.repo { font-weight: 650; color: var(--z-text); margin-top: 2px; }
+  .chev { width: 9px; color: var(--z-faint); flex-shrink: 0; font-size: 8px; }
+  .badge {
+    flex-shrink: 0; min-width: 16px; height: 15px; padding: 0 4px;
+    border-radius: var(--z-radius-pill);
+    background: var(--z-surface-4);
+    color: var(--z-muted); font-size: 9px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .dot-busy {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--z-busy-dot); flex-shrink: 0;
+  }
+  .st {
+    width: 10px; height: 10px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .st-idle {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--z-idle);
+  }
+  .st-work {
+    width: 7px; height: 7px; border-radius: 50%;
+    border: 1.5px solid var(--z-working);
+    border-top-color: transparent;
+    animation: spin .85s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .brand {
+    width: 12px; height: 12px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 2px; font-size: 8px; font-weight: 700;
+  }
+  .brand.openai { color: var(--z-text); background: #2a2a2e; }
+  .brand.grok { color: #111; background: #ececef; border-radius: 50%; }
+  .brand.claude { color: #D97757; }
+  .term {
+    width: 12px; height: 12px; flex-shrink: 0;
+    border-radius: 2px;
+    background: #1e1e22;
+    border: 1px solid rgba(255,255,255,.08);
+    display: grid; place-items: center;
+    font-family: var(--mono); font-size: 7px; font-weight: 700;
+    color: var(--z-done); line-height: 1;
+  }
+  .title-dim { color: var(--z-muted); }
+  .brief {
+    width: 14px; height: 14px; flex-shrink: 0;
+    border-radius: 3px;
+    display: grid; place-items: center;
+    font-size: 9px;
+  }
+
+  /* ─── B 组卡片骨架（三变体共用） ─── */
+  .ws-group {
+    margin: 4px 6px;
+    padding: 0;
+    border-radius: 0;
+    border: 1px solid transparent;
+    background: transparent;
+  }
+  .ws-group .ws-head {
+    display: flex; align-items: center; gap: 5px;
+    flex-wrap: wrap;
+    padding: 5px 8px 4px;
+    min-height: 26px;
+    color: var(--z-text-2);
+    font-weight: 550;
+  }
+  .ws-group .ws-head .name { flex: 1; min-width: 0; color: inherit; }
+  .ws-group .ws-sub {
+    display: flex; align-items: center; gap: 4px;
+    width: 100%;
+    font-size: 10px; color: var(--z-muted);
+    font-weight: 450; padding: 0 8px 4px 27px;
+  }
+  .ws-group .ws-sub .ok { color: var(--z-done); }
+
+  .ws-group .tab-row {
+    display: flex; align-items: center; gap: 5px;
+    padding: 3px 8px 3px 18px;
+    min-height: 24px;
+    margin: 1px 4px;
+    border-radius: var(--z-radius-sm);
+    color: var(--z-text-2);
+    position: relative;
+  }
+  .ws-group .tab-row .name {
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .ws-plain {
+    display: flex; align-items: center; gap: 5px;
+    padding: 2px 6px;
+    min-height: 24px;
+    border-radius: var(--z-radius-sm);
+    margin: 1px 5px;
+    color: var(--z-text-2);
+    padding-left: 14px;
+  }
+  .ws-plain .name {
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .main {
+    background: var(--z-surface-3);
+    display: flex; flex-direction: column;
+    min-width: 0; min-height: 0;
+  }
+  .tabbar {
+    display: flex; align-items: stretch;
+    gap: 0;
+    padding: 0 6px;
+    height: 34px;
+    border-bottom: 1px solid var(--z-hairline);
+    background: rgba(0,0,0,.22);
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+  .tab {
+    display: flex; align-items: center; gap: 5px;
+    padding: 0 10px;
+    font-size: 11px;
+    color: var(--z-muted);
+    border: none; background: transparent;
+    position: relative;
+    white-space: nowrap;
+    max-width: 140px;
+  }
+  .tab .tlabel { overflow: hidden; text-overflow: ellipsis; }
+  .tab .x {
+    font-size: 10px; color: var(--z-faint); margin-left: 2px;
+    opacity: .55;
+  }
+  .tab .robot {
+    width: 12px; height: 12px; border-radius: 3px;
+    background: var(--z-surface-5);
+    display: grid; place-items: center;
+    font-size: 8px; flex-shrink: 0;
+  }
+  .tab.active-main {
+    color: var(--z-text);
+    background: rgba(255,255,255,.04);
+  }
+  .tab.active-main::before {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; top: 0;
+    height: 2px;
+    background: var(--z-accent);
+  }
+
+  .session {
+    flex: 1; padding: 12px 14px;
+    font-size: 11.5px; color: var(--z-text-2);
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .msg-user {
+    align-self: flex-end;
+    background: var(--z-surface-4);
+    border: 1px solid var(--z-hairline);
+    border-radius: var(--z-radius-md);
+    padding: 7px 10px;
+    color: var(--z-text);
+    max-width: 88%;
+  }
+  .msg-agent {
+    align-self: flex-start;
+    border-left: 2px solid rgba(22,119,255,.35);
+    padding: 2px 0 2px 10px;
+    max-width: 92%;
+  }
+  .msg-agent .role {
+    font-size: 9px; font-weight: 650;
+    color: var(--z-faint); letter-spacing: .04em;
+    text-transform: uppercase; margin-bottom: 3px;
+  }
+  .composer {
+    padding: 8px 10px 10px;
+    border-top: 1px solid var(--z-hairline);
+    background: rgba(0,0,0,.12);
+  }
+  .composer-box {
+    background: var(--z-surface-2);
+    border: 1px solid var(--z-hairline-strong);
+    border-radius: var(--z-radius-md);
+    padding: 7px 9px;
+    font-size: 11.5px; color: var(--z-faint);
+  }
+  .statusbar {
+    display: flex; align-items: center; gap: 10px;
+    height: 22px; padding: 0 10px;
+    background: var(--z-surface-0);
+    border-top: 1px solid var(--z-hairline);
+    font-size: 10px; color: var(--z-faint);
+    flex-shrink: 0;
+  }
+  .statusbar .sep {
+    width: 1px; height: 9px; background: var(--z-hairline-strong);
+  }
+
+  .callout {
+    font-size: 10px;
+    color: var(--z-faint);
+    padding: 4px 10px 0;
+    font-family: var(--mono);
+  }
+  .callout b { color: #9ec5ff; font-weight: 650; }
+
+  /* ════════════════════════════════
+     共用：B 组卡片（蓝边 + 头行淡蓝条带）
+     ════════════════════════════════ */
+  .bsoft .ws-group.is-selected {
+    position: relative;
+    background: #17191f;
+    border: 1px solid rgba(22,119,255,.28);
+    border-radius: var(--z-radius-md);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,.04) inset,
+      0 6px 18px rgba(0,0,0,.4);
+    padding: 3px 0 5px;
+    margin: 4px 6px;
+  }
+  .bsoft .ws-group.is-selected .ws-head {
+    color: var(--z-text);
+    background: rgba(22,119,255,.08);
+    border-radius: 8px 8px 0 0;
+    margin: -3px 0 2px;
+    padding: 7px 10px 5px;
+  }
+  .bsoft .ws-group.is-selected .brief {
+    background: var(--z-accent-soft);
+    color: #69b1ff;
+  }
+  .bsoft .ws-group.is-selected .ws-sub {
+    padding: 0 10px 6px 32px;
+    border-bottom: 1px solid rgba(255,255,255,.05);
+    margin-bottom: 3px;
+  }
+  .bsoft .ws-group.is-selected .tab-row {
+    margin: 2px 6px;
+    padding-left: 14px;
+  }
+
+  /* ── 淡：accent @ 18% + 左 pill ── */
+  .v-dan .ws-group.is-selected .tab-row.is-active {
+    background: rgba(22,119,255,.18);
+    color: var(--z-text);
+    border-radius: 7px;
+    box-shadow: inset 3px 0 0 var(--z-accent);
+    padding-left: 11px;
+  }
+  .v-dan .ws-group.is-selected .tab-row.is-active .name {
+    color: #d6e8ff; font-weight: 650;
+  }
+
+  /* ── 中：accent @ 28% + 左 pill ── */
+  .v-zhong .ws-group.is-selected .tab-row.is-active {
+    background: rgba(22,119,255,.28);
+    color: var(--z-text);
+    border-radius: 7px;
+    box-shadow: inset 3px 0 0 var(--z-accent);
+    padding-left: 11px;
+  }
+  .v-zhong .ws-group.is-selected .tab-row.is-active .name {
+    color: #e8f1ff; font-weight: 650;
+  }
+
+  /* ── 略淡：soft fill (~14%) + 细边 + 左 pill ── */
+  .v-luedan .ws-group.is-selected .tab-row.is-active {
+    background: rgba(22,119,255,.14);
+    border: 1px solid rgba(22,119,255,.28);
+    color: var(--z-text);
+    border-radius: 7px;
+    box-shadow: inset 3px 0 0 rgba(22,119,255,.85);
+    padding-left: 10px;
+  }
+  .v-luedan .ws-group.is-selected .tab-row.is-active .name {
+    color: #cfe2ff; font-weight: 650;
+  }
+
+  /* Legend */
+  .legend {
+    max-width: 1480px; margin: 24px auto 0;
+    padding: 16px 18px;
+    background: rgba(255,255,255,.02);
+    border: 1px solid var(--z-hairline-strong);
+    border-radius: var(--z-radius-lg);
+    font-size: 12.5px; color: var(--z-text-2);
+  }
+  .legend h2 {
+    margin: 0 0 8px; font-size: 13px; font-weight: 650; color: var(--z-text);
+  }
+  .legend ul { margin: 0; padding-left: 18px; }
+  .legend li { margin: 5px 0; }
+  .legend code {
+    font-family: var(--mono); font-size: 11px;
+    color: #c8d4ff;
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--z-hairline);
+    border-radius: 4px; padding: 1px 5px;
+  }
+  .swatches {
+    display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px;
+  }
+  .swatch {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 11px; color: var(--z-muted);
+  }
+  .swatch i {
+    width: 28px; height: 14px; border-radius: 4px;
+    display: block;
+  }
+  .swatch .solid { background: #1677ff; }
+  .swatch .dan {
+    background: rgba(22,119,255,.18);
+    box-shadow: inset 3px 0 0 #1677ff;
+  }
+  .swatch .zhong {
+    background: rgba(22,119,255,.28);
+    box-shadow: inset 3px 0 0 #1677ff;
+  }
+  .swatch .luedan {
+    background: rgba(22,119,255,.14);
+    border: 1px solid rgba(22,119,255,.28);
+    box-shadow: inset 3px 0 0 rgba(22,119,255,.85);
+  }
+  .swatch .card {
+    background: #17191f;
+    border: 1px solid rgba(22,119,255,.35);
+  }
+  .note {
+    max-width: 1480px; margin: 14px auto 0;
+    font-size: 11.5px; color: var(--z-faint);
+  }
+</style>
+</head>
+<body>
+  <header class="page-head">
+    <div class="pill"><i></i> Revision · Scheme B Soft Active Tab</div>
+    <h1>Zap · 方案 B 软化 · 激活 tab 填充强度三档</h1>
+    <p class="lead">
+      整体方案 B 保留：<code>蓝边组卡片</code> + <code>头行淡蓝条带</code>。
+      用户反馈实心 <code>#1677ff</code> 激活 tab 过重 —— 本页只换组内激活行填充，
+      并排三档更轻效果（均带左侧 subtle pill）。未改 A/C/D，未实现 Rust。
+    </p>
+  </header>
+
+  <div class="note-banner">
+    <strong>中文说明：</strong>
+    「淡 / 中 / 略淡」只调激活 tab 的蓝底透明度与边框；
+    <em>组卡片本身不变</em>（蓝边 + 头行 rgba(22,119,255,.08) 条带）。
+    相对原 B 实心填充，这三档都更轻、不抢状态色（黄环）。
+    推荐先看「中」是否够醒目，「淡 / 略淡」作更克制备选。
+  </div>
+
+  <div class="options">
+
+    <!-- ═══════════ 淡 ═══════════ -->
+    <section class="option bsoft v-dan">
+      <div class="option-meta">
+        <div class="tagrow">
+          <span class="opt-letter softest">淡</span>
+          <span class="opt-title">accent @ 18% + 左 pill</span>
+          <span class="opt-philosophy">rgba(22,119,255,.18) + inset pill</span>
+        </div>
+        <p class="opt-desc">最克制一档：浅蓝底 + 左侧 3px 蓝 pill。组内当前 tab 可读但不抢头行条带。</p>
+        <span class="token-chip">fill .18</span>
+        <span class="token-chip">inset 3px #1677ff</span>
+        <span class="token-chip">text #d6e8ff</span>
+      </div>
+      <div class="app">
+        <div class="titlebar">
+          <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <div class="tb-title">Zap · B · 淡</div>
+        </div>
+        <div class="body">
+          <aside class="sidebar">
+            <div class="side-head"><span>仓库</span><span class="side-add">+ 添加</span></div>
+            <div class="tree">
+              <div class="row repo"><span class="chev">▼</span><span class="name">dip-agent</span><span class="badge">6</span></div>
+
+              <div class="ws-group is-selected">
+                <div class="ws-head">
+                  <span class="brief">📁</span>
+                  <span class="chev">▼</span>
+                  <span class="name">release-602</span>
+                  <span class="badge">5</span>
+                </div>
+                <div class="ws-sub"><span class="ok">✓</span> 已同步 · 干净</div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand grok">G</span>
+                  <span class="name title-dim">Grok</span>
+                </div>
+                <div class="tab-row is-active">
+                  <span class="st"><span class="st-work"></span></span>
+                  <span class="brand openai">◉</span>
+                  <span class="name">确认模型身份</span>
+                </div>
+                <div class="tab-row">
+                  <span class="term">›</span>
+                  <span class="name title-dim">mvn clean…</span>
+                </div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand claude">◆</span>
+                  <span class="name title-dim">Claude 审阅</span>
+                </div>
+              </div>
+              <div class="callout">↑ <b>淡</b> · .18 填充 + 左 pill</div>
+
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="dot-busy"></span>
+                <span class="name">feature-603-dfg-check</span>
+                <span class="badge">2</span>
+              </div>
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="name">dgraph5_build_opt</span>
+                <span class="badge">2</span>
+              </div>
+            </div>
+          </aside>
+          <div class="main">
+            <div class="tabbar">
+              <div class="tab"><span class="robot">◎</span><span class="tlabel">Grok</span></div>
+              <div class="tab active-main"><span class="robot">◉</span><span class="tlabel">确认模型身份</span><span class="x">×</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">mvn clean…</span></div>
+            </div>
+            <div class="session">
+              <div class="msg-user">你是什么模型？</div>
+              <div class="msg-agent"><div class="role">Agent</div>OpenAI Codex · 会话进行中（示意）</div>
+            </div>
+            <div class="composer"><div class="composer-box">向 Codex 提问…</div></div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>release-602</span><span class="sep"></span><span>B · 淡</span>
+          <span style="flex:1"></span><span>885 MB</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ 中 ═══════════ -->
+    <section class="option bsoft v-zhong">
+      <div class="option-meta">
+        <div class="tagrow">
+          <span class="opt-letter mid">中</span>
+          <span class="opt-title">accent @ 28% + 左 pill</span>
+          <span class="opt-philosophy">rgba(22,119,255,.28) + inset pill</span>
+        </div>
+        <p class="opt-desc">推荐默认档：比实心轻一截，仍一眼辨「哪个 tab」。左 pill 补足边缘扫描。</p>
+        <span class="token-chip">fill .28</span>
+        <span class="token-chip">inset 3px #1677ff</span>
+        <span class="token-chip">text #e8f1ff</span>
+      </div>
+      <div class="app">
+        <div class="titlebar">
+          <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <div class="tb-title">Zap · B · 中</div>
+        </div>
+        <div class="body">
+          <aside class="sidebar">
+            <div class="side-head"><span>仓库</span><span class="side-add">+ 添加</span></div>
+            <div class="tree">
+              <div class="row repo"><span class="chev">▼</span><span class="name">dip-agent</span><span class="badge">6</span></div>
+
+              <div class="ws-group is-selected">
+                <div class="ws-head">
+                  <span class="brief">📁</span>
+                  <span class="chev">▼</span>
+                  <span class="name">release-602</span>
+                  <span class="badge">5</span>
+                </div>
+                <div class="ws-sub"><span class="ok">✓</span> 已同步 · 干净</div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand grok">G</span>
+                  <span class="name title-dim">Grok</span>
+                </div>
+                <div class="tab-row is-active">
+                  <span class="st"><span class="st-work"></span></span>
+                  <span class="brand openai">◉</span>
+                  <span class="name">确认模型身份</span>
+                </div>
+                <div class="tab-row">
+                  <span class="term">›</span>
+                  <span class="name title-dim">mvn clean…</span>
+                </div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand claude">◆</span>
+                  <span class="name title-dim">Claude 审阅</span>
+                </div>
+              </div>
+              <div class="callout">↑ <b>中</b> · .28 填充 + 左 pill（推荐）</div>
+
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="dot-busy"></span>
+                <span class="name">feature-603-dfg-check</span>
+                <span class="badge">2</span>
+              </div>
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="name">dgraph5_build_opt</span>
+                <span class="badge">2</span>
+              </div>
+            </div>
+          </aside>
+          <div class="main">
+            <div class="tabbar">
+              <div class="tab"><span class="robot">◎</span><span class="tlabel">Grok</span></div>
+              <div class="tab active-main"><span class="robot">◉</span><span class="tlabel">确认模型身份</span><span class="x">×</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">mvn clean…</span></div>
+            </div>
+            <div class="session">
+              <div class="msg-user">你是什么模型？</div>
+              <div class="msg-agent"><div class="role">Agent</div>OpenAI Codex · 会话进行中（示意）</div>
+            </div>
+            <div class="composer"><div class="composer-box">向 Codex 提问…</div></div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>release-602</span><span class="sep"></span><span>B · 中</span>
+          <span style="flex:1"></span><span>885 MB</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ 略淡 ═══════════ -->
+    <section class="option bsoft v-luedan">
+      <div class="option-meta">
+        <div class="tagrow">
+          <span class="opt-letter">略淡</span>
+          <span class="opt-title">soft fill + 细边 + 左 pill</span>
+          <span class="opt-philosophy">.14 fill + border + inset pill</span>
+        </div>
+        <p class="opt-desc">最软一档：约 14% soft 填充 + 细蓝边框 + 左 pill。接近 A 的克制，但保留 B 的圆角胶囊形。</p>
+        <span class="token-chip">fill .14</span>
+        <span class="token-chip">border .28</span>
+        <span class="token-chip">inset pill</span>
+      </div>
+      <div class="app">
+        <div class="titlebar">
+          <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <div class="tb-title">Zap · B · 略淡</div>
+        </div>
+        <div class="body">
+          <aside class="sidebar">
+            <div class="side-head"><span>仓库</span><span class="side-add">+ 添加</span></div>
+            <div class="tree">
+              <div class="row repo"><span class="chev">▼</span><span class="name">dip-agent</span><span class="badge">6</span></div>
+
+              <div class="ws-group is-selected">
+                <div class="ws-head">
+                  <span class="brief">📁</span>
+                  <span class="chev">▼</span>
+                  <span class="name">release-602</span>
+                  <span class="badge">5</span>
+                </div>
+                <div class="ws-sub"><span class="ok">✓</span> 已同步 · 干净</div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand grok">G</span>
+                  <span class="name title-dim">Grok</span>
+                </div>
+                <div class="tab-row is-active">
+                  <span class="st"><span class="st-work"></span></span>
+                  <span class="brand openai">◉</span>
+                  <span class="name">确认模型身份</span>
+                </div>
+                <div class="tab-row">
+                  <span class="term">›</span>
+                  <span class="name title-dim">mvn clean…</span>
+                </div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand claude">◆</span>
+                  <span class="name title-dim">Claude 审阅</span>
+                </div>
+              </div>
+              <div class="callout">↑ <b>略淡</b> · soft + 边 + 左 pill</div>
+
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="dot-busy"></span>
+                <span class="name">feature-603-dfg-check</span>
+                <span class="badge">2</span>
+              </div>
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="name">dgraph5_build_opt</span>
+                <span class="badge">2</span>
+              </div>
+            </div>
+          </aside>
+          <div class="main">
+            <div class="tabbar">
+              <div class="tab"><span class="robot">◎</span><span class="tlabel">Grok</span></div>
+              <div class="tab active-main"><span class="robot">◉</span><span class="tlabel">确认模型身份</span><span class="x">×</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">mvn clean…</span></div>
+            </div>
+            <div class="session">
+              <div class="msg-user">你是什么模型？</div>
+              <div class="msg-agent"><div class="role">Agent</div>OpenAI Codex · 会话进行中（示意）</div>
+            </div>
+            <div class="composer"><div class="composer-box">向 Codex 提问…</div></div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>release-602</span><span class="sep"></span><span>B · 略淡</span>
+          <span style="flex:1"></span><span>885 MB</span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <section class="legend">
+    <h2>相对原方案 B 的改动</h2>
+    <ul>
+      <li><strong>保留</strong>：蓝边组卡片 <code>border: rgba(22,119,255,.28)</code> + 头行淡蓝条带 <code>background: rgba(22,119,255,.08)</code>；DOM 仍包住头 + 全部子 tab。</li>
+      <li><strong>替换</strong>：原激活 tab 实心 <code>background: #1677ff</code> + 白字 → 三档半透明蓝底 + 左 inset pill + 浅色字（不再白底反差）。</li>
+      <li><strong>淡</strong> = <code>rgba(22,119,255,.18)</code> + pill；<strong>中</strong> = <code>.28</code> + pill（建议默认）；<strong>略淡</strong> = <code>.14</code> soft + 细边 + pill。</li>
+      <li><strong>非目标</strong>：不改 Rust、不推远程、不改 A/C/D 原文件。</li>
+    </ul>
+    <div class="swatches">
+      <span class="swatch"><i class="solid"></i> 原 B 实心（过重）</span>
+      <span class="swatch"><i class="dan"></i> 淡 .18</span>
+      <span class="swatch"><i class="zhong"></i> 中 .28</span>
+      <span class="swatch"><i class="luedan"></i> 略淡 .14+边</span>
+      <span class="swatch"><i class="card"></i> 组卡片（不变）</span>
+    </div>
+  </section>
+  <p class="note">路径：docs/superpowers/specs/2026-10-20-zap-selection-workspace-group-options-b-soft.html · 2026-10-20 · 勿推送 · 原 A–D 对照文件保留</p>
+</body>
+</html>

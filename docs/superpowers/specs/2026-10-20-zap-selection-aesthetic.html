@@ -1,0 +1,1057 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Zap · Workspace 选中态 · 高审美四案</title>
+<style>
+  /* ═══════════════════════════════════════════════════════════
+     Zap Selection Aesthetic — 4 directions (not screenshot clones)
+     Quiet Lift · Hairline Card · Brand Whisper · Depth Stack
+     Rules: .ws-group.is-sel wraps head + all child tabs;
+            one .tab-active inside; no Orca orange; no solid blue pill
+     ═══════════════════════════════════════════════════════════ */
+  :root {
+    --z-bg:          #070708;
+    --z-surface-0:   #0a0a0a;
+    --z-surface-1:   #0f0f11;
+    --z-surface-2:   #141416;
+    --z-surface-3:   #1a1a1d;
+    --z-surface-4:   #222226;
+    --z-surface-5:   #2a2a2f;
+    --z-surface-6:   #323238;
+
+    --z-hairline:         rgba(255,255,255,.07);
+    --z-hairline-strong:  rgba(255,255,255,.12);
+    --z-hairline-soft:    rgba(255,255,255,.05);
+
+    --z-text:        #ececef;
+    --z-text-2:      #b4b4bc;
+    --z-muted:       #8a8a94;
+    --z-faint:       #5c5c66;
+
+    --z-accent:      #1677ff;
+    --z-sky:         #6c94b4;
+    --z-done:        #3dd68c;
+    --z-working:     #e6b84d;
+    --z-idle:        rgba(163,163,170,.45);
+
+    --z-radius-sm:   6px;
+    --z-radius-md:   10px;
+    --z-radius-lg:   14px;
+    --z-radius-pill: 999px;
+
+    --font: system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: var(--font);
+    background:
+      radial-gradient(1200px 560px at 10% -10%, #141822 0%, transparent 55%),
+      radial-gradient(900px 480px at 96% 6%, rgba(22,119,255,.05), transparent 48%),
+      radial-gradient(700px 360px at 50% 110%, rgba(108,148,180,.04), transparent 45%),
+      var(--z-bg);
+    color: var(--z-text);
+    padding: 28px 28px 72px;
+    line-height: 1.45;
+    min-height: 100vh;
+  }
+
+  /* ── Page chrome ── */
+  .page-head { max-width: 1560px; margin: 0 auto 18px; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10px; font-weight: 650; letter-spacing: .06em;
+    text-transform: uppercase;
+    color: #9ec5ff;
+    background: rgba(22,119,255,.12);
+    border: 1px solid rgba(22,119,255,.22);
+    padding: 3px 10px; border-radius: var(--z-radius-pill);
+    margin-bottom: 10px;
+  }
+  .eyebrow i {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--z-accent);
+    box-shadow: 0 0 0 3px rgba(22,119,255,.2);
+  }
+  h1 {
+    margin: 0 0 8px;
+    font-size: 19px; font-weight: 650;
+    letter-spacing: -.025em;
+  }
+  .lead {
+    margin: 0;
+    max-width: 920px;
+    font-size: 13px; color: var(--z-muted);
+  }
+  .lead strong { color: var(--z-text-2); font-weight: 600; }
+
+  .palette {
+    max-width: 1560px; margin: 14px auto 20px;
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  }
+  .palette .label {
+    font-size: 10px; font-weight: 650; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--z-faint); margin-right: 4px;
+  }
+  .sw {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 10px; color: var(--z-muted);
+    background: rgba(255,255,255,.03);
+    border: 1px solid var(--z-hairline);
+    border-radius: 6px; padding: 3px 8px 3px 4px;
+  }
+  .sw b {
+    width: 14px; height: 14px; border-radius: 4px;
+    border: 1px solid rgba(255,255,255,.12); flex-shrink: 0;
+  }
+
+  /* ── 2×2 grid ── */
+  .grid {
+    max-width: 1560px; margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  @media (max-width: 1100px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    background: rgba(255,255,255,.018);
+    border: 1px solid var(--z-hairline-strong);
+    border-radius: 16px;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    box-shadow: 0 16px 48px rgba(0,0,0,.28);
+  }
+  .card-meta {
+    padding: 16px 18px 14px;
+    border-bottom: 1px solid var(--z-hairline);
+    background: linear-gradient(180deg, rgba(255,255,255,.03), transparent);
+  }
+  .tagrow {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 7px;
+  }
+  .tag {
+    display: inline-flex; align-items: center;
+    font-size: 11px; font-weight: 700; letter-spacing: .02em;
+    padding: 3px 9px; border-radius: 7px;
+  }
+  .tag.ql { color: #d8d4cc; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); }
+  .tag.hc { color: #c8d0d8; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.14); }
+  .tag.bw { color: #b7d4ff; background: rgba(22,119,255,.14); border: 1px solid rgba(22,119,255,.28); }
+  .tag.ds { color: #e8e0d0; background: rgba(230,184,77,.1); border: 1px solid rgba(230,184,77,.22); }
+  .card-title {
+    font-size: 15px; font-weight: 650; letter-spacing: -.015em;
+  }
+  .card-desc {
+    margin: 6px 0 0;
+    font-size: 12.5px; color: var(--z-text-2);
+  }
+  .card-why {
+    margin: 6px 0 0;
+    font-size: 11.5px; color: var(--z-muted);
+  }
+  .card-why em { color: var(--z-sky); font-style: normal; font-weight: 550; }
+  .card-scene {
+    margin: 5px 0 0;
+    font-size: 11px; color: var(--z-faint);
+  }
+  .card-scene span { color: var(--z-muted); }
+
+  /* ── Mini app ── */
+  .app {
+    background: var(--z-surface-1);
+    display: flex; flex-direction: column;
+    min-height: 448px;
+    flex: 1;
+  }
+  .titlebar {
+    display: flex; align-items: center; gap: 8px;
+    height: 34px; padding: 0 11px;
+    background: var(--z-surface-0);
+    border-bottom: 1px solid var(--z-hairline);
+    flex-shrink: 0;
+  }
+  .traffic { display: flex; gap: 6px; padding: 0 2px; }
+  .traffic span {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #2a2a2e; border: 1px solid rgba(255,255,255,.06);
+  }
+  .traffic .r { background: #ff5f57; border-color: #e0443e; }
+  .traffic .y { background: #febc2e; border-color: #dea123; }
+  .traffic .g { background: #28c840; border-color: #1aad2f; }
+  .tb-title {
+    flex: 1; text-align: center;
+    font-size: 11px; font-weight: 550; color: var(--z-muted);
+  }
+  .tb-badge {
+    font-size: 9.5px; font-weight: 600; color: var(--z-faint);
+    border: 1px solid var(--z-hairline); border-radius: 5px;
+    padding: 1px 6px;
+  }
+
+  .body {
+    display: grid;
+    grid-template-columns: 248px 1fr;
+    flex: 1; min-height: 0;
+  }
+
+  .sidebar {
+    background: var(--z-surface-2);
+    border-right: 1px solid var(--z-hairline);
+    display: flex; flex-direction: column;
+    font-size: 12px;
+    position: relative;
+    overflow: hidden;
+  }
+  .side-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 12px 7px;
+    font-size: 11px; font-weight: 650;
+    color: var(--z-text-2);
+  }
+  .side-add {
+    font-size: 10px; font-weight: 550;
+    color: var(--z-muted);
+    border: 1px solid var(--z-hairline);
+    background: var(--z-surface-3);
+    border-radius: 5px;
+    padding: 2px 7px;
+  }
+  .tree { padding: 2px 0 14px; overflow: auto; flex: 1; }
+
+  .row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 8px;
+    min-height: 26px;
+    border-radius: var(--z-radius-sm);
+    margin: 1px 6px;
+    color: var(--z-text-2);
+  }
+  .row .name {
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .row.repo { font-weight: 650; color: var(--z-text); margin-top: 2px; }
+  .chev { width: 10px; color: var(--z-faint); flex-shrink: 0; font-size: 9px; }
+  .badge {
+    flex-shrink: 0; min-width: 16px; height: 15px; padding: 0 4px;
+    border-radius: var(--z-radius-pill);
+    background: var(--z-surface-4);
+    color: var(--z-muted); font-size: 9px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .ico {
+    width: 13px; height: 13px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    opacity: .85;
+  }
+  .ico svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+  .st {
+    width: 10px; height: 10px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .st-idle {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--z-idle);
+  }
+  .st-work {
+    width: 7px; height: 7px; border-radius: 50%;
+    border: 1.5px solid var(--z-working);
+    border-top-color: transparent;
+  }
+  .st-done {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--z-done);
+    box-shadow: 0 0 0 2px rgba(61,214,140,.15);
+  }
+  .brand {
+    width: 13px; height: 13px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 3px; font-size: 8px; font-weight: 700;
+  }
+  .brand.openai { color: var(--z-text); background: #2a2a2e; }
+  .brand.grok { color: #111; background: #ececef; border-radius: 50%; }
+  .brand.claude { color: #D97757; background: rgba(217,119,87,.12); }
+  .term {
+    width: 13px; height: 13px; flex-shrink: 0;
+    border-radius: 3px;
+    background: #1e1e22;
+    border: 1px solid rgba(255,255,255,.08);
+    display: grid; place-items: center;
+    font-family: var(--mono); font-size: 7.5px; font-weight: 700;
+    color: var(--z-done); line-height: 1;
+  }
+  .meta-right {
+    font-size: 10px; color: var(--z-faint); flex-shrink: 0;
+  }
+
+  /* Shared ws-group skeleton */
+  .ws-group {
+    margin: 5px 7px;
+    padding: 3px 0 4px;
+    border-radius: var(--z-radius-md);
+    border: 1px solid transparent;
+    background: transparent;
+    position: relative;
+  }
+  .ws-group .ws-head {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 9px 3px;
+    min-height: 26px;
+    color: var(--z-text-2);
+    font-weight: 550;
+  }
+  .ws-group .ws-head .name {
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    color: inherit;
+  }
+  .ws-group .ws-sub {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 10.5px; color: var(--z-muted);
+    font-weight: 450; padding: 0 9px 5px 28px;
+  }
+  .ws-group .ws-sub .sky { color: var(--z-sky); }
+  .ws-group .ws-sub .ok { color: var(--z-done); }
+
+  .ws-group .tab-row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 9px 4px 20px;
+    min-height: 26px;
+    margin: 1px 5px;
+    border-radius: var(--z-radius-sm);
+    color: var(--z-text-2);
+    position: relative;
+  }
+  .ws-group .tab-row .name {
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ws-group .tab-row.tab-active {
+    color: var(--z-text);
+  }
+
+  .ws-plain {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 8px 3px 16px;
+    min-height: 26px;
+    border-radius: var(--z-radius-sm);
+    margin: 1px 6px;
+    color: var(--z-text-2);
+  }
+  .ws-plain .name {
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .section-label {
+    margin: 10px 12px 4px;
+    font-size: 10px; font-weight: 650;
+    letter-spacing: .04em; text-transform: uppercase;
+    color: var(--z-faint);
+    display: flex; align-items: center; gap: 6px;
+  }
+
+  /* Main pane hint */
+  .main {
+    background: var(--z-surface-3);
+    display: flex; flex-direction: column;
+    min-width: 0; min-height: 0;
+    position: relative;
+  }
+  .main-tabs {
+    display: flex; align-items: center; gap: 4px;
+    padding: 7px 10px 0;
+    border-bottom: 1px solid var(--z-hairline);
+    min-height: 34px;
+  }
+  .mtab {
+    font-size: 11px; color: var(--z-muted);
+    padding: 5px 10px; border-radius: 8px 8px 0 0;
+    background: transparent;
+  }
+  .mtab.on {
+    color: var(--z-text);
+    background: var(--z-surface-4);
+    border: 1px solid var(--z-hairline);
+    border-bottom-color: var(--z-surface-4);
+    margin-bottom: -1px;
+  }
+  .main-body {
+    flex: 1; padding: 16px 18px;
+    font-size: 12.5px; color: var(--z-text-2);
+    line-height: 1.55;
+  }
+  .main-body .q { color: var(--z-text); font-weight: 550; margin-bottom: 8px; }
+  .main-body .hint {
+    font-size: 11px; color: var(--z-faint);
+    margin-top: 14px;
+  }
+  .main-body .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 10.5px; color: var(--z-sky);
+    background: rgba(108,148,180,.1);
+    border: 1px solid rgba(108,148,180,.22);
+    border-radius: 6px; padding: 3px 8px;
+  }
+  .composer {
+    margin: 0 12px 12px;
+    padding: 10px 12px;
+    background: var(--z-surface-2);
+    border: 1px solid var(--z-hairline);
+    border-radius: var(--z-radius-md);
+    font-size: 11.5px; color: var(--z-faint);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .send {
+    font-size: 10.5px; font-weight: 650; color: #fff;
+    background: var(--z-accent);
+    border-radius: 7px; padding: 4px 10px;
+    box-shadow: 0 1px 0 rgba(255,255,255,.12) inset;
+  }
+
+  /* ════════════════════════════════
+     1 · Quiet Lift — 静默抬升
+     ════════════════════════════════ */
+  .ql .sidebar {
+    background: #121214;
+  }
+  .ql .ws-group.is-sel {
+    background:
+      linear-gradient(180deg, rgba(255,255,255,.055) 0%, rgba(255,255,255,.02) 40%, rgba(255,255,255,.015) 100%),
+      #1c1c20;
+    border: none;
+    border-radius: var(--z-radius-md);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,.08),
+      inset 0 -1px 0 rgba(0,0,0,.25),
+      0 6px 18px rgba(0,0,0,.28);
+    padding: 4px 0 5px;
+  }
+  .ql .ws-group.is-sel .ws-head {
+    color: var(--z-text);
+    font-weight: 600;
+  }
+  .ql .ws-group.is-sel .tab-row.tab-active {
+    background: rgba(255,255,255,.07);
+    backdrop-filter: blur(6px);
+    border-radius: 8px;
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,.1),
+      0 1px 2px rgba(0,0,0,.2);
+    color: var(--z-text);
+    font-weight: 550;
+  }
+  .ql .ws-group.is-sel .tab-row.tab-active::before {
+    content: "";
+    position: absolute;
+    left: 7px; top: 7px; bottom: 7px;
+    width: 2px;
+    border-radius: 2px;
+    background: var(--z-sky);
+    opacity: .85;
+  }
+  .ql .ws-group.is-sel .tab-row.tab-active .name { padding-left: 2px; }
+
+  /* ════════════════════════════════
+     2 · Hairline Card — 发丝卡片
+     ════════════════════════════════ */
+  .hc .sidebar { background: #101012; }
+  .hc .ws-group.is-sel {
+    background: #161618;
+    border: 1px solid rgba(255,255,255,.11);
+    border-radius: var(--z-radius-md);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,.06),
+      inset 0 0 0 1px rgba(255,255,255,.02),
+      0 0 0 1px rgba(0,0,0,.35),
+      0 4px 14px rgba(0,0,0,.22);
+    padding: 4px 0 5px;
+  }
+  .hc .ws-group.is-sel .ws-head {
+    color: #f0f0f4;
+    font-weight: 620;
+  }
+  .hc .ws-group.is-sel .tab-row {
+    color: #a8a8b2;
+  }
+  .hc .ws-group.is-sel .tab-row.tab-active {
+    background: #2a2a30;
+    border: 1px solid rgba(255,255,255,.1);
+    border-radius: 8px;
+    color: #f2f2f6;
+    font-weight: 620;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
+  }
+  .hc .ws-group.is-sel .tab-row.tab-active .name {
+    letter-spacing: -.01em;
+  }
+
+  /* ════════════════════════════════
+     3 · Brand Whisper — 品牌低语
+     ════════════════════════════════ */
+  .bw .sidebar { background: #121316; }
+  .bw .ws-group.is-sel {
+    background:
+      linear-gradient(90deg, rgba(22,119,255,.09) 0%, rgba(22,119,255,.02) 28%, transparent 55%),
+      #17181c;
+    border: 1px solid rgba(22,119,255,.22);
+    border-radius: var(--z-radius-md);
+    box-shadow:
+      0 0 0 1px rgba(22,119,255,.06),
+      inset 0 1px 0 rgba(255,255,255,.04),
+      0 8px 22px rgba(0,0,0,.3);
+    padding: 4px 0 5px;
+    overflow: hidden;
+  }
+  .bw .ws-group.is-sel::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 8px; bottom: 8px;
+    width: 2px;
+    border-radius: 0 2px 2px 0;
+    background: var(--z-accent);
+    box-shadow: 0 0 10px rgba(22,119,255,.35);
+  }
+  .bw .ws-group.is-sel .ws-head {
+    color: #e8eef8;
+    font-weight: 600;
+    padding-left: 12px;
+  }
+  .bw .ws-group.is-sel .ws-sub { padding-left: 31px; }
+  .bw .ws-group.is-sel .tab-row { padding-left: 22px; }
+  .bw .ws-group.is-sel .tab-row.tab-active {
+    background: rgba(22,119,255,.10);
+    border: 1px solid rgba(22,119,255,.18);
+    border-radius: 8px;
+    color: #e8f1ff;
+    font-weight: 560;
+    box-shadow: inset 0 0 0 1px rgba(22,119,255,.06);
+  }
+  .bw .ws-group.is-sel .tab-row.tab-active::after {
+    content: "";
+    position: absolute;
+    left: 8px; top: 8px; bottom: 8px;
+    width: 2px;
+    border-radius: 2px;
+    background: rgba(22,119,255,.75);
+  }
+
+  /* ════════════════════════════════
+     4 · Depth Stack — 深度叠层
+     ════════════════════════════════ */
+  .ds .sidebar {
+    background: #0e0e10;
+  }
+  .ds .sidebar::after {
+    content: "";
+    pointer-events: none;
+    position: absolute;
+    left: 10%; right: 10%; top: 28%;
+    height: 180px;
+    background: radial-gradient(ellipse at center, rgba(22,119,255,.07), transparent 70%);
+    z-index: 0;
+  }
+  .ds .tree { position: relative; z-index: 1; }
+  .ds .ws-group.is-sel {
+    background:
+      linear-gradient(165deg, #2c2c33 0%, #222228 45%, #1a1a1f 100%);
+    border: 1px solid rgba(255,255,255,.1);
+    border-radius: var(--z-radius-lg);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,.1) inset,
+      0 -1px 0 rgba(0,0,0,.4) inset,
+      0 10px 28px rgba(0,0,0,.55),
+      0 2px 6px rgba(0,0,0,.35),
+      0 0 40px rgba(22,119,255,.04);
+    padding: 5px 0 6px;
+    transform: translateY(-1px);
+  }
+  .ds .ws-group.is-sel .ws-head {
+    color: #f4f4f8;
+    font-weight: 650;
+  }
+  .ds .ws-group.is-sel .tab-row {
+    color: #a0a0aa;
+  }
+  .ds .ws-group.is-sel .tab-row.tab-active {
+    background: #32323a;
+    border-radius: 9px;
+    color: #fff;
+    font-weight: 600;
+    box-shadow:
+      0 2px 8px rgba(0,0,0,.35),
+      0 1px 0 rgba(255,255,255,.08) inset,
+      0 0 0 1px rgba(255,255,255,.06);
+  }
+
+  .foot {
+    max-width: 1560px; margin: 22px auto 0;
+    font-size: 11px; color: var(--z-faint);
+    display: flex; flex-wrap: wrap; gap: 12px 24px;
+  }
+  .foot code {
+    font-family: var(--mono); font-size: 10.5px; color: var(--z-muted);
+  }
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <div class="eyebrow"><i></i> Design Proposal · Aesthetic Selection</div>
+  <h1>Zap · Workspace 选中态 · 高审美四案</h1>
+  <p class="lead">
+    这不是截图像素拷贝，而是在 Zap 现网暗色气质与北星 surface 分层上的<strong>设计提案</strong>。
+    四版彼此一眼可分：靠层次、光、圆角与克制 accent，而不是灰阶微差或亮蓝实心 pill。
+    产品规则不变：<strong>.ws-group.is-sel</strong> 一体包住 worktree 头行 + 全部子 tab；组内唯一 <strong>.tab-active</strong>。
+  </p>
+</header>
+
+<div class="palette">
+  <span class="label">Tokens</span>
+  <span class="sw"><b style="background:#0a0a0a"></b>s0</span>
+  <span class="sw"><b style="background:#141416"></b>s2</span>
+  <span class="sw"><b style="background:#1a1a1d"></b>s3</span>
+  <span class="sw"><b style="background:#222226"></b>s4</span>
+  <span class="sw"><b style="background:#2a2a2f"></b>s5</span>
+  <span class="sw"><b style="background:#1677ff"></b>#1677ff</span>
+  <span class="sw"><b style="background:#6c94b4"></b>#6c94b4</span>
+  <span class="sw"><b style="background:#3dd68c"></b>done</span>
+  <span class="sw"><b style="background:rgba(255,255,255,.12)"></b>hairline</span>
+</div>
+
+<div class="grid">
+
+  <!-- ═══════════ 1 Quiet Lift ═══════════ -->
+  <section class="card ql">
+    <div class="card-meta">
+      <div class="tagrow">
+        <span class="tag ql">静默抬升</span>
+        <span class="card-title">Quiet Lift</span>
+      </div>
+      <p class="card-desc">暖黑分层、内高光、无描边；组像一张柔和 elevated card，激活 tab 是 frosted chip。</p>
+      <p class="card-why">为什么好看：靠<strong>光</strong>而不是描边划界，安静却有体积感；天青 2px 轨只点一下，不抢戏。</p>
+      <p class="card-scene">适用：<span>长时间盯侧栏的日常开发，想要「贵但不出声」。</span></p>
+    </div>
+    <div class="app">
+      <div class="titlebar">
+        <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+        <div class="tb-title">Zap · index-platform-backend</div>
+        <div class="tb-badge">Quiet Lift</div>
+      </div>
+      <div class="body">
+        <aside class="sidebar">
+          <div class="side-head">
+            <span>Repositories</span>
+            <span class="side-add">+</span>
+          </div>
+          <div class="tree">
+            <div class="row repo">
+              <span class="chev">▾</span>
+              <span class="ico" style="color:#b4b4bc">
+                <svg viewBox="0 0 16 16"><path d="M2 3.5h12M2 8h12M2 12.5h8"/></svg>
+              </span>
+              <span class="name">index-platform-backend</span>
+              <span class="badge">3</span>
+            </div>
+
+            <div class="ws-group is-sel">
+              <div class="ws-head">
+                <span class="chev">▾</span>
+                <span class="ico" style="color:#9aa0a8">
+                  <svg viewBox="0 0 16 16"><circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="4" r="1.6"/><circle cx="12" cy="12" r="1.6"/><path d="M4 10.4V5.5a2 2 0 0 1 2-2h4.4M12 5.6v4.8"/></svg>
+                </span>
+                <span class="name">feature-602-main</span>
+                <span class="st"><span class="st-work"></span></span>
+              </div>
+              <div class="ws-sub">
+                <span class="sky">a3f2c1</span>
+                <span>·</span>
+                <span class="ok">synced</span>
+              </div>
+              <div class="tab-row">
+                <span class="brand grok">G</span>
+                <span class="name">Grok · 梳理接口契约</span>
+                <span class="meta-right">2m</span>
+              </div>
+              <div class="tab-row tab-active">
+                <span class="brand openai">✦</span>
+                <span class="name">确认模型身份</span>
+                <span class="st"><span class="st-work"></span></span>
+              </div>
+              <div class="tab-row">
+                <span class="brand claude">C</span>
+                <span class="name">Claude 审阅</span>
+                <span class="st"><span class="st-done"></span></span>
+              </div>
+            </div>
+
+            <div class="ws-plain">
+              <span class="ico" style="color:#6a6a74">
+                <svg viewBox="0 0 16 16"><circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="4" r="1.6"/><circle cx="12" cy="12" r="1.6"/><path d="M4 10.4V5.5a2 2 0 0 1 2-2h4.4M12 5.6v4.8"/></svg>
+              </span>
+              <span class="name">feature-602-hotfix</span>
+            </div>
+            <div class="ws-plain">
+              <span class="ico" style="color:#6a6a74">
+                <svg viewBox="0 0 16 16"><circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="4" r="1.6"/><circle cx="12" cy="12" r="1.6"/><path d="M4 10.4V5.5a2 2 0 0 1 2-2h4.4M12 5.6v4.8"/></svg>
+              </span>
+              <span class="name">release-601</span>
+            </div>
+
+            <div class="section-label"><span class="term">&gt;_</span> Unclassified</div>
+            <div class="row">
+              <span class="term">&gt;_</span>
+              <span class="name">帮我再 code review</span>
+              <span class="meta-right">1d</span>
+            </div>
+          </div>
+        </aside>
+        <main class="main">
+          <div class="main-tabs">
+            <div class="mtab on">确认模型身份</div>
+            <div class="mtab">Claude 审阅</div>
+          </div>
+          <div class="main-body">
+            <div class="q">你是什么模型？</div>
+            <div>OpenAI Codex · 会话进行中</div>
+            <div class="hint"><span class="chip">Quiet Lift · frosted chip + sky rail</span></div>
+          </div>
+          <div class="composer">
+            <span>Ask Zap…</span>
+            <span class="send">Send</span>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 2 Hairline Card ═══════════ -->
+  <section class="card hc">
+    <div class="card-meta">
+      <div class="tagrow">
+        <span class="tag hc">发丝卡片</span>
+        <span class="card-title">Hairline Card</span>
+      </div>
+      <p class="card-desc">近黑底 + 精致白发丝边 + 极轻 inset；激活 tab 抬一档 surface，字重略加重。</p>
+      <p class="card-why">为什么好看：像精工工具的<strong>刻线</strong>——边界清晰但不厚重，对比干净利落。</p>
+      <p class="card-scene">适用：<span>偏工程师审美、信息密度高、讨厌色块的用户。</span></p>
+    </div>
+    <div class="app">
+      <div class="titlebar">
+        <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+        <div class="tb-title">Zap · index-platform-backend</div>
+        <div class="tb-badge">Hairline</div>
+      </div>
+      <div class="body">
+        <aside class="sidebar">
+          <div class="side-head">
+            <span>Repositories</span>
+            <span class="side-add">+</span>
+          </div>
+          <div class="tree">
+            <div class="row repo">
+              <span class="chev">▾</span>
+              <span class="ico" style="color:#b4b4bc">
+                <svg viewBox="0 0 16 16"><path d="M2 3.5h12M2 8h12M2 12.5h8"/></svg>
+              </span>
+              <span class="name">index-platform-backend</span>
+              <span class="badge">3</span>
+            </div>
+
+            <div class="ws-group is-sel">
+              <div class="ws-head">
+                <span class="chev">▾</span>
+                <span class="ico" style="color:#9aa0a8">
+                  <svg viewBox="0 0 16 16"><circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="4" r="1.6"/><circle cx="12" cy="12" r="1.6"/><path d="M4 10.4V5.5a2 2 0 0 1 2-2h4.4M12 5.6v4.8"/></svg>
+                </span>
+                <span class="name">feature-602-main</span>
+                <span class="st"><span class="st-work"></span></span>
+              </div>
+              <div class="ws-sub">
+                <span class="sky">a3f2c1</span>
+                <span>·</span>
+                <span class="ok">synced</span>
+              </div>
+              <div class="tab-row">
+                <span class="brand grok">G</span>
+                <span class="name">Grok · 梳理接口契约</span>
+                <span class="meta-right">2m</span>
+              </div>
+              <div class="tab-row tab-active">
+                <span class="brand openai">✦</span>
+                <span class="name">确认模型身份</span>
+                <span class="st"><span class="st-work"></span></span>
+              </div>
+              <div class="tab-row">
+                <span class="brand claude">C</span>
+                <span class="name">Claude 审阅</span>
+                <span class="st"><span class="st-done"></span></span>
+              </div>
+            </div>
+
+            <div class="ws-plain">
+              <span class="ico" style="color:#6a6a74">
+                <svg viewBox="0 0 16 16"><circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="4" r="1.6"/><circle cx="12" cy="12" r="1.6"/><path d="M4 10.4V5.5a2 2 0 0 1 2-2h4.4M12 5.6v4.8"/></svg>
+              </span>
+              <span class="name">feature-602-hotfix</span>
+            </div>
+            <div class="ws-plain">
+              <span class="ico" style="color:#6a6a74">
+                <svg viewBox="0 0 16 16"><circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="4" r="1.6"/><circle cx="12" cy="12" r="1.6"/><path d="M4 10.4V5.5a2 2 0 0 1 2-2h4.4M12 5.6v4.8"/></svg>
+              </span>
+              <span class="name">release-601</span>
+            </div>
+
+            <div class="section-label"><span class="term">&gt;_</span> Unclassified</div>
+            <div class="row">
+              <span class="term">&gt;_</span>
+              <span class="name">帮我再 code review</span>
+              <span class="meta-right">1d</span>
+            </div>
+          </div>
+        </aside>
+        <main class="main">
+          <div class="main-tabs">
+            <div class="mtab on">确认模型身份</div>
+            <div class="mtab">Claude 审阅</div>
+          </div>
+          <div class="main-body">
+            <div class="q">你是什么模型？</div>
+            <div>OpenAI Codex · 会话进行中</div>
+            <div class="hint"><span class="chip">Hairline · 1px edge + surface step</span></div>
+          </div>
+          <div class="composer">
+            <span>Ask Zap…</span>
+            <span class="send">Send</span>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 3 Brand Whisper ═══════════ -->
+  <section class="card bw">
+    <div class="card-meta">
+      <div class="tagrow">
+        <span class="tag bw">品牌低语</span>
+        <span class="card-title">Brand Whisper</span>
+      </div>
+      <p class="card-desc">品牌蓝 #1677ff 只做左侧 2px rail + ≤12% soft wash；组面仍是近黑，绝非亮蓝 pill。</p>
+      <p class="card-why">为什么好看：品牌色以<strong>耳语</strong>出现——你知道这是 Zap，但侧栏依旧沉静。</p>
+      <p class="card-scene">适用：<span>要品牌辨识、又怕「蓝太重」被骂的折中首选。</span></p>
+    </div>
+    <div class="app">
+      <div class="titlebar">
+        <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+        <div class="tb-title">Zap · index-platform-backend</div>
+        <div class="tb-badge">Whisper</div>
+      </div>
+      <div class="body">
+        <aside class="sidebar">
+          <div class="side-head">
+            <span>Repositories</span>
+            <span class="side-add">+</span>
+          </div>
+          <div class="tree">
+            <div class="row repo">
+              <span class="chev">▾</span>
+              <span class="ico" style="color:#b4b4bc">
+                <svg viewBox="0 0 16 16"><path d="M2 3.5h12M2 8h12M2 12.5h8"/></svg>
+              </span>
+              <span class="name">index-platform-backend</span>
+              <span class="badge">3</span>
+            </div>
+
+            <div class="ws-group is-sel">
+              <div class="ws-head">
+                <span class="chev">▾</span>
+                <span class="ico" style="color:#9aa0a8">
+                  <svg viewBox="0 0 16 16"><circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="4" r="1.6"/><circle cx="12" cy="12" r="1.6"/><path d="M4 10.4V5.5a2 2 0 0 1 2-2h4.4M12 5.6v4.8"/></svg>
+                </span>
+                <span class="name">feature-602-main</span>
+                <span class="st"><span class="st-work"></span></span>
+              </div>
+              <div class="ws-sub">
+                <span class="sky">a3f2c1</span>
+                <span>·</span>
+                <span class="ok">synced</span>
+              </div>
+              <div class="tab-row">
+                <span class="brand grok">G</span>
+                <span class="name">Grok · 梳理接口契约</span>
+                <span class="meta-right">2m</span>
+              </div>
+              <div class="tab-row tab-active">
+                <span class="brand openai">✦</span>
+                <span class="name">确认模型身份</span>
+                <span class="st"><span class="st-work"></span></span>
+              </div>
+              <div class="tab-row">
+                <span class="brand claude">C</span>
+                <span class="name">Claude 审阅</span>
+                <span class="st"><span class="st-done"></span></span>
+              </div>
+            </div>
+
+            <div class="ws-plain">
+              <span class="ico" style="color:#6a6a74">
+                <svg viewBox="0 0 16 16"><circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="4" r="1.6"/><circle cx="12" cy="12" r="1.6"/><path d="M4 10.4V5.5a2 2 0 0 1 2-2h4.4M12 5.6v4.8"/></svg>
+              </span>
+              <span class="name">feature-602-hotfix</span>
+            </div>
+            <div class="ws-plain">
+              <span class="ico" style="color:#6a6a74">
+                <svg viewBox="0 0 16 16"><circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="4" r="1.6"/><circle cx="12" cy="12" r="1.6"/><path d="M4 10.4V5.5a2 2 0 0 1 2-2h4.4M12 5.6v4.8"/></svg>
+              </span>
+              <span class="name">release-601</span>
+            </div>
+
+            <div class="section-label"><span class="term">&gt;_</span> Unclassified</div>
+            <div class="row">
+              <span class="term">&gt;_</span>
+              <span class="name">帮我再 code review</span>
+              <span class="meta-right">1d</span>
+            </div>
+          </div>
+        </aside>
+        <main class="main">
+          <div class="main-tabs">
+            <div class="mtab on">确认模型身份</div>
+            <div class="mtab">Claude 审阅</div>
+          </div>
+          <div class="main-body">
+            <div class="q">你是什么模型？</div>
+            <div>OpenAI Codex · 会话进行中</div>
+            <div class="hint"><span class="chip">Brand Whisper · rail + 10% wash</span></div>
+          </div>
+          <div class="composer">
+            <span>Ask Zap…</span>
+            <span class="send">Send</span>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 4 Depth Stack ═══════════ -->
+  <section class="card ds">
+    <div class="card-meta">
+      <div class="tagrow">
+        <span class="tag ds">深度叠层</span>
+        <span class="card-title">Depth Stack</span>
+      </div>
+      <p class="card-desc">对齐北星 surface-0…5；选中组真正「浮」起来，激活 tab 带微阴影与径向氛围光。</p>
+      <p class="card-why">为什么好看：戏剧感来自<strong>纵深</strong>——组是舞台，tab 是聚光灯下的演员。</p>
+      <p class="card-scene">适用：<span>演示、截图对外、想让选中态一眼抓眼球的场景。</span></p>
+    </div>
+    <div class="app">
+      <div class="titlebar">
+        <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+        <div class="tb-title">Zap · index-platform-backend</div>
+        <div class="tb-badge">Depth</div>
+      </div>
+      <div class="body">
+        <aside class="sidebar">
+          <div class="side-head">
+            <span>Repositories</span>
+            <span class="side-add">+</span>
+          </div>
+          <div class="tree">
+            <div class="row repo">
+              <span class="chev">▾</span>
+              <span class="ico" style="color:#b4b4bc">
+                <svg viewBox="0 0 16 16"><path d="M2 3.5h12M2 8h12M2 12.5h8"/></svg>
+              </span>
+              <span class="name">index-platform-backend</span>
+              <span class="badge">3</span>
+            </div>
+
+            <div class="ws-group is-sel">
+              <div class="ws-head">
+                <span class="chev">▾</span>
+                <span class="ico" style="color:#9aa0a8">
+                  <svg viewBox="0 0 16 16"><circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="4" r="1.6"/><circle cx="12" cy="12" r="1.6"/><path d="M4 10.4V5.5a2 2 0 0 1 2-2h4.4M12 5.6v4.8"/></svg>
+                </span>
+                <span class="name">feature-602-main</span>
+                <span class="st"><span class="st-work"></span></span>
+              </div>
+              <div class="ws-sub">
+                <span class="sky">a3f2c1</span>
+                <span>·</span>
+                <span class="ok">synced</span>
+              </div>
+              <div class="tab-row">
+                <span class="brand grok">G</span>
+                <span class="name">Grok · 梳理接口契约</span>
+                <span class="meta-right">2m</span>
+              </div>
+              <div class="tab-row tab-active">
+                <span class="brand openai">✦</span>
+                <span class="name">确认模型身份</span>
+                <span class="st"><span class="st-work"></span></span>
+              </div>
+              <div class="tab-row">
+                <span class="brand claude">C</span>
+                <span class="name">Claude 审阅</span>
+                <span class="st"><span class="st-done"></span></span>
+              </div>
+            </div>
+
+            <div class="ws-plain">
+              <span class="ico" style="color:#6a6a74">
+                <svg viewBox="0 0 16 16"><circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="4" r="1.6"/><circle cx="12" cy="12" r="1.6"/><path d="M4 10.4V5.5a2 2 0 0 1 2-2h4.4M12 5.6v4.8"/></svg>
+              </span>
+              <span class="name">feature-602-hotfix</span>
+            </div>
+            <div class="ws-plain">
+              <span class="ico" style="color:#6a6a74">
+                <svg viewBox="0 0 16 16"><circle cx="4" cy="12" r="1.6"/><circle cx="12" cy="4" r="1.6"/><circle cx="12" cy="12" r="1.6"/><path d="M4 10.4V5.5a2 2 0 0 1 2-2h4.4M12 5.6v4.8"/></svg>
+              </span>
+              <span class="name">release-601</span>
+            </div>
+
+            <div class="section-label"><span class="term">&gt;_</span> Unclassified</div>
+            <div class="row">
+              <span class="term">&gt;_</span>
+              <span class="name">帮我再 code review</span>
+              <span class="meta-right">1d</span>
+            </div>
+          </div>
+        </aside>
+        <main class="main">
+          <div class="main-tabs">
+            <div class="mtab on">确认模型身份</div>
+            <div class="mtab">Claude 审阅</div>
+          </div>
+          <div class="main-body">
+            <div class="q">你是什么模型？</div>
+            <div>OpenAI Codex · 会话进行中</div>
+            <div class="hint"><span class="chip">Depth Stack · float + chip shadow</span></div>
+          </div>
+          <div class="composer">
+            <span>Ask Zap…</span>
+            <span class="send">Send</span>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<footer class="foot">
+  <span>路径：<code>docs/superpowers/specs/2026-10-20-zap-selection-aesthetic.html</code></span>
+  <span>2026-10-20 · Asia/Shanghai · 勿改 Rust · 勿 git commit/push</span>
+  <span>禁：Orca 橙 · 亮蓝实心 pill · 说明书灰差三兄弟</span>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Zap · 选中态方案 · Worktree + Agent Tab Selection Affordances</title>
+<style>
+  /* ═══════════════════════════════════════════════════════════
+     Zap Shell North-Star tokens（对齐 2026-10-19 northstar）
+     本页对比 4 套「左树 worktree + 顶栏 agent 页签」选中态
+     ═══════════════════════════════════════════════════════════ */
+  :root {
+    --z-bg:          #070708;
+    --z-surface-0:   #0a0a0a;
+    --z-surface-1:   #0f0f11;
+    --z-surface-2:   #141416;
+    --z-surface-3:   #1a1a1d;
+    --z-surface-4:   #222226;
+    --z-surface-5:   #2a2a2f;
+
+    --z-hairline:    rgba(255,255,255,.07);
+    --z-hairline-strong: rgba(255,255,255,.12);
+    --z-hairline-focus: rgba(22,119,255,.45);
+
+    --z-text:        #ececef;
+    --z-text-2:      #b4b4bc;
+    --z-muted:       #8a8a94;
+    --z-faint:       #5c5c66;
+
+    --z-accent:      #1677ff;
+    --z-accent-strong:#0958d9;
+    --z-accent-soft: rgba(22,119,255,.14);
+    --z-accent-on:   #ffffff;
+
+    /* Orca-faithful orange (option A / D worktree) */
+    --orca-orange:   #f5a524;
+    --orca-orange-soft: rgba(245,165,36,.16);
+    --orca-orange-border: rgba(245,165,36,.35);
+
+    --z-idle:        rgba(163,163,170,.45);
+    --z-working:     #e6b84d;
+    --z-done:        #3dd68c;
+    --z-waiting:     #f0b429;
+    --z-failed:      #ef4444;
+    --z-busy-dot:    #3dd68c;
+
+    --z-radius-sm:   6px;
+    --z-radius-md:   10px;
+    --z-radius-lg:   14px;
+    --z-radius-pill: 999px;
+
+    --font: system-ui, -apple-system, "PingFang SC", "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: var(--font);
+    background:
+      radial-gradient(1100px 520px at 12% -8%, #121826 0%, transparent 55%),
+      radial-gradient(900px 420px at 88% 4%, rgba(22,119,255,.07), transparent 50%),
+      var(--z-bg);
+    color: var(--z-text);
+    padding: 28px 28px 72px;
+    line-height: 1.45;
+    min-height: 100vh;
+  }
+
+  .page-head { max-width: 1480px; margin: 0 auto 22px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10px; font-weight: 650; letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--z-accent);
+    background: var(--z-accent-soft);
+    border: 1px solid rgba(22,119,255,.22);
+    padding: 3px 9px; border-radius: var(--z-radius-pill);
+    margin-bottom: 10px;
+  }
+  .pill i {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--z-accent);
+    box-shadow: 0 0 0 3px rgba(22,119,255,.2);
+  }
+  .page-head h1 {
+    margin: 0 0 6px;
+    font-size: 18px;
+    font-weight: 650;
+    letter-spacing: -.02em;
+  }
+  .page-head .lead {
+    margin: 0;
+    max-width: 920px;
+    font-size: 13px;
+    color: var(--z-muted);
+  }
+  .page-head .lead code {
+    font-family: var(--mono); font-size: 11.5px;
+    color: #9ec5ff;
+    background: rgba(22,119,255,.1);
+    border: 1px solid rgba(22,119,255,.2);
+    border-radius: 4px; padding: 1px 5px;
+  }
+
+  /* ── Options grid ── */
+  .options {
+    max-width: 1480px; margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+  }
+  @media (max-width: 1100px) {
+    .options { grid-template-columns: 1fr; }
+  }
+
+  .option {
+    background: rgba(255,255,255,.02);
+    border: 1px solid var(--z-hairline-strong);
+    border-radius: var(--z-radius-lg);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .option-meta {
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--z-hairline);
+    background: rgba(0,0,0,.25);
+  }
+  .option-meta .tagrow {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .opt-letter {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 7px;
+    font-size: 12px; font-weight: 750;
+    background: var(--z-accent);
+    color: #fff;
+  }
+  .opt-letter.orange { background: var(--orca-orange); color: #1a1200; }
+  .opt-letter.hybrid {
+    background: linear-gradient(135deg, var(--orca-orange) 45%, var(--z-accent) 55%);
+    color: #fff;
+  }
+  .opt-letter.soft {
+    background: var(--z-surface-5);
+    color: #9ec5ff;
+    border: 1px solid rgba(22,119,255,.35);
+  }
+  .opt-title {
+    font-size: 14px; font-weight: 650; letter-spacing: -.01em;
+  }
+  .opt-philosophy {
+    font-size: 11px; color: var(--z-faint);
+    font-family: var(--mono);
+  }
+  .opt-desc {
+    margin: 0 0 8px;
+    font-size: 12.5px; color: var(--z-text-2);
+  }
+  .procon {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    font-size: 11.5px;
+  }
+  .procon .box {
+    border-radius: var(--z-radius-sm);
+    padding: 7px 9px;
+    line-height: 1.4;
+  }
+  .procon .pro {
+    background: rgba(61,214,140,.08);
+    border: 1px solid rgba(61,214,140,.2);
+    color: #9ee0bc;
+  }
+  .procon .con {
+    background: rgba(239,68,68,.07);
+    border: 1px solid rgba(239,68,68,.18);
+    color: #e8a0a0;
+  }
+  .procon strong {
+    display: block; font-size: 10px; font-weight: 700;
+    letter-spacing: .04em; text-transform: uppercase;
+    margin-bottom: 3px; opacity: .85;
+  }
+
+  /* ── Mini app chrome ── */
+  .app {
+    background: var(--z-surface-1);
+    display: flex; flex-direction: column;
+    min-height: 380px;
+    flex: 1;
+  }
+  .titlebar {
+    display: flex; align-items: center; gap: 8px;
+    height: 32px; padding: 0 10px;
+    background: var(--z-surface-0);
+    border-bottom: 1px solid var(--z-hairline);
+    flex-shrink: 0;
+  }
+  .traffic { display: flex; gap: 5px; padding: 0 2px; }
+  .traffic span {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: #2a2a2e; border: 1px solid rgba(255,255,255,.06);
+  }
+  .traffic .r { background: #ff5f57; border-color: #e0443e; }
+  .traffic .y { background: #febc2e; border-color: #dea123; }
+  .traffic .g { background: #28c840; border-color: #1aad2f; }
+  .tb-title {
+    flex: 1; text-align: center;
+    font-size: 11px; font-weight: 550; color: var(--z-muted);
+  }
+
+  .body {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    flex: 1; min-height: 0;
+  }
+
+  /* Sidebar common */
+  .sidebar {
+    background: var(--z-surface-2);
+    border-right: 1px solid var(--z-hairline);
+    display: flex; flex-direction: column;
+    min-height: 0;
+    font-size: 11.5px;
+  }
+  .side-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 10px 6px;
+    font-size: 10.5px; font-weight: 650;
+    color: var(--z-text-2);
+  }
+  .side-add {
+    font-size: 10px; font-weight: 550;
+    color: var(--z-muted);
+    border: 1px solid var(--z-hairline);
+    background: var(--z-surface-3);
+    border-radius: 5px;
+    padding: 2px 6px;
+  }
+  .tree { padding: 2px 0 10px; overflow: auto; flex: 1; }
+  .row {
+    display: flex; align-items: center; gap: 5px;
+    padding: 2px 6px;
+    min-height: 24px;
+    border-radius: var(--z-radius-sm);
+    margin: 1px 5px;
+    color: var(--z-text-2);
+    position: relative;
+  }
+  .row .name {
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .row.repo { font-weight: 650; color: var(--z-text); margin-top: 2px; }
+  .row.ws { font-weight: 550; }
+  .chev { width: 9px; color: var(--z-faint); flex-shrink: 0; font-size: 8px; }
+  .indent-ws { padding-left: 14px; }
+  .indent-tab { padding-left: 24px; }
+  .badge {
+    flex-shrink: 0; min-width: 16px; height: 15px; padding: 0 4px;
+    border-radius: var(--z-radius-pill);
+    background: var(--z-surface-4);
+    color: var(--z-muted); font-size: 9px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .dot-busy {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--z-busy-dot); flex-shrink: 0;
+  }
+  .st {
+    width: 10px; height: 10px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .st-idle {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--z-idle);
+  }
+  .st-work {
+    width: 7px; height: 7px; border-radius: 50%;
+    border: 1.5px solid var(--z-working);
+    border-top-color: transparent;
+    animation: spin .85s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .brand {
+    width: 12px; height: 12px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 2px; font-size: 8px; font-weight: 700;
+  }
+  .brand.openai { color: var(--z-text); background: #2a2a2e; }
+  .brand.grok { color: #111; background: #ececef; border-radius: 50%; }
+  .brand.claude { color: #D97757; }
+  .term {
+    width: 12px; height: 12px; flex-shrink: 0;
+    border-radius: 2px;
+    background: #1e1e22;
+    border: 1px solid rgba(255,255,255,.08);
+    display: grid; place-items: center;
+    font-family: var(--mono); font-size: 7px; font-weight: 700;
+    color: var(--z-done); line-height: 1;
+  }
+  .title-main { color: var(--z-text); }
+  .title-dim { color: var(--z-muted); }
+  .brief {
+    width: 14px; height: 14px; flex-shrink: 0;
+    border-radius: 3px;
+    display: grid; place-items: center;
+    font-size: 9px;
+  }
+
+  /* Main + tabs common */
+  .main {
+    background: var(--z-surface-3);
+    display: flex; flex-direction: column;
+    min-width: 0; min-height: 0;
+  }
+  .tabbar {
+    display: flex; align-items: stretch;
+    gap: 0;
+    padding: 0 6px;
+    height: 34px;
+    border-bottom: 1px solid var(--z-hairline);
+    background: rgba(0,0,0,.22);
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+  .tab {
+    display: flex; align-items: center; gap: 5px;
+    padding: 0 10px;
+    font-size: 11px;
+    color: var(--z-muted);
+    border: none; background: transparent;
+    position: relative;
+    white-space: nowrap;
+    max-width: 140px;
+    cursor: default;
+  }
+  .tab .tlabel {
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .tab .x {
+    font-size: 10px; color: var(--z-faint); margin-left: 2px;
+    opacity: 0; transition: opacity .12s;
+  }
+  .tab:hover .x, .tab.active .x { opacity: 1; }
+  .tab .robot {
+    width: 12px; height: 12px; border-radius: 3px;
+    background: var(--z-surface-5);
+    display: grid; place-items: center;
+    font-size: 8px; flex-shrink: 0;
+  }
+
+  .session {
+    flex: 1; padding: 12px 14px;
+    font-size: 11.5px; color: var(--z-text-2);
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .msg-user {
+    align-self: flex-end;
+    background: var(--z-surface-4);
+    border: 1px solid var(--z-hairline);
+    border-radius: var(--z-radius-md);
+    padding: 7px 10px;
+    color: var(--z-text);
+    max-width: 88%;
+  }
+  .msg-agent {
+    align-self: flex-start;
+    border-left: 2px solid rgba(22,119,255,.35);
+    padding: 2px 0 2px 10px;
+    max-width: 92%;
+  }
+  .msg-agent .role {
+    font-size: 9px; font-weight: 650;
+    color: var(--z-faint); letter-spacing: .04em;
+    text-transform: uppercase; margin-bottom: 3px;
+  }
+  .composer {
+    padding: 8px 10px 10px;
+    border-top: 1px solid var(--z-hairline);
+    background: rgba(0,0,0,.12);
+  }
+  .composer-box {
+    background: var(--z-surface-2);
+    border: 1px solid var(--z-hairline-strong);
+    border-radius: var(--z-radius-md);
+    padding: 7px 9px;
+    font-size: 11.5px; color: var(--z-faint);
+  }
+
+  .statusbar {
+    display: flex; align-items: center; gap: 10px;
+    height: 22px; padding: 0 10px;
+    background: var(--z-surface-0);
+    border-top: 1px solid var(--z-hairline);
+    font-size: 10px; color: var(--z-faint);
+    flex-shrink: 0;
+  }
+  .statusbar .sep {
+    width: 1px; height: 9px; background: var(--z-hairline-strong);
+  }
+
+  /* ════════════════════════════════
+     OPTION A — Orca orange pill
+     ════════════════════════════════ */
+  .a .ws-selected {
+    background: #1c1c1f;
+    border: 1px solid rgba(255,255,255,.1);
+    border-radius: var(--z-radius-md);
+    box-shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 4px 12px rgba(0,0,0,.35);
+    color: var(--z-text);
+    margin: 2px 6px;
+    padding: 4px 8px 4px 10px;
+    min-height: 28px;
+  }
+  .a .ws-selected::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 5px; bottom: 5px;
+    width: 3px;
+    border-radius: var(--z-radius-pill);
+    background: var(--orca-orange);
+    box-shadow: 0 0 8px rgba(245,165,36,.45);
+  }
+  .a .ws-selected .brief {
+    background: var(--orca-orange-soft);
+    color: var(--orca-orange);
+  }
+  .a .ws-selected .ws-sub {
+    display: flex; align-items: center; gap: 4px;
+    width: 100%;
+    font-size: 10px; color: var(--z-muted);
+    font-weight: 450; margin-top: 1px; padding-left: 23px;
+  }
+  .a .ws-selected .ws-sub .ok { color: var(--z-done); }
+  .a .tab.active {
+    background: var(--z-surface-4);
+    color: var(--z-text);
+    border-radius: 0;
+  }
+  .a .tab.active::before {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; top: 0;
+    height: 2.5px;
+    background: #fff;
+    border-radius: 0 0 2px 2px;
+  }
+
+  /* ════════════════════════════════
+     OPTION B — Zap blue pill (brand)
+     ════════════════════════════════ */
+  .b .ws-selected {
+    background: #1a1e28;
+    border: 1px solid rgba(22,119,255,.28);
+    border-radius: var(--z-radius-md);
+    box-shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 0 0 1px rgba(22,119,255,.08), 0 4px 14px rgba(22,119,255,.12);
+    color: var(--z-text);
+    margin: 2px 6px;
+    padding: 4px 8px 4px 10px;
+    min-height: 28px;
+  }
+  .b .ws-selected::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 5px; bottom: 5px;
+    width: 3px;
+    border-radius: var(--z-radius-pill);
+    background: var(--z-accent);
+    box-shadow: 0 0 8px rgba(22,119,255,.5);
+  }
+  .b .ws-selected .brief {
+    background: var(--z-accent-soft);
+    color: #69b1ff;
+  }
+  .b .ws-selected .ws-sub {
+    display: flex; align-items: center; gap: 4px;
+    width: 100%;
+    font-size: 10px; color: var(--z-muted);
+    font-weight: 450; margin-top: 1px; padding-left: 23px;
+  }
+  .b .ws-selected .ws-sub .ok { color: var(--z-done); }
+  .b .tab.active {
+    background: rgba(22,119,255,.12);
+    color: var(--z-text);
+  }
+  .b .tab.active::before {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; top: 0;
+    height: 2.5px;
+    background: var(--z-accent);
+    box-shadow: 0 0 6px rgba(22,119,255,.55);
+  }
+
+  /* ════════════════════════════════
+     OPTION C — Soft Zap (fill + underline, no card)
+     ════════════════════════════════ */
+  .c .ws-selected {
+    background: var(--z-accent-soft);
+    border-radius: var(--z-radius-sm);
+    color: var(--z-text);
+    box-shadow: inset 3px 0 0 var(--z-accent);
+    margin: 1px 5px;
+    padding-left: 8px;
+  }
+  .c .tab.active {
+    color: var(--z-text);
+    font-weight: 600;
+  }
+  .c .tab.active::after {
+    content: "";
+    position: absolute;
+    left: 8px; right: 8px; bottom: 0;
+    height: 2px;
+    background: var(--z-accent);
+    border-radius: 2px 2px 0 0;
+  }
+
+  /* ════════════════════════════════
+     OPTION D — Hybrid: orange worktree + blue tabs
+     ════════════════════════════════ */
+  .d .ws-selected {
+    background: #1c1c1f;
+    border: 1px solid rgba(255,255,255,.1);
+    border-radius: var(--z-radius-md);
+    box-shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 4px 12px rgba(0,0,0,.35);
+    color: var(--z-text);
+    margin: 2px 6px;
+    padding: 4px 8px 4px 10px;
+    min-height: 28px;
+  }
+  .d .ws-selected::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 5px; bottom: 5px;
+    width: 3px;
+    border-radius: var(--z-radius-pill);
+    background: var(--orca-orange);
+    box-shadow: 0 0 8px rgba(245,165,36,.45);
+  }
+  .d .ws-selected .brief {
+    background: var(--orca-orange-soft);
+    color: var(--orca-orange);
+  }
+  .d .ws-selected .ws-sub {
+    display: flex; align-items: center; gap: 4px;
+    width: 100%;
+    font-size: 10px; color: var(--z-muted);
+    font-weight: 450; margin-top: 1px; padding-left: 23px;
+  }
+  .d .ws-selected .ws-sub .ok { color: var(--z-done); }
+  .d .tab.active {
+    background: rgba(22,119,255,.12);
+    color: var(--z-text);
+    border-radius: 6px 6px 0 0;
+    margin-top: 4px;
+  }
+  .d .tab.active::before {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; top: 0;
+    height: 2.5px;
+    background: var(--z-accent);
+    border-radius: 2px 2px 0 0;
+  }
+
+  /* Legend / decision aid */
+  .legend {
+    max-width: 1480px; margin: 24px auto 0;
+    padding: 16px 18px;
+    background: rgba(255,255,255,.02);
+    border: 1px solid var(--z-hairline-strong);
+    border-radius: var(--z-radius-lg);
+    font-size: 12.5px; color: var(--z-text-2);
+  }
+  .legend h2 {
+    margin: 0 0 8px; font-size: 13px; font-weight: 650; color: var(--z-text);
+  }
+  .legend ul { margin: 0; padding-left: 18px; }
+  .legend li { margin: 5px 0; }
+  .legend code {
+    font-family: var(--mono); font-size: 11px;
+    color: #c8d4ff;
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--z-hairline);
+    border-radius: 4px; padding: 1px 5px;
+  }
+  .swatches {
+    display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px;
+  }
+  .swatch {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 11px; color: var(--z-muted);
+  }
+  .swatch i {
+    width: 14px; height: 14px; border-radius: 4px;
+    display: block;
+  }
+  .swatch .blue { background: #1677ff; }
+  .swatch .orange { background: #f5a524; }
+  .swatch .elev { background: #1c1c1f; border: 1px solid rgba(255,255,255,.15); }
+  .swatch .soft { background: rgba(22,119,255,.2); border: 1px solid rgba(22,119,255,.35); }
+
+  .note {
+    max-width: 1480px; margin: 14px auto 0;
+    font-size: 11.5px; color: var(--z-faint);
+  }
+</style>
+</head>
+<body>
+  <header class="page-head">
+    <div class="pill"><i></i> Selection Affordance · HTML 选型</div>
+    <h1>Zap · 左树 Worktree + Agent 页签选中态 · 四方案对比</h1>
+    <p class="lead">
+      把 Orca 的「圆角容器 + 左侧竖条 pill」与顶栏「一眼辨认当前页签」迁到 Zap。
+      色板对齐北星：暖黑分层 + 品牌蓝 <code>#1677ff</code>；部分方案保留 Orca 橙 pill 作对照。
+      未实现 Rust，仅供选型。参考截图：Orca <code>release-602</code> 选中态。
+    </p>
+  </header>
+
+  <div class="options">
+
+    <!-- ═══════════ A ═══════════ -->
+    <section class="option a">
+      <div class="option-meta">
+        <div class="tagrow">
+          <span class="opt-letter orange">A</span>
+          <span class="opt-title">Orca 橙 pill · 忠实迁移</span>
+          <span class="opt-philosophy">orange pill + white tab bar</span>
+        </div>
+        <p class="opt-desc">Worktree：圆角抬升容器 + 左侧橙色竖 pill；未选中纯文字。页签：浅底 + 顶部白色粗条。</p>
+        <div class="procon">
+          <div class="box pro"><strong>优点</strong>扫描感最强；与 Orca 用户心智一致；空间「当前工作树」一目了然。</div>
+          <div class="box con"><strong>缺点</strong>橙与 Zap 品牌蓝分叉；壳内两套强调色；偏「外来移植」感。</div>
+        </div>
+      </div>
+      <div class="app">
+        <div class="titlebar">
+          <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <div class="tb-title">Zap · 方案 A</div>
+        </div>
+        <div class="body">
+          <aside class="sidebar">
+            <div class="side-head"><span>仓库</span><span class="side-add">+ 添加</span></div>
+            <div class="tree">
+              <div class="row repo"><span class="chev">▼</span><span class="name">dip-agent</span><span class="badge">6</span></div>
+              <div class="row ws indent-ws ws-selected" style="flex-wrap:wrap;">
+                <span class="brief">📁</span>
+                <span class="chev">▼</span>
+                <span class="name">release-602</span>
+                <span class="badge">5</span>
+                <div class="ws-sub"><span class="ok">✓</span> 已同步 · 干净</div>
+              </div>
+              <div class="row tab indent-tab">
+                <span class="st"><span class="st-idle"></span></span>
+                <span class="brand grok">G</span>
+                <span class="name title-dim">Grok</span>
+              </div>
+              <div class="row tab indent-tab">
+                <span class="st"><span class="st-work"></span></span>
+                <span class="brand openai">◉</span>
+                <span class="name title-main">确认模型身份</span>
+              </div>
+              <div class="row tab indent-tab">
+                <span class="term">›</span>
+                <span class="name title-dim">mvn clean…</span>
+              </div>
+              <div class="row ws indent-ws">
+                <span class="chev">▶</span>
+                <span class="dot-busy"></span>
+                <span class="name">feature-603-dfg-check</span>
+                <span class="badge">2</span>
+              </div>
+              <div class="row ws indent-ws">
+                <span class="chev">▶</span>
+                <span class="name">dgraph5_build_opt</span>
+                <span class="badge">2</span>
+              </div>
+            </div>
+          </aside>
+          <div class="main">
+            <div class="tabbar">
+              <div class="tab"><span class="robot">◎</span><span class="tlabel">Grok 闲聊</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">终端 1</span></div>
+              <div class="tab active"><span class="robot">◉</span><span class="tlabel">确认模型身份</span><span class="x">×</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">mvn clean…</span></div>
+            </div>
+            <div class="session">
+              <div class="msg-user">你是什么模型？</div>
+              <div class="msg-agent">
+                <div class="role">Agent</div>
+                OpenAI Codex · 会话进行中（示意）
+              </div>
+            </div>
+            <div class="composer"><div class="composer-box">向 Codex 提问…</div></div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>release-602</span><span class="sep"></span><span>5 页签</span>
+          <span style="flex:1"></span>
+          <span>885 MB</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ B ═══════════ -->
+    <section class="option b">
+      <div class="option-meta">
+        <div class="tagrow">
+          <span class="opt-letter">B</span>
+          <span class="opt-title">Zap 蓝 pill · 品牌同源</span>
+          <span class="opt-philosophy">#1677ff pill + blue tab bar</span>
+        </div>
+        <p class="opt-desc">结构同 A（圆角抬升 + 竖 pill），强调色换成品牌蓝；页签顶条与选中底也用蓝。</p>
+        <div class="procon">
+          <div class="box pro"><strong>优点</strong>保留 Orca 扫描结构；全壳强调色统一；与北星 CTA / 焦点一致。</div>
+          <div class="box con"><strong>缺点</strong>蓝在暗底对比略弱于橙；worktree 与页签都「蓝」可能层级略糊。</div>
+        </div>
+      </div>
+      <div class="app">
+        <div class="titlebar">
+          <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <div class="tb-title">Zap · 方案 B</div>
+        </div>
+        <div class="body">
+          <aside class="sidebar">
+            <div class="side-head"><span>仓库</span><span class="side-add">+ 添加</span></div>
+            <div class="tree">
+              <div class="row repo"><span class="chev">▼</span><span class="name">dip-agent</span><span class="badge">6</span></div>
+              <div class="row ws indent-ws ws-selected" style="flex-wrap:wrap;">
+                <span class="brief">📁</span>
+                <span class="chev">▼</span>
+                <span class="name">release-602</span>
+                <span class="badge">5</span>
+                <div class="ws-sub"><span class="ok">✓</span> 已同步 · 干净</div>
+              </div>
+              <div class="row tab indent-tab">
+                <span class="st"><span class="st-idle"></span></span>
+                <span class="brand grok">G</span>
+                <span class="name title-dim">Grok</span>
+              </div>
+              <div class="row tab indent-tab">
+                <span class="st"><span class="st-work"></span></span>
+                <span class="brand openai">◉</span>
+                <span class="name title-main">确认模型身份</span>
+              </div>
+              <div class="row tab indent-tab">
+                <span class="term">›</span>
+                <span class="name title-dim">mvn clean…</span>
+              </div>
+              <div class="row ws indent-ws">
+                <span class="chev">▶</span>
+                <span class="dot-busy"></span>
+                <span class="name">feature-603-dfg-check</span>
+                <span class="badge">2</span>
+              </div>
+              <div class="row ws indent-ws">
+                <span class="chev">▶</span>
+                <span class="name">dgraph5_build_opt</span>
+                <span class="badge">2</span>
+              </div>
+            </div>
+          </aside>
+          <div class="main">
+            <div class="tabbar">
+              <div class="tab"><span class="robot">◎</span><span class="tlabel">Grok 闲聊</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">终端 1</span></div>
+              <div class="tab active"><span class="robot">◉</span><span class="tlabel">确认模型身份</span><span class="x">×</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">mvn clean…</span></div>
+            </div>
+            <div class="session">
+              <div class="msg-user">你是什么模型？</div>
+              <div class="msg-agent">
+                <div class="role">Agent</div>
+                OpenAI Codex · 会话进行中（示意）
+              </div>
+            </div>
+            <div class="composer"><div class="composer-box">向 Codex 提问…</div></div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>release-602</span><span class="sep"></span><span>5 页签</span>
+          <span style="flex:1"></span>
+          <span>885 MB</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ C ═══════════ -->
+    <section class="option c">
+      <div class="option-meta">
+        <div class="tagrow">
+          <span class="opt-letter soft">C</span>
+          <span class="opt-title">轻量蓝填充 · 克制 Zap</span>
+          <span class="opt-philosophy">soft fill + underline · no card</span>
+        </div>
+        <p class="opt-desc">不做圆角卡片：worktree 用淡蓝底 + 左侧 inset 蓝条；页签用底部蓝下划线 + 加粗字重。</p>
+        <div class="procon">
+          <div class="box pro"><strong>优点</strong>实现成本低；与现有行高亮最接近；暗壳不「鼓包」；品牌色贯穿。</div>
+          <div class="box con"><strong>缺点</strong>扫描距离弱于 A/B；折叠多 worktree 时不如容器醒目；Orca 感不足。</div>
+        </div>
+      </div>
+      <div class="app">
+        <div class="titlebar">
+          <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <div class="tb-title">Zap · 方案 C</div>
+        </div>
+        <div class="body">
+          <aside class="sidebar">
+            <div class="side-head"><span>仓库</span><span class="side-add">+ 添加</span></div>
+            <div class="tree">
+              <div class="row repo"><span class="chev">▼</span><span class="name">dip-agent</span><span class="badge">6</span></div>
+              <div class="row ws indent-ws ws-selected">
+                <span class="chev">▼</span>
+                <span class="dot-busy"></span>
+                <span class="name">release-602</span>
+                <span class="badge">5</span>
+              </div>
+              <div class="row tab indent-tab">
+                <span class="st"><span class="st-idle"></span></span>
+                <span class="brand grok">G</span>
+                <span class="name title-dim">Grok</span>
+              </div>
+              <div class="row tab indent-tab">
+                <span class="st"><span class="st-work"></span></span>
+                <span class="brand openai">◉</span>
+                <span class="name title-main">确认模型身份</span>
+              </div>
+              <div class="row tab indent-tab">
+                <span class="term">›</span>
+                <span class="name title-dim">mvn clean…</span>
+              </div>
+              <div class="row ws indent-ws">
+                <span class="chev">▶</span>
+                <span class="dot-busy"></span>
+                <span class="name">feature-603-dfg-check</span>
+                <span class="badge">2</span>
+              </div>
+              <div class="row ws indent-ws">
+                <span class="chev">▶</span>
+                <span class="name">dgraph5_build_opt</span>
+                <span class="badge">2</span>
+              </div>
+            </div>
+          </aside>
+          <div class="main">
+            <div class="tabbar">
+              <div class="tab"><span class="robot">◎</span><span class="tlabel">Grok 闲聊</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">终端 1</span></div>
+              <div class="tab active"><span class="robot">◉</span><span class="tlabel">确认模型身份</span><span class="x">×</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">mvn clean…</span></div>
+            </div>
+            <div class="session">
+              <div class="msg-user">你是什么模型？</div>
+              <div class="msg-agent">
+                <div class="role">Agent</div>
+                OpenAI Codex · 会话进行中（示意）
+              </div>
+            </div>
+            <div class="composer"><div class="composer-box">向 Codex 提问…</div></div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>release-602</span><span class="sep"></span><span>5 页签</span>
+          <span style="flex:1"></span>
+          <span>885 MB</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ D ═══════════ -->
+    <section class="option d">
+      <div class="option-meta">
+        <div class="tagrow">
+          <span class="opt-letter hybrid">D</span>
+          <span class="opt-title">双色分工 · 橙树蓝签</span>
+          <span class="opt-philosophy">orange where · blue what</span>
+        </div>
+        <p class="opt-desc">Worktree 用 Orca 橙 pill 表「空间位置」；Agent 页签用品牌蓝顶条表「当前会话」——两套强调色各管一层。</p>
+        <div class="procon">
+          <div class="box pro"><strong>优点</strong>层级语义清晰（哪里 / 哪个会话）；兼顾 Orca 扫描与 Zap 品牌；选型折中。</div>
+          <div class="box con"><strong>缺点</strong>需文档化双色规则；新手可能问「为何一橙一蓝」；实现要两套 token。</div>
+        </div>
+      </div>
+      <div class="app">
+        <div class="titlebar">
+          <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <div class="tb-title">Zap · 方案 D</div>
+        </div>
+        <div class="body">
+          <aside class="sidebar">
+            <div class="side-head"><span>仓库</span><span class="side-add">+ 添加</span></div>
+            <div class="tree">
+              <div class="row repo"><span class="chev">▼</span><span class="name">dip-agent</span><span class="badge">6</span></div>
+              <div class="row ws indent-ws ws-selected" style="flex-wrap:wrap;">
+                <span class="brief">📁</span>
+                <span class="chev">▼</span>
+                <span class="name">release-602</span>
+                <span class="badge">5</span>
+                <div class="ws-sub"><span class="ok">✓</span> 已同步 · 干净</div>
+              </div>
+              <div class="row tab indent-tab">
+                <span class="st"><span class="st-idle"></span></span>
+                <span class="brand grok">G</span>
+                <span class="name title-dim">Grok</span>
+              </div>
+              <div class="row tab indent-tab">
+                <span class="st"><span class="st-work"></span></span>
+                <span class="brand openai">◉</span>
+                <span class="name title-main">确认模型身份</span>
+              </div>
+              <div class="row tab indent-tab">
+                <span class="term">›</span>
+                <span class="name title-dim">mvn clean…</span>
+              </div>
+              <div class="row ws indent-ws">
+                <span class="chev">▶</span>
+                <span class="dot-busy"></span>
+                <span class="name">feature-603-dfg-check</span>
+                <span class="badge">2</span>
+              </div>
+              <div class="row ws indent-ws">
+                <span class="chev">▶</span>
+                <span class="name">dgraph5_build_opt</span>
+                <span class="badge">2</span>
+              </div>
+            </div>
+          </aside>
+          <div class="main">
+            <div class="tabbar">
+              <div class="tab"><span class="robot">◎</span><span class="tlabel">Grok 闲聊</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">终端 1</span></div>
+              <div class="tab active"><span class="robot">◉</span><span class="tlabel">确认模型身份</span><span class="x">×</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">mvn clean…</span></div>
+            </div>
+            <div class="session">
+              <div class="msg-user">你是什么模型？</div>
+              <div class="msg-agent">
+                <div class="role">Agent</div>
+                OpenAI Codex · 会话进行中（示意）
+              </div>
+            </div>
+            <div class="composer"><div class="composer-box">向 Codex 提问…</div></div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>release-602</span><span class="sep"></span><span>5 页签</span>
+          <span style="flex:1"></span>
+          <span>885 MB</span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <section class="legend">
+    <h2>选型备注（给老大）</h2>
+    <ul>
+      <li><strong>共同结构</strong>：未选中 worktree = 纯文字行；选中 = 至少「左侧竖条 + 高亮」。页签未激活暗色，激活必须有顶/底强调条，可一眼区分。</li>
+      <li><strong>与北星关系</strong>：表面分层 / 圆角 <code>10px</code> / 品牌蓝来自 <code>2026-10-19-zap-shell-northstar-orca-tokens.html</code>。橙 <code>#f5a524</code> 仅作 Orca 对照 token，未写入北星正式色板。</li>
+      <li><strong>推荐讨论顺序</strong>：若优先「品牌统一」→ B 或 C；若优先「Orca 扫描感」→ A；若要「层级语义」→ D。</li>
+      <li><strong>非目标</strong>：本页不改 Rust、不推远程、不改树数据模型；落地时再拆 worktree 父行 vs agent 页签两处样式。</li>
+    </ul>
+    <div class="swatches">
+      <span class="swatch"><i class="blue"></i> Zap 蓝 #1677ff</span>
+      <span class="swatch"><i class="orange"></i> Orca 橙 #f5a524</span>
+      <span class="swatch"><i class="elev"></i> 抬升容器底</span>
+      <span class="swatch"><i class="soft"></i> 淡蓝填充</span>
+    </div>
+  </section>
+  <p class="note">路径：docs/superpowers/specs/2026-10-20-zap-selection-affordance-options.html · 2026-10-20 · 勿推送</p>
+</body>
+</html>

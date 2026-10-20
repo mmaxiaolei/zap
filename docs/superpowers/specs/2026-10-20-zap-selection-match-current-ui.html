@@ -1,0 +1,1103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Zap · 选中态对齐当前 UI（截图 ground truth）</title>
+<style>
+  /* ═══════════════════════════════════════════════════════════
+     Ground truth = 当前 Zap 截图，不是抽象 mock 蓝：
+     · 侧栏选中：半透明深灰横 pill，低对比，无亮边
+     · 顶栏 tab：细蓝底线 + 更亮文字
+     · 底栏 workspace pill：浅灰底 + 极细 hairline
+     · 饱和色只给状态小芯片
+     产品规则：选中组卡片包住 worktree 头 + 全部子 tab；
+     组内激活 tab 一眼可辨。相对前版 B 软化：无实心蓝、无软蓝 pill、
+     Orca 橙左条仅作极克制可选。
+     ═══════════════════════════════════════════════════════════ */
+  :root {
+    --z-bg:          #070708;
+    --z-surface-0:   #0a0a0a;
+    --z-surface-1:   #0f0f11;
+    --z-surface-2:   #141416;
+    --z-surface-3:   #1a1a1d;
+    --z-surface-4:   #222226;
+    --z-surface-5:   #2a2a2f;
+
+    --z-hairline:    rgba(255,255,255,.07);
+    --z-hairline-strong: rgba(255,255,255,.12);
+    --z-hairline-pill: rgba(255,255,255,.10);
+
+    /* 侧栏选中 pill ≈ 截图：半透明深灰、几乎无边 */
+    --z-sel-pill:    rgba(255,255,255,.06);
+    --z-sel-pill-2:  rgba(255,255,255,.085);
+    --z-sel-elevate: #1c1c20;
+
+    --z-text:        #ececef;
+    --z-text-2:      #b4b4bc;
+    --z-muted:       #8a8a94;
+    --z-faint:       #5c5c66;
+
+    /* 顶栏蓝线：饱和但极细，不铺面 */
+    --z-accent:      #3b82f6;
+    --z-accent-line: #3b82f6;
+
+    --z-idle:        rgba(163,163,170,.45);
+    --z-working:     #e6b84d;
+    --z-done:        #3dd68c;
+    --z-busy-dot:    #3dd68c;
+
+    --z-radius-sm:   6px;
+    --z-radius-md:   8px;
+    --z-radius-lg:   12px;
+    --z-radius-pill: 999px;
+
+    --font: system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: var(--font);
+    background: var(--z-bg);
+    color: var(--z-text);
+    padding: 24px 24px 64px;
+    line-height: 1.45;
+    min-height: 100vh;
+  }
+
+  .page-head { max-width: 1560px; margin: 0 auto 14px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10px; font-weight: 650; letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--z-text-2);
+    background: var(--z-sel-pill);
+    border: 1px solid var(--z-hairline);
+    padding: 3px 9px; border-radius: var(--z-radius-pill);
+    margin-bottom: 10px;
+  }
+  .pill i {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--z-accent-line);
+  }
+  .page-head h1 {
+    margin: 0 0 6px;
+    font-size: 17px;
+    font-weight: 650;
+    letter-spacing: -.02em;
+  }
+  .page-head .lead {
+    margin: 0;
+    max-width: 1100px;
+    font-size: 12.5px;
+    color: var(--z-muted);
+  }
+  .page-head .lead code {
+    font-family: var(--mono); font-size: 11px;
+    color: var(--z-text-2);
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--z-hairline);
+    border-radius: 4px; padding: 1px 5px;
+  }
+
+  .reject-banner {
+    max-width: 1560px; margin: 0 auto 16px;
+    padding: 10px 14px;
+    background: rgba(239,68,68,.06);
+    border: 1px solid rgba(239,68,68,.2);
+    border-radius: var(--z-radius-md);
+    font-size: 12px; color: #d4a0a0;
+  }
+  .reject-banner strong { color: #e8b4b4; }
+  .reject-banner em { color: #9ee0bc; font-style: normal; font-weight: 600; }
+
+  .gt-row {
+    max-width: 1560px; margin: 0 auto 18px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  .gt-chip {
+    background: var(--z-surface-2);
+    border: 1px solid var(--z-hairline);
+    border-radius: var(--z-radius-md);
+    padding: 10px 12px;
+    font-size: 11px; color: var(--z-muted);
+  }
+  .gt-chip b { display: block; color: var(--z-text); font-size: 11.5px; margin-bottom: 4px; }
+  .gt-chip .demo {
+    margin-top: 8px; height: 22px;
+    display: flex; align-items: center; padding: 0 8px;
+    border-radius: 6px; font-size: 11px; color: var(--z-text-2);
+  }
+  .gt-chip .demo.sidebar-pill {
+    background: var(--z-sel-pill);
+    width: 100%;
+  }
+  .gt-chip .demo.top-tab {
+    position: relative; color: var(--z-text); background: transparent;
+    border-bottom: 2px solid var(--z-accent-line);
+    border-radius: 0; height: 26px; width: fit-content; padding: 0 6px;
+  }
+  .gt-chip .demo.ws-pill {
+    background: rgba(255,255,255,.05);
+    border: 1px solid var(--z-hairline-pill);
+    border-radius: 999px; width: fit-content; gap: 5px;
+  }
+  .gt-chip .demo.status {
+    gap: 6px; background: transparent; padding: 0;
+  }
+  .gt-chip .demo.status span {
+    width: 7px; height: 7px; border-radius: 50%;
+    display: inline-block;
+  }
+  .gt-chip .demo.status .g { background: #3dd68c; }
+  .gt-chip .demo.status .r { background: #f07178; }
+  .gt-chip .demo.status .w { background: #e6b84d; }
+
+  .options {
+    max-width: 1560px; margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+  }
+  @media (max-width: 1100px) {
+    .options { grid-template-columns: 1fr; }
+    .gt-row { grid-template-columns: 1fr 1fr; }
+  }
+
+  .option {
+    background: rgba(255,255,255,.015);
+    border: 1px solid var(--z-hairline-strong);
+    border-radius: var(--z-radius-lg);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .option-meta {
+    padding: 12px 14px 10px;
+    border-bottom: 1px solid var(--z-hairline);
+    background: rgba(0,0,0,.28);
+  }
+  .option-meta .tagrow {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 5px;
+  }
+  .opt-letter {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 22px; height: 22px; padding: 0 7px; border-radius: 6px;
+    font-size: 12px; font-weight: 750;
+    background: var(--z-surface-5);
+    color: var(--z-text);
+    border: 1px solid var(--z-hairline-strong);
+  }
+  .opt-title {
+    font-size: 13.5px; font-weight: 650; letter-spacing: -.01em;
+  }
+  .opt-philosophy {
+    font-size: 10.5px; color: var(--z-faint);
+    font-family: var(--mono);
+  }
+  .opt-desc {
+    margin: 0 0 8px;
+    font-size: 12px; color: var(--z-text-2);
+  }
+  .proscons {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    font-size: 11px;
+  }
+  .proscons .box {
+    border-radius: 6px; padding: 6px 8px;
+    border: 1px solid var(--z-hairline);
+  }
+  .proscons .pro { background: rgba(61,214,140,.05); border-color: rgba(61,214,140,.18); color: #9ecbb0; }
+  .proscons .con { background: rgba(239,68,68,.05); border-color: rgba(239,68,68,.16); color: #c9a0a0; }
+  .proscons .lab { font-weight: 700; font-size: 10px; letter-spacing: .04em; margin-bottom: 2px; }
+  .proscons .pro .lab { color: #6fd9a8; }
+  .proscons .con .lab { color: #e08a8a; }
+  .token-chip {
+    display: inline-block;
+    font-family: var(--mono); font-size: 10px;
+    color: var(--z-muted);
+    background: rgba(255,255,255,.035);
+    border: 1px solid var(--z-hairline);
+    border-radius: 4px; padding: 2px 5px;
+    margin: 0 2px 6px 0;
+  }
+
+  /* ── Mini app chrome ── */
+  .app {
+    background: var(--z-surface-1);
+    display: flex; flex-direction: column;
+    min-height: 400px;
+    flex: 1;
+  }
+  .titlebar {
+    display: flex; align-items: center; gap: 8px;
+    height: 30px; padding: 0 10px;
+    background: var(--z-surface-0);
+    border-bottom: 1px solid var(--z-hairline);
+    flex-shrink: 0;
+  }
+  .traffic { display: flex; gap: 5px; padding: 0 2px; }
+  .traffic span {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: #2a2a2e; border: 1px solid rgba(255,255,255,.06);
+  }
+  .traffic .r { background: #ff5f57; border-color: #e0443e; }
+  .traffic .y { background: #febc2e; border-color: #dea123; }
+  .traffic .g { background: #28c840; border-color: #1aad2f; }
+  .tb-title {
+    flex: 1; text-align: center;
+    font-size: 11px; font-weight: 550; color: var(--z-muted);
+  }
+
+  .body {
+    display: grid;
+    grid-template-columns: 232px 1fr;
+    flex: 1; min-height: 0;
+  }
+
+  .sidebar {
+    background: var(--z-surface-2);
+    border-right: 1px solid var(--z-hairline);
+    display: flex; flex-direction: column;
+    min-height: 0;
+    font-size: 11.5px;
+  }
+  .side-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 10px 6px;
+    font-size: 10.5px; font-weight: 650;
+    color: var(--z-text-2);
+  }
+  .side-add {
+    font-size: 10px; font-weight: 550;
+    color: var(--z-muted);
+    border: 1px solid var(--z-hairline);
+    background: var(--z-surface-3);
+    border-radius: 5px;
+    padding: 2px 6px;
+  }
+  .tree { padding: 2px 0 10px; overflow: auto; flex: 1; }
+
+  .row {
+    display: flex; align-items: center; gap: 5px;
+    padding: 2px 6px;
+    min-height: 24px;
+    border-radius: var(--z-radius-sm);
+    margin: 1px 5px;
+    color: var(--z-text-2);
+  }
+  .row .name {
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .row.repo { font-weight: 650; color: var(--z-text); margin-top: 2px; }
+  /* 截图侧栏选中：半透明灰 pill */
+  .row.repo-sel {
+    background: var(--z-sel-pill);
+    color: var(--z-text);
+  }
+  .chev { width: 9px; color: var(--z-faint); flex-shrink: 0; font-size: 8px; }
+  .badge {
+    flex-shrink: 0; min-width: 16px; height: 15px; padding: 0 4px;
+    border-radius: var(--z-radius-pill);
+    background: var(--z-surface-4);
+    color: var(--z-muted); font-size: 9px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .dot-busy {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--z-busy-dot); flex-shrink: 0;
+  }
+  .st {
+    width: 10px; height: 10px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .st-idle {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--z-idle);
+  }
+  .st-work {
+    width: 7px; height: 7px; border-radius: 50%;
+    border: 1.5px solid var(--z-working);
+    border-top-color: transparent;
+    animation: spin .85s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .brand {
+    width: 12px; height: 12px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 2px; font-size: 8px; font-weight: 700;
+  }
+  .brand.openai { color: var(--z-text); background: #2a2a2e; }
+  .brand.grok { color: #111; background: #ececef; border-radius: 50%; }
+  .brand.claude { color: #D97757; }
+  .term {
+    width: 12px; height: 12px; flex-shrink: 0;
+    border-radius: 2px;
+    background: #1e1e22;
+    border: 1px solid rgba(255,255,255,.08);
+    display: grid; place-items: center;
+    font-family: var(--mono); font-size: 7px; font-weight: 700;
+    color: var(--z-done); line-height: 1;
+  }
+  .title-dim { color: var(--z-muted); }
+  .brief {
+    width: 14px; height: 14px; flex-shrink: 0;
+    border-radius: 3px;
+    display: grid; place-items: center;
+    font-size: 9px;
+  }
+
+  .ws-group {
+    margin: 4px 6px;
+    padding: 0;
+    border-radius: 0;
+    border: 1px solid transparent;
+    background: transparent;
+  }
+  .ws-group .ws-head {
+    display: flex; align-items: center; gap: 5px;
+    flex-wrap: wrap;
+    padding: 5px 8px 4px;
+    min-height: 26px;
+    color: var(--z-text-2);
+    font-weight: 550;
+  }
+  .ws-group .ws-head .name { flex: 1; min-width: 0; color: inherit; }
+  .ws-group .ws-sub {
+    display: flex; align-items: center; gap: 4px;
+    width: 100%;
+    font-size: 10px; color: var(--z-muted);
+    font-weight: 450; padding: 0 8px 4px 27px;
+  }
+  .ws-group .ws-sub .ok { color: var(--z-done); }
+
+  .ws-group .tab-row {
+    display: flex; align-items: center; gap: 5px;
+    padding: 3px 8px 3px 18px;
+    min-height: 24px;
+    margin: 1px 4px;
+    border-radius: var(--z-radius-sm);
+    color: var(--z-text-2);
+    position: relative;
+  }
+  .ws-group .tab-row .name {
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .ws-plain {
+    display: flex; align-items: center; gap: 5px;
+    padding: 2px 6px;
+    min-height: 24px;
+    border-radius: var(--z-radius-sm);
+    margin: 1px 5px;
+    color: var(--z-text-2);
+    padding-left: 14px;
+  }
+  .ws-plain .name {
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .main {
+    background: var(--z-surface-3);
+    display: flex; flex-direction: column;
+    min-width: 0; min-height: 0;
+  }
+  .tabbar {
+    display: flex; align-items: stretch;
+    gap: 0;
+    padding: 0 6px;
+    height: 34px;
+    border-bottom: 1px solid var(--z-hairline);
+    background: rgba(0,0,0,.22);
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+  .tab {
+    display: flex; align-items: center; gap: 5px;
+    padding: 0 10px;
+    font-size: 11px;
+    color: var(--z-muted);
+    border: none; background: transparent;
+    position: relative;
+    white-space: nowrap;
+    max-width: 140px;
+  }
+  .tab .tlabel { overflow: hidden; text-overflow: ellipsis; }
+  .tab .x {
+    font-size: 10px; color: var(--z-faint); margin-left: 2px;
+    opacity: .55;
+  }
+  .tab .robot {
+    width: 12px; height: 12px; border-radius: 3px;
+    background: var(--z-surface-5);
+    display: grid; place-items: center;
+    font-size: 8px; flex-shrink: 0;
+  }
+  /* 截图顶栏：细蓝底线 + 更亮字（不是顶线） */
+  .tab.active-main {
+    color: var(--z-text);
+  }
+  .tab.active-main::after {
+    content: "";
+    position: absolute;
+    left: 6px; right: 6px; bottom: 0;
+    height: 2px;
+    background: var(--z-accent-line);
+    border-radius: 1px 1px 0 0;
+  }
+
+  .session {
+    flex: 1; padding: 12px 14px;
+    font-size: 11.5px; color: var(--z-text-2);
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .msg-user {
+    align-self: flex-end;
+    background: var(--z-surface-4);
+    border: 1px solid var(--z-hairline);
+    border-radius: var(--z-radius-md);
+    padding: 7px 10px;
+    color: var(--z-text);
+    max-width: 88%;
+  }
+  .msg-agent {
+    align-self: flex-start;
+    border-left: 2px solid rgba(59,130,246,.35);
+    padding: 2px 0 2px 10px;
+    max-width: 92%;
+  }
+  .msg-agent .role {
+    font-size: 9px; font-weight: 650;
+    color: var(--z-faint); letter-spacing: .04em;
+    text-transform: uppercase; margin-bottom: 3px;
+  }
+  .composer {
+    padding: 8px 10px 10px;
+    border-top: 1px solid var(--z-hairline);
+    background: rgba(0,0,0,.12);
+  }
+  .composer-box {
+    background: var(--z-surface-2);
+    border: 1px solid var(--z-hairline-strong);
+    border-radius: var(--z-radius-md);
+    padding: 7px 9px;
+    font-size: 11.5px; color: var(--z-faint);
+  }
+  .statusbar {
+    display: flex; align-items: center; gap: 8px;
+    height: 24px; padding: 0 8px;
+    background: var(--z-surface-0);
+    border-top: 1px solid var(--z-hairline);
+    font-size: 10px; color: var(--z-faint);
+    flex-shrink: 0;
+  }
+  .statusbar .sep {
+    width: 1px; height: 9px; background: var(--z-hairline-strong);
+  }
+  /* 截图底栏 workspace pills */
+  .sb-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    height: 18px; padding: 0 8px;
+    background: rgba(255,255,255,.05);
+    border: 1px solid var(--z-hairline-pill);
+    border-radius: 999px;
+    color: var(--z-muted); font-size: 10px;
+  }
+
+  .callout {
+    font-size: 10px;
+    color: var(--z-faint);
+    padding: 4px 10px 0;
+    font-family: var(--mono);
+  }
+  .callout b { color: var(--z-text-2); font-weight: 650; }
+
+  /* ════════════════════════════════
+     A · 灰抬升组 + 顶栏式蓝下划线
+     ════════════════════════════════ */
+  .v-a .ws-group.is-selected {
+    background: var(--z-sel-elevate);
+    border: 1px solid transparent;
+    border-radius: var(--z-radius-md);
+    box-shadow: 0 1px 0 rgba(255,255,255,.03) inset;
+    padding: 3px 0 5px;
+    margin: 4px 6px;
+  }
+  .v-a .ws-group.is-selected .ws-head {
+    color: var(--z-text);
+    padding: 7px 10px 4px;
+  }
+  .v-a .ws-group.is-selected .ws-sub {
+    padding: 0 10px 6px 32px;
+    border-bottom: 1px solid rgba(255,255,255,.05);
+    margin-bottom: 3px;
+  }
+  .v-a .ws-group.is-selected .tab-row {
+    margin: 1px 6px;
+    padding-left: 14px;
+    border-radius: 0;
+  }
+  .v-a .ws-group.is-selected .tab-row.is-active {
+    color: var(--z-text);
+    background: transparent;
+    box-shadow: inset 0 -2px 0 var(--z-accent-line);
+    padding-bottom: 5px;
+  }
+  .v-a .ws-group.is-selected .tab-row.is-active .name {
+    color: var(--z-text); font-weight: 650;
+  }
+
+  /* ════════════════════════════════
+     B · Hairline 组边 + 侧栏灰 pill 激活
+     ════════════════════════════════ */
+  .v-b .ws-group.is-selected {
+    background: rgba(255,255,255,.03);
+    border: 1px solid var(--z-hairline-pill);
+    border-radius: var(--z-radius-md);
+    padding: 3px 0 5px;
+    margin: 4px 6px;
+  }
+  .v-b .ws-group.is-selected .ws-head {
+    color: var(--z-text);
+    padding: 7px 10px 4px;
+  }
+  .v-b .ws-group.is-selected .ws-sub {
+    padding: 0 10px 6px 32px;
+    border-bottom: 1px solid rgba(255,255,255,.05);
+    margin-bottom: 3px;
+  }
+  .v-b .ws-group.is-selected .tab-row {
+    margin: 1px 6px;
+    padding-left: 14px;
+  }
+  .v-b .ws-group.is-selected .tab-row.is-active {
+    background: var(--z-sel-pill-2);
+    color: var(--z-text);
+    border-radius: 7px;
+  }
+  .v-b .ws-group.is-selected .tab-row.is-active .name {
+    color: var(--z-text); font-weight: 650;
+  }
+
+  /* ════════════════════════════════
+     C · 灰组 + 灰 pill + 极细蓝左条
+     ════════════════════════════════ */
+  .v-c .ws-group.is-selected {
+    background: var(--z-sel-elevate);
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: var(--z-radius-md);
+    padding: 3px 0 5px;
+    margin: 4px 6px;
+  }
+  .v-c .ws-group.is-selected .ws-head {
+    color: var(--z-text);
+    padding: 7px 10px 4px;
+  }
+  .v-c .ws-group.is-selected .ws-sub {
+    padding: 0 10px 6px 32px;
+    border-bottom: 1px solid rgba(255,255,255,.05);
+    margin-bottom: 3px;
+  }
+  .v-c .ws-group.is-selected .tab-row {
+    margin: 1px 6px;
+    padding-left: 14px;
+  }
+  .v-c .ws-group.is-selected .tab-row.is-active {
+    background: var(--z-sel-pill);
+    color: var(--z-text);
+    border-radius: 7px;
+    box-shadow: inset 2px 0 0 var(--z-accent-line);
+    padding-left: 12px;
+  }
+  .v-c .ws-group.is-selected .tab-row.is-active .name {
+    color: var(--z-text); font-weight: 650;
+  }
+
+  /* ════════════════════════════════
+     D · Hairline 组 + 亮字 + 蓝下划线（无填充）
+     ════════════════════════════════ */
+  .v-d .ws-group.is-selected {
+    background: rgba(255,255,255,.025);
+    border: 1px solid var(--z-hairline-strong);
+    border-radius: var(--z-radius-md);
+    padding: 3px 0 5px;
+    margin: 4px 6px;
+  }
+  .v-d .ws-group.is-selected .ws-head {
+    color: var(--z-text);
+    padding: 7px 10px 4px;
+  }
+  .v-d .ws-group.is-selected .ws-sub {
+    padding: 0 10px 6px 32px;
+    border-bottom: 1px solid rgba(255,255,255,.05);
+    margin-bottom: 3px;
+  }
+  .v-d .ws-group.is-selected .tab-row {
+    margin: 1px 6px;
+    padding-left: 14px;
+    border-radius: 0;
+  }
+  .v-d .ws-group.is-selected .tab-row.is-active {
+    color: var(--z-text);
+    background: transparent;
+    box-shadow: inset 0 -2px 0 var(--z-accent-line);
+    padding-bottom: 5px;
+  }
+  .v-d .ws-group.is-selected .tab-row.is-active .name {
+    color: #f2f2f5; font-weight: 700;
+  }
+
+  .legend {
+    max-width: 1560px; margin: 20px auto 0;
+    padding: 14px 16px;
+    background: rgba(255,255,255,.02);
+    border: 1px solid var(--z-hairline-strong);
+    border-radius: var(--z-radius-lg);
+    font-size: 12px; color: var(--z-text-2);
+  }
+  .legend h2 {
+    margin: 0 0 8px; font-size: 13px; font-weight: 650; color: var(--z-text);
+  }
+  .legend ul { margin: 0; padding-left: 18px; }
+  .legend li { margin: 4px 0; }
+  .legend code {
+    font-family: var(--mono); font-size: 10.5px;
+    color: var(--z-text-2);
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--z-hairline);
+    border-radius: 4px; padding: 1px 5px;
+  }
+  .note {
+    max-width: 1560px; margin: 12px auto 0;
+    font-size: 11px; color: var(--z-faint);
+  }
+</style>
+</head>
+<body>
+  <header class="page-head">
+    <div class="pill"><i></i> Match current Zap UI · screenshot ground truth</div>
+    <h1>Zap · Workspace 组选中态 · 对齐当前 UI（非软蓝）</h1>
+    <p class="lead">
+      用户已否决软蓝 pill 变体。本页以截图为视觉真源：
+      <code>侧栏深灰半透明 pill</code> ·
+      <code>顶栏细蓝底线 + 亮字</code> ·
+      <code>底栏浅灰 hairline pill</code>。
+      组卡片仍包住 worktree 头 + 全部子 tab；组内激活 tab 一眼可辨。无 Rust / 不推送。
+    </p>
+  </header>
+
+  <div class="reject-banner">
+    <strong>已否决：</strong> 方案 B 软蓝填充 / soft-blue pill（丑、不像当前 Zap）。
+    <em>本轮原则：</em> 组用灰抬升或 hairline；激活子 tab 用侧栏灰 pill 或顶栏蓝下划线；饱和蓝只作 2px 线或极细左条，绝不铺面。
+  </div>
+
+  <div class="gt-row">
+    <div class="gt-chip">
+      <b>截图 · 侧栏选中</b>
+      半透明深灰横 pill，低对比，无亮边
+      <div class="demo sidebar-pill">Repositories · selected</div>
+    </div>
+    <div class="gt-chip">
+      <b>截图 · 顶栏 tab</b>
+      细蓝底线 ≈2px + 更亮文字
+      <div class="demo top-tab">Active tab</div>
+    </div>
+    <div class="gt-chip">
+      <b>截图 · 底栏 pill</b>
+      浅灰底 + 极细 hairline
+      <div class="demo ws-pill">📁 workspace</div>
+    </div>
+    <div class="gt-chip">
+      <b>截图 · 饱和色</b>
+      仅状态小芯片（绿/红/黄）
+      <div class="demo status"><span class="g"></span><span class="r"></span><span class="w"></span> chips only</div>
+    </div>
+  </div>
+
+  <div class="options">
+
+    <!-- ═══════════ A ═══════════ -->
+    <section class="option v-a">
+      <div class="option-meta">
+        <div class="tagrow">
+          <span class="opt-letter">A</span>
+          <span class="opt-title">灰抬升组 + 顶栏式蓝下划线</span>
+          <span class="opt-philosophy">elevate #1c1c20 · underline 2px accent</span>
+        </div>
+        <p class="opt-desc">组卡片略抬深灰（无蓝边）；组内激活行复刻顶栏：更亮字 + 底边细蓝线。最「像现在的 Zap」。</p>
+        <span class="token-chip">group #1c1c20</span>
+        <span class="token-chip">active underline #3b82f6</span>
+        <span class="token-chip">no blue fill</span>
+        <div class="proscons">
+          <div class="box pro"><div class="lab">优点</div>与顶栏语言一致；蓝只作线，不抢状态黄环；密度友好。</div>
+          <div class="box con"><div class="lab">缺点</div>下划线在窄侧栏纵向列表上不如 pill 显眼；滚动时易被切。</div>
+        </div>
+      </div>
+      <div class="app">
+        <div class="titlebar">
+          <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <div class="tb-title">Zap · A · 灰抬升 + 蓝下划线</div>
+        </div>
+        <div class="body">
+          <aside class="sidebar">
+            <div class="side-head"><span>仓库</span><span class="side-add">+ 添加</span></div>
+            <div class="tree">
+              <div class="row repo repo-sel"><span class="chev">▼</span><span class="name">dip-agent</span><span class="badge">6</span></div>
+              <div class="ws-group is-selected">
+                <div class="ws-head">
+                  <span class="brief">📁</span>
+                  <span class="chev">▼</span>
+                  <span class="name">release-602</span>
+                  <span class="badge">5</span>
+                </div>
+                <div class="ws-sub"><span class="ok">✓</span> 已同步 · 干净</div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand grok">G</span>
+                  <span class="name title-dim">Grok</span>
+                </div>
+                <div class="tab-row is-active">
+                  <span class="st"><span class="st-work"></span></span>
+                  <span class="brand openai">◉</span>
+                  <span class="name">确认模型身份</span>
+                </div>
+                <div class="tab-row">
+                  <span class="term">›</span>
+                  <span class="name title-dim">mvn clean…</span>
+                </div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand claude">◆</span>
+                  <span class="name title-dim">Claude 审阅</span>
+                </div>
+              </div>
+              <div class="callout">↑ <b>A</b> · 灰组 + 蓝底线</div>
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="dot-busy"></span>
+                <span class="name">feature-603-dfg-check</span>
+                <span class="badge">2</span>
+              </div>
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="name">dgraph5_build_opt</span>
+                <span class="badge">2</span>
+              </div>
+            </div>
+          </aside>
+          <div class="main">
+            <div class="tabbar">
+              <div class="tab"><span class="robot">◎</span><span class="tlabel">Grok</span></div>
+              <div class="tab active-main"><span class="robot">◉</span><span class="tlabel">确认模型身份</span><span class="x">×</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">mvn clean…</span></div>
+            </div>
+            <div class="session">
+              <div class="msg-user">你是什么模型？</div>
+              <div class="msg-agent"><div class="role">Agent</div>OpenAI Codex · 会话进行中（示意）</div>
+            </div>
+            <div class="composer"><div class="composer-box">向 Codex 提问…</div></div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span class="sb-pill">📁 release-602</span>
+          <span class="sb-pill">⎇ main</span>
+          <span class="sep"></span><span>A</span>
+          <span style="flex:1"></span><span>885 MB</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ B ═══════════ -->
+    <section class="option v-b">
+      <div class="option-meta">
+        <div class="tagrow">
+          <span class="opt-letter">B</span>
+          <span class="opt-title">Hairline 组边 + 侧栏灰 pill 激活</span>
+          <span class="opt-philosophy">hairline border · sel-pill rgba(.085)</span>
+        </div>
+        <p class="opt-desc">组卡片像底栏 workspace pill：浅灰底 + 细 hairline；激活子行复刻侧栏选中半透明灰 pill。零蓝色铺面。</p>
+        <span class="token-chip">group hairline</span>
+        <span class="token-chip">active grey pill</span>
+        <span class="token-chip">no accent color</span>
+        <div class="proscons">
+          <div class="box pro"><div class="lab">优点</div>完全原生侧栏语言；无蓝噪；组边界清晰；实现成本最低。</div>
+          <div class="box con"><div class="lab">缺点</div>组内激活与「侧栏其他选中」视觉同级，层级略平；无色相提示。</div>
+        </div>
+      </div>
+      <div class="app">
+        <div class="titlebar">
+          <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <div class="tb-title">Zap · B · Hairline + 灰 pill</div>
+        </div>
+        <div class="body">
+          <aside class="sidebar">
+            <div class="side-head"><span>仓库</span><span class="side-add">+ 添加</span></div>
+            <div class="tree">
+              <div class="row repo repo-sel"><span class="chev">▼</span><span class="name">dip-agent</span><span class="badge">6</span></div>
+              <div class="ws-group is-selected">
+                <div class="ws-head">
+                  <span class="brief">📁</span>
+                  <span class="chev">▼</span>
+                  <span class="name">release-602</span>
+                  <span class="badge">5</span>
+                </div>
+                <div class="ws-sub"><span class="ok">✓</span> 已同步 · 干净</div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand grok">G</span>
+                  <span class="name title-dim">Grok</span>
+                </div>
+                <div class="tab-row is-active">
+                  <span class="st"><span class="st-work"></span></span>
+                  <span class="brand openai">◉</span>
+                  <span class="name">确认模型身份</span>
+                </div>
+                <div class="tab-row">
+                  <span class="term">›</span>
+                  <span class="name title-dim">mvn clean…</span>
+                </div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand claude">◆</span>
+                  <span class="name title-dim">Claude 审阅</span>
+                </div>
+              </div>
+              <div class="callout">↑ <b>B</b> · hairline 组 + 灰 pill</div>
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="dot-busy"></span>
+                <span class="name">feature-603-dfg-check</span>
+                <span class="badge">2</span>
+              </div>
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="name">dgraph5_build_opt</span>
+                <span class="badge">2</span>
+              </div>
+            </div>
+          </aside>
+          <div class="main">
+            <div class="tabbar">
+              <div class="tab"><span class="robot">◎</span><span class="tlabel">Grok</span></div>
+              <div class="tab active-main"><span class="robot">◉</span><span class="tlabel">确认模型身份</span><span class="x">×</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">mvn clean…</span></div>
+            </div>
+            <div class="session">
+              <div class="msg-user">你是什么模型？</div>
+              <div class="msg-agent"><div class="role">Agent</div>OpenAI Codex · 会话进行中（示意）</div>
+            </div>
+            <div class="composer"><div class="composer-box">向 Codex 提问…</div></div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span class="sb-pill">📁 release-602</span>
+          <span class="sb-pill">⎇ main</span>
+          <span class="sep"></span><span>B</span>
+          <span style="flex:1"></span><span>885 MB</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ C ═══════════ -->
+    <section class="option v-c">
+      <div class="option-meta">
+        <div class="tagrow">
+          <span class="opt-letter">C</span>
+          <span class="opt-title">灰组 + 灰 pill + 极细蓝左条</span>
+          <span class="opt-philosophy">elevate + grey pill + 2px accent rail</span>
+        </div>
+        <p class="opt-desc">在 B 的灰 pill 上加 2px 蓝左条（非橙、非粗 pill）。蓝只作边缘扫描提示，填充仍是截图同款灰。</p>
+        <span class="token-chip">group elevate</span>
+        <span class="token-chip">pill + 2px blue</span>
+        <span class="token-chip">subtle accent only</span>
+        <div class="proscons">
+          <div class="box pro"><div class="lab">优点</div>一眼定位当前行；仍像 Zap；比软蓝铺面克制得多。</div>
+          <div class="box con"><div class="lab">缺点</div>左条略「IDE 经典」；若加粗会滑回被否决的 pill 感。</div>
+        </div>
+      </div>
+      <div class="app">
+        <div class="titlebar">
+          <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <div class="tb-title">Zap · C · 灰 pill + 2px 蓝条</div>
+        </div>
+        <div class="body">
+          <aside class="sidebar">
+            <div class="side-head"><span>仓库</span><span class="side-add">+ 添加</span></div>
+            <div class="tree">
+              <div class="row repo repo-sel"><span class="chev">▼</span><span class="name">dip-agent</span><span class="badge">6</span></div>
+              <div class="ws-group is-selected">
+                <div class="ws-head">
+                  <span class="brief">📁</span>
+                  <span class="chev">▼</span>
+                  <span class="name">release-602</span>
+                  <span class="badge">5</span>
+                </div>
+                <div class="ws-sub"><span class="ok">✓</span> 已同步 · 干净</div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand grok">G</span>
+                  <span class="name title-dim">Grok</span>
+                </div>
+                <div class="tab-row is-active">
+                  <span class="st"><span class="st-work"></span></span>
+                  <span class="brand openai">◉</span>
+                  <span class="name">确认模型身份</span>
+                </div>
+                <div class="tab-row">
+                  <span class="term">›</span>
+                  <span class="name title-dim">mvn clean…</span>
+                </div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand claude">◆</span>
+                  <span class="name title-dim">Claude 审阅</span>
+                </div>
+              </div>
+              <div class="callout">↑ <b>C</b> · 灰 pill + 2px 蓝</div>
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="dot-busy"></span>
+                <span class="name">feature-603-dfg-check</span>
+                <span class="badge">2</span>
+              </div>
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="name">dgraph5_build_opt</span>
+                <span class="badge">2</span>
+              </div>
+            </div>
+          </aside>
+          <div class="main">
+            <div class="tabbar">
+              <div class="tab"><span class="robot">◎</span><span class="tlabel">Grok</span></div>
+              <div class="tab active-main"><span class="robot">◉</span><span class="tlabel">确认模型身份</span><span class="x">×</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">mvn clean…</span></div>
+            </div>
+            <div class="session">
+              <div class="msg-user">你是什么模型？</div>
+              <div class="msg-agent"><div class="role">Agent</div>OpenAI Codex · 会话进行中（示意）</div>
+            </div>
+            <div class="composer"><div class="composer-box">向 Codex 提问…</div></div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span class="sb-pill">📁 release-602</span>
+          <span class="sb-pill">⎇ main</span>
+          <span class="sep"></span><span>C</span>
+          <span style="flex:1"></span><span>885 MB</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ D ═══════════ -->
+    <section class="option v-d">
+      <div class="option-meta">
+        <div class="tagrow">
+          <span class="opt-letter">D</span>
+          <span class="opt-title">Hairline 组 + 亮字蓝下划线</span>
+          <span class="opt-philosophy">hairline group · bright text · underline</span>
+        </div>
+        <p class="opt-desc">组用更明显的 hairline（近底栏 pill）；激活行无填充，只靠字重/亮度 + 蓝底线。最克制一档。</p>
+        <span class="token-chip">group hairline-strong</span>
+        <span class="token-chip">font-weight 700</span>
+        <span class="token-chip">underline only</span>
+        <div class="proscons">
+          <div class="box pro"><div class="lab">优点</div>极干净；与顶栏完全同构；不会和状态色打架。</div>
+          <div class="box con"><div class="lab">缺点</div>组内「当前 tab」依赖字重，低亮度屏或快速扫视时可能不够。</div>
+        </div>
+      </div>
+      <div class="app">
+        <div class="titlebar">
+          <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <div class="tb-title">Zap · D · Hairline + 下划线</div>
+        </div>
+        <div class="body">
+          <aside class="sidebar">
+            <div class="side-head"><span>仓库</span><span class="side-add">+ 添加</span></div>
+            <div class="tree">
+              <div class="row repo repo-sel"><span class="chev">▼</span><span class="name">dip-agent</span><span class="badge">6</span></div>
+              <div class="ws-group is-selected">
+                <div class="ws-head">
+                  <span class="brief">📁</span>
+                  <span class="chev">▼</span>
+                  <span class="name">release-602</span>
+                  <span class="badge">5</span>
+                </div>
+                <div class="ws-sub"><span class="ok">✓</span> 已同步 · 干净</div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand grok">G</span>
+                  <span class="name title-dim">Grok</span>
+                </div>
+                <div class="tab-row is-active">
+                  <span class="st"><span class="st-work"></span></span>
+                  <span class="brand openai">◉</span>
+                  <span class="name">确认模型身份</span>
+                </div>
+                <div class="tab-row">
+                  <span class="term">›</span>
+                  <span class="name title-dim">mvn clean…</span>
+                </div>
+                <div class="tab-row">
+                  <span class="st"><span class="st-idle"></span></span>
+                  <span class="brand claude">◆</span>
+                  <span class="name title-dim">Claude 审阅</span>
+                </div>
+              </div>
+              <div class="callout">↑ <b>D</b> · hairline + 亮字线</div>
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="dot-busy"></span>
+                <span class="name">feature-603-dfg-check</span>
+                <span class="badge">2</span>
+              </div>
+              <div class="ws-plain">
+                <span class="chev">▶</span>
+                <span class="name">dgraph5_build_opt</span>
+                <span class="badge">2</span>
+              </div>
+            </div>
+          </aside>
+          <div class="main">
+            <div class="tabbar">
+              <div class="tab"><span class="robot">◎</span><span class="tlabel">Grok</span></div>
+              <div class="tab active-main"><span class="robot">◉</span><span class="tlabel">确认模型身份</span><span class="x">×</span></div>
+              <div class="tab"><span class="robot">›</span><span class="tlabel">mvn clean…</span></div>
+            </div>
+            <div class="session">
+              <div class="msg-user">你是什么模型？</div>
+              <div class="msg-agent"><div class="role">Agent</div>OpenAI Codex · 会话进行中（示意）</div>
+            </div>
+            <div class="composer"><div class="composer-box">向 Codex 提问…</div></div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span class="sb-pill">📁 release-602</span>
+          <span class="sb-pill">⎇ main</span>
+          <span class="sep"></span><span>D</span>
+          <span style="flex:1"></span><span>885 MB</span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <section class="legend">
+    <h2>对照规则（本轮）</h2>
+    <ul>
+      <li><strong>组卡片</strong>：一律包住 worktree 头 + 全部子 tab（产品硬规则未变）。</li>
+      <li><strong>否决</strong>：软蓝 / soft-blue pill 铺面、实心 <code>#1677ff</code> 激活行、粗 Orca 橙左 pill。</li>
+      <li><strong>A</strong> 灰抬升 + 顶栏蓝下划线 · <strong>B</strong> hairline 组 + 侧栏灰 pill · <strong>C</strong> 灰 pill + 2px 蓝左条 · <strong>D</strong> hairline + 亮字下划线。</li>
+      <li><strong>推荐试看顺序</strong>：先 A（最像顶栏）与 B（最像侧栏）；若扫视不够再看 C；要极简看 D。</li>
+      <li><strong>非目标</strong>：不改 Rust、不推远程、不改前几版 HTML。</li>
+    </ul>
+  </section>
+  <p class="note">路径：docs/superpowers/specs/2026-10-20-zap-selection-match-current-ui.html · Asia/Shanghai 2026-10-20 · 截图 ground truth · 勿推送</p>
+</body>
+</html>

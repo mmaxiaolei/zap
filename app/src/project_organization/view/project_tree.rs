@@ -580,8 +580,127 @@ fn workspace_row_is_selected(
     selected_workspace_id == Some(workspace_id)
 }
 
-fn workspace_row_shows_selection_accent(workspace: &WorkspaceTreeNode, is_selected: bool) -> bool {
-    is_selected && !workspace.expanded
+/// Depth Stack: selected workspace wraps head + child tabs as one elevated group.
+fn workspace_group_is_selected(
+    selected_workspace_id: Option<RepositoryWorkspaceId>,
+    workspace_id: RepositoryWorkspaceId,
+) -> bool {
+    workspace_row_is_selected(selected_workspace_id, workspace_id)
+}
+
+/// Legacy per-row accent fill. Depth Stack never paints accent on the workspace head —
+/// selection chrome lives on the elevated group wrapper (and active-tab chip).
+fn workspace_row_shows_selection_accent(_workspace: &WorkspaceTreeNode, _is_selected: bool) -> bool {
+    false
+}
+
+// Depth Stack tokens (from 2026-10-20-zap-selection-aesthetic.html `.ds .ws-group.is-sel`).
+const DEPTH_STACK_GROUP_BG: ColorU = ColorU {
+    r: 34,
+    g: 34,
+    b: 40,
+    a: 255,
+}; // #222228 elevated solid (mock gradient midpoint)
+const DEPTH_STACK_GROUP_HAIRLINE: ColorU = ColorU {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 26,
+}; // rgba(255,255,255,.1)
+const DEPTH_STACK_GROUP_RADIUS: f32 = 14.;
+const DEPTH_STACK_GROUP_PAD_Y: f32 = 5.;
+/// Active chip — one step brighter than old `#32323a` so it reads as solid vs hover wash.
+const DEPTH_STACK_CHIP_BG: ColorU = ColorU {
+    r: 64,
+    g: 64,
+    b: 74,
+    a: 255,
+}; // #40404a
+const DEPTH_STACK_CHIP_RADIUS: f32 = 9.;
+const DEPTH_STACK_CHIP_HAIRLINE: ColorU = ColorU {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 28,
+}; // rgba(255,255,255,~.11)
+/// Inactive hover: light white wash — never a solid gray pill like the chip.
+const DEPTH_STACK_TAB_HOVER_WASH: ColorU = ColorU {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 14,
+}; // ~5.5% white
+const DEPTH_STACK_TAB_HOVER_RADIUS: f32 = 5.;
+const DEPTH_STACK_HEAD_LABEL: ColorU = ColorU {
+    r: 244,
+    g: 244,
+    b: 248,
+    a: 255,
+}; // #f4f4f8
+const DEPTH_STACK_ACTIVE_TAB_LABEL: ColorU = ColorU {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 255,
+};
+const DEPTH_STACK_INACTIVE_TAB_LABEL: ColorU = ColorU {
+    r: 160,
+    g: 160,
+    b: 170,
+    a: 255,
+}; // #a0a0aa
+
+/// Static fill policy for Depth Stack tabs (hover is render-time; chip must not match wash).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DepthStackTabFill {
+    /// Solid elevated chip + hairline + shadow (no accent rail).
+    ActiveChip,
+    /// Faint white wash, radius 5, no border / no shadow.
+    HoverWash,
+    None,
+}
+
+/// Active always wins: hovering the active tab keeps the chip (no extra wash).
+fn depth_stack_tab_fill(is_active: bool, is_hovered: bool) -> DepthStackTabFill {
+    if is_active {
+        DepthStackTabFill::ActiveChip
+    } else if is_hovered {
+        DepthStackTabFill::HoverWash
+    } else {
+        DepthStackTabFill::None
+    }
+}
+
+fn depth_stack_group_drop_shadow() -> DropShadow {
+    // Mock: 0 10px 28px rgba(0,0,0,.55) — single shadow (no multi-layer / inset).
+    DropShadow {
+        color: ColorU::new(0, 0, 0, 140),
+        offset: vec2f(0., 10.),
+        blur_radius: 28.,
+        spread_radius: 0.,
+    }
+}
+
+fn depth_stack_chip_drop_shadow() -> DropShadow {
+    // Slightly stronger than before so chip reads as floating vs flat hover wash.
+    DropShadow {
+        color: ColorU::new(0, 0, 0, 110),
+        offset: vec2f(0., 2.),
+        blur_radius: 10.,
+        spread_radius: 0.,
+    }
+}
+
+/// Elevated Depth Stack chrome wrapping the selected workspace head + tabs.
+fn depth_stack_selected_group(child: Box<dyn Element>) -> Box<dyn Element> {
+    Container::new(child)
+        .with_background(DEPTH_STACK_GROUP_BG)
+        .with_border(Border::all(1.).with_border_fill(DEPTH_STACK_GROUP_HAIRLINE))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(DEPTH_STACK_GROUP_RADIUS)))
+        .with_vertical_padding(DEPTH_STACK_GROUP_PAD_Y)
+        .with_drop_shadow(depth_stack_group_drop_shadow())
+        .with_margin_bottom(4.)
+        .finish()
 }
 
 fn tree_row_icon(
@@ -635,7 +754,18 @@ impl WorkspaceVisualState {
         false
     }
 
+    /// Depth Stack: no per-row accent wash/frame. Group elevated chrome + active-tab chip instead.
     pub(crate) fn should_render_selection_accent(&self) -> bool {
+        false
+    }
+
+    /// Active tab inside Depth Stack uses an elevated gray chip (not accent fill).
+    pub(crate) fn should_render_active_tab_chip(&self) -> bool {
+        self.is_selected
+    }
+
+    /// Selected workspace head / meta: brighter label (group already elevated).
+    pub(crate) fn should_emphasize_workspace_label(&self) -> bool {
         self.is_selected
     }
 
@@ -1358,7 +1488,7 @@ impl ProjectTreePanel {
                             .with_cross_axis_alignment(CrossAxisAlignment::Center)
                             .with_child(
                                 ConstrainedBox::new(
-                                    WarpIcon::CheckCircleBroken
+                                    WarpIcon::Check
                                         .to_warpui_icon(ThemeFill::Solid(theme.ansi_fg_green()))
                                         .finish(),
                                 )
@@ -1388,37 +1518,19 @@ impl ProjectTreePanel {
                         ))
                     }
                     WorkspaceAgentPhase::Done => ConstrainedBox::new(
-                        WarpIcon::CheckCircleBroken
+                        WarpIcon::Check
                             .to_warpui_icon(ThemeFill::Solid(theme.ansi_fg_green()))
                             .finish(),
                     )
                     .with_width(11.)
                     .with_height(11.)
                     .finish(),
-                    // Soft amber disc + "?" (north-star st-wait).
-                    WorkspaceAgentPhase::Waiting => ConstrainedBox::new(
-                        Container::new(
-                            Flex::row()
-                                .with_main_axis_size(MainAxisSize::Max)
-                                .with_main_axis_alignment(MainAxisAlignment::Center)
-                                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                                .with_child(
-                                    Text::new_inline(
-                                        "?",
-                                        appearance.ui_font_family(),
-                                        appearance.ui_font_footnote(),
-                                    )
-                                    .with_color(color.into())
-                                    .finish(),
-                                )
-                                .finish(),
-                        )
-                        .with_background(ColorU::new(240, 180, 41, 38))
-                        .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
-                        .finish(),
+                    WorkspaceAgentPhase::Waiting => Text::new_inline(
+                        "?",
+                        appearance.ui_font_family(),
+                        appearance.ui_font_footnote(),
                     )
-                    .with_width(11.)
-                    .with_height(11.)
+                    .with_color(color.into())
                     .finish(),
                     WorkspaceAgentPhase::Idle
                     | WorkspaceAgentPhase::Blocked
@@ -1466,8 +1578,9 @@ impl ProjectTreePanel {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let color = if visual_state.should_render_selection_accent() {
-            theme.accent().into_solid_bias_right_color()
+        let color = if visual_state.should_emphasize_workspace_label() {
+            // Depth Stack: brighter meta inside selected group (not accent).
+            DEPTH_STACK_HEAD_LABEL
         } else {
             theme
                 .sub_text_color(theme.background())
@@ -1490,13 +1603,14 @@ impl ProjectTreePanel {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let selected =
-            workspace_row_is_selected(self.state.selected_workspace_id(), workspace.workspace_id);
-        let shows_selection_accent = workspace_row_shows_selection_accent(workspace, selected);
-        let selection_accent = theme.accent();
-        let selection_accent_color = selection_accent.into_solid_bias_right_color();
-        let label_color = if shows_selection_accent {
-            selection_accent_color
+        let selected = workspace_group_is_selected(
+            self.state.selected_workspace_id(),
+            workspace.workspace_id,
+        );
+        // Depth Stack: no per-row accent; elevated group chrome wraps the row.
+        debug_assert!(!workspace_row_shows_selection_accent(workspace, selected));
+        let label_color = if selected {
+            DEPTH_STACK_HEAD_LABEL
         } else {
             theme
                 .main_text_color(theme.background())
@@ -1559,7 +1673,7 @@ impl ProjectTreePanel {
         let any_child_busy = workspace.tabs.iter().any(|tab| tab.activity.is_busy());
         let parent_slot = workspace_parent_activity_slot(workspace.expanded, any_child_busy);
         let visual_state = WorkspaceVisualState::new(
-            shows_selection_accent,
+            selected,
             matches!(parent_slot, WorkspaceActivitySlot::RunningDot),
             None,
         );
@@ -1694,17 +1808,13 @@ impl ProjectTreePanel {
                     .with_horizontal_padding(8.)
                     .with_vertical_padding(5.)
                     .with_corner_radius(CornerRadius::with_all(Radius::Pixels(5.)));
-                if visual_state.should_render_selection_accent() {
-                    row_container =
-                        row_container.with_background(selection_accent.with_opacity(10));
-                } else if mouse_state.is_hovered() {
+                // Depth Stack: never paint row-level accent fill/frame on the head.
+                debug_assert!(!visual_state.should_render_selection_accent());
+                debug_assert!(!visual_state.should_render_selection_frame());
+                if mouse_state.is_hovered() {
                     row_container = row_container.with_background(theme.surface_overlay_2());
                 } else if visual_state.should_fill_idle_row() {
                     row_container = row_container.with_background(theme.surface_overlay_1());
-                }
-                if visual_state.should_render_selection_frame() {
-                    row_container = row_container
-                        .with_border(Border::all(1.).with_border_fill(selection_accent));
                 }
 
                 row_container.finish()
@@ -1725,15 +1835,20 @@ impl ProjectTreePanel {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let selection_accent = theme.accent();
-        let selection_accent_color = selection_accent.into_solid_bias_right_color();
+        let group_selected = workspace_group_is_selected(
+            self.state.selected_workspace_id(),
+            workspace_id,
+        );
         let visual_state = WorkspaceVisualState::new(
             tab.is_active,
             matches!(tab.activity, TabNodeActivity::RunningDot),
             tab.activity.agent().cloned(),
         );
+        // Depth Stack: active tab = near-white on chip; inactive in selected group = secondary.
         let label_color = if tab.is_active {
-            selection_accent_color
+            DEPTH_STACK_ACTIVE_TAB_LABEL
+        } else if group_selected {
+            DEPTH_STACK_INACTIVE_TAB_LABEL
         } else {
             theme
                 .main_text_color(theme.background())
@@ -1879,21 +1994,46 @@ impl ProjectTreePanel {
                     .with_child(Shrinkable::new(1.0, labeled_content).finish())
                     .with_child(trailing.finish())
                     .finish();
-                let mut row_container = Container::new(row_content)
-                    .with_horizontal_padding(8.)
-                    .with_vertical_padding(4.)
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(5.)));
-                if visual_state.should_render_selection_accent() {
-                    row_container =
-                        row_container.with_background(selection_accent.with_opacity(10));
-                } else if mouse_state.is_hovered() {
-                    row_container = row_container.with_background(theme.surface_overlay_2());
-                }
+                // Depth Stack: active chip ≠ hover wash (see depth_stack_tab_fill).
+                let fill = depth_stack_tab_fill(
+                    visual_state.should_render_active_tab_chip(),
+                    mouse_state.is_hovered(),
+                );
+                let row_el: Box<dyn Element> = match fill {
+                    DepthStackTabFill::ActiveChip => Container::new(row_content)
+                        .with_horizontal_padding(8.)
+                        .with_vertical_padding(4.)
+                        .with_background(DEPTH_STACK_CHIP_BG)
+                        .with_border(
+                            Border::all(1.).with_border_fill(DEPTH_STACK_CHIP_HAIRLINE),
+                        )
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+                            DEPTH_STACK_CHIP_RADIUS,
+                        )))
+                        .with_drop_shadow(depth_stack_chip_drop_shadow())
+                        .finish(),
+                    DepthStackTabFill::HoverWash => Container::new(row_content)
+                        .with_horizontal_padding(8.)
+                        .with_vertical_padding(4.)
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+                            DEPTH_STACK_TAB_HOVER_RADIUS,
+                        )))
+                        // Light sweep only — no border, no shadow, not overlay_2 gray pill.
+                        .with_background(DEPTH_STACK_TAB_HOVER_WASH)
+                        .finish(),
+                    DepthStackTabFill::None => Container::new(row_content)
+                        .with_horizontal_padding(8.)
+                        .with_vertical_padding(4.)
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+                            DEPTH_STACK_TAB_HOVER_RADIUS,
+                        )))
+                        .finish(),
+                };
 
                 Flex::row()
                     .with_main_axis_size(MainAxisSize::Max)
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_child(Shrinkable::new(1.0, row_container.finish()).finish())
+                    .with_child(Shrinkable::new(1.0, row_el).finish())
                     .finish()
             },
         )
@@ -2150,7 +2290,14 @@ impl View for ProjectTreePanel {
                     .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                     .with_spacing(0.);
                 for workspace in &repository.workspaces {
-                    workspaces.add_child(
+                    let group_selected = workspace_group_is_selected(
+                        self.state.selected_workspace_id(),
+                        workspace.workspace_id,
+                    );
+                    let mut group = Flex::column()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                        .with_spacing(0.);
+                    group.add_child(
                         SavePosition::new(
                             self.render_workspace_row(workspace, appearance),
                             &workspace_row_position_id(workspace.workspace_id),
@@ -2159,12 +2306,19 @@ impl View for ProjectTreePanel {
                     );
                     if workspace.expanded {
                         for tab in &workspace.tabs {
-                            workspaces.add_child(self.render_tab_row(
+                            group.add_child(self.render_tab_row(
                                 workspace.workspace_id,
                                 tab,
                                 appearance,
                             ));
                         }
+                    }
+                    let group_el = group.finish();
+                    // Depth Stack: selected workspace = one elevated card around head + tabs.
+                    if group_selected {
+                        workspaces.add_child(depth_stack_selected_group(group_el));
+                    } else {
+                        workspaces.add_child(group_el);
                     }
                 }
                 repository_group.add_child(
