@@ -1152,15 +1152,25 @@ fn cli_agent_resume_snapshot(
     if !FeatureFlag::CliAgentSessionResume.is_enabled() {
         return None;
     }
-    let original_command = {
+    let session = CLIAgentSessionsModel::as_ref(app).session(terminal_view_id)?;
+    let original_command = session.launch_command.clone().or_else(|| {
         let model = view.model.lock();
         let block = model.block_list().active_block();
-        block
-            .is_active_and_long_running()
-            .then(|| block.command_with_secrets_obfuscated(false))
-    };
-    CliAgentResumeSnapshot::from_active_session(
-        CLIAgentSessionsModel::as_ref(app).session(terminal_view_id)?,
-        original_command,
-    )
+        let command = block.command_with_secrets_obfuscated(false);
+        let trimmed = command.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            let binary = trimmed.split_whitespace().next().unwrap_or("");
+            let matches_agent = session.agent.matches_command_prefix(binary);
+            // Prefer any active-block command that matches this session's agent,
+            // not only when the block is still marked long-running.
+            if matches_agent || block.is_active_and_long_running() {
+                Some(command)
+            } else {
+                None
+            }
+        }
+    });
+    CliAgentResumeSnapshot::from_active_session(session, original_command)
 }

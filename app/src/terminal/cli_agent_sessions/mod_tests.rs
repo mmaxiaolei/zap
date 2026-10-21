@@ -257,6 +257,7 @@ fn apply_event_preserves_input_session() {
         plugin_version: None,
         draft_text: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
 
@@ -294,6 +295,7 @@ fn stop_without_query_preserves_previous_prompt() {
         plugin_version: None,
         draft_text: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
 
@@ -335,6 +337,7 @@ fn is_remote_returns_true_when_remote_host_is_set() {
         draft_text: None,
         remote_host: Some("user@devbox".to_owned()),
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
     assert!(session.is_remote());
@@ -353,6 +356,7 @@ fn is_remote_returns_false_when_remote_host_is_none() {
         plugin_version: None,
         draft_text: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
     assert!(!session.is_remote());
@@ -374,6 +378,7 @@ fn session_model_label_trims_and_hides_empty() {
         plugin_version: None,
         draft_text: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
     assert_eq!(session.model_label(), Some("opus"));
@@ -449,6 +454,7 @@ fn session_start_sets_plugin_version() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
 
@@ -482,6 +488,7 @@ fn session_start_without_plugin_version_leaves_none() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
 
@@ -512,6 +519,7 @@ fn phase_changed_at_updates_when_status_changes() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
     let before = session.phase_changed_at;
@@ -548,6 +556,7 @@ fn phase_changed_at_stays_when_status_unchanged() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
     let before = session.phase_changed_at;
@@ -590,6 +599,7 @@ fn permission_request_maps_to_waiting() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
 
@@ -630,6 +640,7 @@ fn question_asked_maps_to_waiting() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
 
@@ -666,6 +677,7 @@ fn permission_replied_clears_waiting() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
 
@@ -701,6 +713,7 @@ fn idle_prompt_promotes_in_progress_to_success() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
     let before = session.phase_changed_at;
@@ -740,6 +753,7 @@ fn idle_prompt_does_not_override_success() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
     let before = session.phase_changed_at;
@@ -774,6 +788,7 @@ fn idle_prompt_does_not_clear_waiting() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
 
@@ -807,6 +822,7 @@ fn idle_prompt_without_prior_work_sets_idle() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
 
@@ -843,6 +859,7 @@ fn idle_prompt_does_not_override_idle() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
     let before = session.phase_changed_at;
@@ -878,6 +895,7 @@ fn error_event_sets_failed() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
 
@@ -921,6 +939,7 @@ fn idle_prompt_does_not_clear_failed() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
 
@@ -971,6 +990,7 @@ fn grok_stop_clears_in_progress_to_success() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
 
@@ -1024,6 +1044,7 @@ fn grok_idle_prompt_after_turn_sets_success() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
 
@@ -1062,6 +1083,7 @@ fn grok_turn_complete_message_promotes_idle_to_success() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
 
@@ -1085,6 +1107,7 @@ fn grok_turn_complete_message_promotes_idle_to_success() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
     let body = r#"{"v":1,"agent":"grok","event":"idle_prompt","query":"你是什么模型？","summary":"Grok is waiting for your input"}"#;
@@ -1110,6 +1133,7 @@ fn grok_idle_prompt_without_local_query_still_succeeds() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
     let body = r#"{"v":1,"agent":"grok","event":"idle_prompt","summary":"Grok is waiting for your input"}"#;
@@ -1134,6 +1158,7 @@ fn claude_cold_idle_prompt_without_query_stays_idle() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
     let body = r#"{"v":1,"agent":"claude","event":"idle_prompt","summary":"Claude is waiting for your input"}"#;
@@ -1158,6 +1183,7 @@ fn claude_stop_from_in_progress_sets_success() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
     let body = r#"{"v":1,"agent":"claude","event":"stop","query":"refactor auth","response":"done"}"#;
@@ -1182,6 +1208,7 @@ fn claude_prompt_submit_then_idle_prompt_sets_success() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
     let submit = parse_event(
@@ -1218,6 +1245,7 @@ fn codex_osc9_stop_from_idle_sets_success() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
     // Same shape CodexSessionHandler emits for turn-complete OSC 9.
@@ -1253,6 +1281,7 @@ fn codex_approval_sets_waiting() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
     let event = CLIAgentEvent {
@@ -1288,6 +1317,7 @@ fn codex_structured_prompt_submit_then_stop() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
     let submit = parse_event(
@@ -1325,6 +1355,7 @@ fn prompt_submit_moves_idle_to_in_progress() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     };
     let event = CLIAgentEvent {

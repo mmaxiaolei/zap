@@ -10037,7 +10037,7 @@ impl TerminalView {
                                     // Detect CLI agent and create session before
                                     // showing the footer, so the session drives
                                     // the footer rather than the other way around.
-                                    let (detection, model_label) = {
+                                    let (detection, model_label, launch_command) = {
                                         let model = me.model.lock();
                                         let detection =
                                             me.detect_cli_agent_from_model(&model, ctx);
@@ -10048,7 +10048,11 @@ impl TerminalView {
                                         // Store raw flag value; tree chip shortens and tooltips the fuller string.
                                         let model_label =
                                             CLIAgent::model_flag_from_command(&command);
-                                        (detection, model_label)
+                                        let launch_command = {
+                                            let trimmed = command.trim();
+                                            (!trimmed.is_empty()).then_some(trimmed.to_owned())
+                                        };
+                                        (detection, model_label, launch_command)
                                     };
                                     let view_id = me.view_id;
                                     CLIAgentSessionsModel::handle(ctx).update(
@@ -10087,6 +10091,7 @@ impl TerminalView {
                                                         remote_host,
                                                         draft_text: None,
                                                         custom_command_prefix: custom_command_prefix.clone(),
+                                                        launch_command: launch_command.clone(),
                                                         phase_changed_at: Instant::now(),
                                                     },
                                                     ctx,

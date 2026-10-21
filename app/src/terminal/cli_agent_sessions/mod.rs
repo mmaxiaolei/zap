@@ -174,6 +174,10 @@ pub struct CLIAgentSession {
     /// the first word of the command (the binary/alias the user typed).
     /// Used to customize plugin instructions and force manual install mode.
     pub custom_command_prefix: Option<String>,
+    /// Full launch command captured when the session was first detected
+    /// (e.g. `claude --dangerously-skip-permissions`). Used to preserve flags
+    /// when building a resume command after restart.
+    pub launch_command: Option<String>,
     /// Wall-clock-ish monotonic instant when `status` last changed (Orca relative time).
     pub phase_changed_at: instant::Instant,
 }
@@ -456,6 +460,7 @@ impl CLIAgentSessionsModel {
                 remote_host,
                 draft_text: None,
                 custom_command_prefix: None,
+                launch_command: None,
                 phase_changed_at: instant::Instant::now(),
             },
             ctx,

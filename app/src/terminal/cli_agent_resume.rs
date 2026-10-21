@@ -64,23 +64,29 @@ pub(crate) fn take_resume_command_if_shell_ready(
 }
 
 /// 按各 CLI 的 resume 语法拼命令。session_id 优先;没有 id 时仅 Claude / Codex 回退到 continue/last。
+/// 无 session_id 时若仍有简单 original_command，把 continue/last 注入原命令以保留启动 flags。
 pub fn build_resume_command(
     agent: CLIAgent,
     session_id: Option<&str>,
     original_command: Option<&str>,
 ) -> Option<String> {
     let syntax = resume_syntax(agent)?;
+    let simple_original = original_command
+        .map(str::trim)
+        .filter(|command| !command.is_empty() && is_simple_command_line(command));
     if let Some(session_id) = session_id.map(str::trim).filter(|id| !id.is_empty()) {
-        if let Some(original) = original_command
-            .map(str::trim)
-            .filter(|command| !command.is_empty() && is_simple_command_line(command))
-        {
+        if let Some(original) = simple_original {
             if let Some(command) = inject_resume_into_original(agent, original, syntax, session_id)
             {
                 return Some(command);
             }
         }
         return Some(canonical_resume(agent, syntax, session_id));
+    }
+    if let Some(original) = simple_original {
+        if let Some(command) = inject_continue_into_original(agent, original, syntax) {
+            return Some(command);
+        }
     }
     continue_without_session_id(agent).map(str::to_owned)
 }
@@ -150,6 +156,34 @@ fn canonical_resume(agent: CLIAgent, syntax: ResumeSyntax, session_id: &str) -> 
         ResumeSyntax::ShortSessionFlag => format!("{prefix} -s {quoted}"),
         ResumeSyntax::SessionFlag => format!("{prefix} --session {quoted}"),
     }
+}
+
+/// 无 session_id 时：保留原 flags，注入该 agent 的 continue/last 语法。
+fn inject_continue_into_original(
+    agent: CLIAgent,
+    original: &str,
+    syntax: ResumeSyntax,
+) -> Option<String> {
+    // 仅 Claude / Codex 支持无 id 的 continue/last。
+    continue_without_session_id(agent)?;
+    let tokens: Vec<&str> = original.split_whitespace().collect();
+    let binary = tokens.first().copied()?;
+    if !agent.matches_command_prefix(binary) {
+        return None;
+    }
+    let stripped = strip_resume_tokens(&tokens[1..], syntax);
+    let mut out = Vec::with_capacity(stripped.len() + 3);
+    out.push(binary.to_string());
+    out.extend(stripped);
+    match agent {
+        CLIAgent::Claude => out.push("--continue".to_owned()),
+        CLIAgent::Codex => {
+            out.push("resume".to_owned());
+            out.push("--last".to_owned());
+        }
+        _ => return None,
+    }
+    Some(out.join(" "))
 }
 
 fn inject_resume_into_original(

@@ -610,6 +610,7 @@ mod tests {
             plugin_version: None,
             draft_text: None,
             custom_command_prefix: None,
+            launch_command: None,
             phase_changed_at: instant::Instant::now(),
         };
 
@@ -632,6 +633,7 @@ mod tests {
             plugin_version: None,
             draft_text: None,
             custom_command_prefix: None,
+            launch_command: None,
             phase_changed_at: instant::Instant::now(),
         };
 

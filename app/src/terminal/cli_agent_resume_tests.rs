@@ -19,6 +19,7 @@ fn session(agent: CLIAgent, session_id: Option<&str>, remote: bool) -> CLIAgentS
         remote_host: remote.then(|| "user@host".to_owned()),
         draft_text: None,
         custom_command_prefix: None,
+        launch_command: None,
         phase_changed_at: instant::Instant::now(),
     }
 }
@@ -58,10 +59,53 @@ fn claude_resume_strips_existing_resume_and_continue() {
 }
 
 #[test]
-fn claude_without_session_id_falls_back_to_continue() {
+fn claude_without_session_id_injects_continue_into_original() {
+    assert_eq!(
+        build_resume_command(
+            CLIAgent::Claude,
+            None,
+            Some("claude --dangerously-skip-permissions"),
+        )
+        .as_deref(),
+        Some("claude --dangerously-skip-permissions --continue"),
+    );
     assert_eq!(
         build_resume_command(CLIAgent::Claude, None, Some("claude --model opus")).as_deref(),
+        Some("claude --model opus --continue"),
+    );
+}
+
+#[test]
+fn claude_without_session_id_or_original_falls_back_to_continue() {
+    assert_eq!(
+        build_resume_command(CLIAgent::Claude, None, None).as_deref(),
         Some("claude --continue"),
+    );
+}
+
+#[test]
+fn claude_without_session_id_strips_existing_continue_before_reinjecting() {
+    assert_eq!(
+        build_resume_command(
+            CLIAgent::Claude,
+            None,
+            Some("claude --continue --dangerously-skip-permissions"),
+        )
+        .as_deref(),
+        Some("claude --dangerously-skip-permissions --continue"),
+    );
+}
+
+#[test]
+fn codex_without_session_id_injects_resume_last_into_original() {
+    assert_eq!(
+        build_resume_command(
+            CLIAgent::Codex,
+            None,
+            Some("codex --dangerously-bypass-approvals-and-sandbox"),
+        )
+        .as_deref(),
+        Some("codex --dangerously-bypass-approvals-and-sandbox resume --last"),
     );
 }
 
@@ -170,6 +214,97 @@ fn snapshot_keeps_local_claude_session() {
         snapshot.resume_command().as_deref(),
         Some("claude --dangerously-skip-permissions --resume sid"),
     );
+}
+
+#[test]
+fn snapshot_without_session_id_preserves_original_flags() {
+    let snapshot = CliAgentResumeSnapshot::from_active_session(
+        &session(CLIAgent::Claude, None, false),
+        Some("claude --dangerously-skip-permissions".to_owned()),
+    )
+    .expect("local claude without session id should still resume via continue");
+    assert_eq!(
+        snapshot.resume_command().as_deref(),
+        Some("claude --dangerously-skip-permissions --continue"),
+    );
+}
+
+
+#[test]
+fn gemini_resume_preserves_original_flags() {
+    assert_eq!(
+        build_resume_command(
+            CLIAgent::Gemini,
+            Some("sid"),
+            Some("gemini --yolo --model gemini-2.5-pro"),
+        )
+        .as_deref(),
+        Some("gemini --yolo --model gemini-2.5-pro --resume sid"),
+    );
+}
+
+#[test]
+fn gemini_without_session_id_is_skipped_even_with_original() {
+    assert_eq!(
+        build_resume_command(CLIAgent::Gemini, None, Some("gemini --yolo")),
+        None,
+    );
+}
+
+#[test]
+fn copilot_resume_preserves_original_flags() {
+    assert_eq!(
+        build_resume_command(
+            CLIAgent::Copilot,
+            Some("abc"),
+            Some("copilot --model gpt-5"),
+        )
+        .as_deref(),
+        Some("copilot --model gpt-5 --resume=abc"),
+    );
+}
+
+#[test]
+fn opencode_and_pi_resume_preserve_original_flags() {
+    assert_eq!(
+        build_resume_command(
+            CLIAgent::OpenCode,
+            Some("sid"),
+            Some("opencode --port 4096"),
+        )
+        .as_deref(),
+        Some("opencode --port 4096 -s sid"),
+    );
+    assert_eq!(
+        build_resume_command(CLIAgent::Pi, Some("sid"), Some("pi --print")).as_deref(),
+        Some("pi --print --session sid"),
+    );
+}
+
+#[test]
+fn omp_resume_preserves_original_flags() {
+    assert_eq!(
+        build_resume_command(CLIAgent::Omp, Some("sid"), Some("omp --verbose")).as_deref(),
+        Some("omp --verbose --resume sid"),
+    );
+}
+
+#[test]
+fn agents_without_continue_skip_resume_when_no_session_id() {
+    for agent in [
+        CLIAgent::Grok,
+        CLIAgent::Gemini,
+        CLIAgent::Copilot,
+        CLIAgent::OpenCode,
+        CLIAgent::Pi,
+        CLIAgent::Omp,
+    ] {
+        assert_eq!(
+            build_resume_command(agent, None, Some(&format!("{} --flag", agent.command_prefix()))),
+            None,
+            "{agent:?} must not invent a continue/last resume without session_id",
+        );
+    }
 }
 
 #[test]
