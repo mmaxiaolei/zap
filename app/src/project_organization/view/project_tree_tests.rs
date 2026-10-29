@@ -48,7 +48,8 @@ use super::{
     workspace_row_shows_selection_accent, workspace_shows_branch_subtitle, DepthStackTabFill,
     ProjectTreeEvent, ProjectTreePanel, ProjectTreeState, RepositoryTreeNode, TabLayout,
     WorkspaceTreeNode, WorkspaceVisualState, DEPTH_STACK_GROUP_BG, DEPTH_STACK_INSET_BG,
-    DEPTH_STACK_INSET_BORDER, DEPTH_STACK_INSET_LIP_BG, DEPTH_STACK_ROW_INSET_H,
+    DEPTH_STACK_INSET_BORDER, DEPTH_STACK_INSET_BORDER_WIDTH, DEPTH_STACK_INSET_CONTENT_PAD_H,
+    DEPTH_STACK_INSET_LIP_BG, DEPTH_STACK_INSET_LIP_PAD, DEPTH_STACK_ROW_INSET_H,
     DEPTH_STACK_TAB_GUTTER_H, DEPTH_STACK_TAB_HOVER_WASH,
     TREE_TRAILING_ACTION_SPACING, TREE_TRAILING_META_WIDTH,
 };
@@ -550,10 +551,10 @@ fn repository_and_workspace_trailing_counts_share_action_spacing() {
 
 #[test]
 fn tree_trailing_meta_and_actions_share_fixed_columns() {
-    // Meta column fits footnote labels like `99+` / `21m` / `now`.
-    assert_eq!(TREE_TRAILING_META_WIDTH, 32.);
-    // Two ICON_DIMENSIONS (24) slots + one spacing (8) = 56; keeps tab-count and
-    // relative time on the same right edge ahead of hover actions.
+    // Meta column fits centered footnote labels like `99+` / `43m` / `now`.
+    assert_eq!(TREE_TRAILING_META_WIDTH, 36.);
+    // Two ICON_DIMENSIONS (24) slots + one spacing (8) = 56; keeps repo/ws/tab
+    // meta on one centered axis ahead of the shared action strip.
     assert_eq!(tree_trailing_actions_width(), 24. + 8. + 24.);
 }
 
@@ -668,12 +669,21 @@ fn depth_stack_tab_fill_keeps_inset_distinct_from_hover_wash() {
         DEPTH_STACK_TAB_HOVER_WASH.a <= 12,
         "hover wash stays a light sweep"
     );
-    // Slot/wash gutter matches workspace-head horizontal content inset (same column).
+    // Tab chrome shares the head width (no extra H gutter) so trailing meta co-aligns.
     assert_eq!(DEPTH_STACK_ROW_INSET_H, 8.);
     assert_eq!(
-        DEPTH_STACK_TAB_GUTTER_H, DEPTH_STACK_ROW_INSET_H,
-        "tab gutter must match Depth Stack workspace-head H inset"
+        DEPTH_STACK_TAB_GUTTER_H, 0.,
+        "tab H gutter must be 0 so meta aligns with workspace-head content"
     );
+    // Inset Press: lip + border + content pad == head H inset (shared right edge).
+    assert_eq!(DEPTH_STACK_INSET_LIP_PAD, 1.);
+    assert_eq!(DEPTH_STACK_INSET_BORDER_WIDTH, 1.);
+    assert_eq!(
+        DEPTH_STACK_INSET_CONTENT_PAD_H,
+        DEPTH_STACK_ROW_INSET_H - DEPTH_STACK_INSET_LIP_PAD - DEPTH_STACK_INSET_BORDER_WIDTH,
+        "inset content pad must cancel lip+border against head inset"
+    );
+    assert_eq!(DEPTH_STACK_INSET_CONTENT_PAD_H, 6.);
 }
 
 #[test]

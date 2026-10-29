@@ -61,9 +61,10 @@ const TREE_CHEVRON_SIZE: f32 = 16.;
 const TREE_ROW_ICON_SIZE: f32 = 16.;
 const TREE_ICON_GAP: f32 = 6.;
 pub(crate) const TREE_TRAILING_ACTION_SPACING: f32 = 8.;
-/// Shared right-side meta column for workspace tab-count and agent relative time.
-/// Wide enough for `99+` / `59m` / `23h` / `now` at footnote size; text is end-aligned.
-pub(crate) const TREE_TRAILING_META_WIDTH: f32 = 32.;
+/// Shared right-side meta column for repo workspace-count, workspace tab-count, and
+/// agent relative time. Wide enough for `99+` / `43m` / `59m` / `now` at footnote size;
+/// text is horizontally centered so all three levels share one vertical axis.
+pub(crate) const TREE_TRAILING_META_WIDTH: f32 = 36.;
 /// Workspace rows reserve two hover actions (new tab + delete). Tab rows use the same
 /// footprint (close end-aligned) so meta columns share one vertical edge.
 const TREE_TRAILING_ACTION_SLOTS: f32 = 2.;
@@ -632,11 +633,17 @@ const DEPTH_STACK_INSET_BORDER: ColorU = ColorU {
     b: 0,
     a: 140,
 }; // rgba(0,0,0,.55) — S2 slot lip edge
-/// Shared horizontal inset inside Depth Stack: workspace head pad + tab slot/wash gutter.
-/// Slot outer edge lines up with the head row's content box (render_workspace_row H pad).
+/// Shared horizontal content inset inside Depth Stack (workspace head + tab rows).
+/// Tab chrome no longer adds an extra H gutter — trailing meta/actions share the head axis.
 const DEPTH_STACK_ROW_INSET_H: f32 = 8.;
-const DEPTH_STACK_TAB_GUTTER_H: f32 = DEPTH_STACK_ROW_INSET_H;
+/// Horizontal gutter for tab chrome; 0 so tab content box shares the head right edge.
+const DEPTH_STACK_TAB_GUTTER_H: f32 = 0.;
 const DEPTH_STACK_TAB_GUTTER_V: f32 = 1.;
+/// Inset Press lip border width (matches `Border::all` below).
+const DEPTH_STACK_INSET_BORDER_WIDTH: f32 = 1.;
+/// Inner face H pad so lip+border+pad equals [`DEPTH_STACK_ROW_INSET_H`] (co-axis with head).
+const DEPTH_STACK_INSET_CONTENT_PAD_H: f32 =
+    DEPTH_STACK_ROW_INSET_H - DEPTH_STACK_INSET_LIP_PAD - DEPTH_STACK_INSET_BORDER_WIDTH;
 /// Inactive hover: light white wash — never a solid gray pill like the old raised chip.
 const DEPTH_STACK_TAB_HOVER_WASH: ColorU = ColorU {
     r: 255,
@@ -703,10 +710,10 @@ fn depth_stack_group_drop_shadow() -> DropShadow {
 }
 
 /// S2 fake inset slot: outer 1px dark lip + inner `#141418` face (WarpUI has no inset shadow).
-/// H gutter = DEPTH_STACK_ROW_INSET_H so slot outer edges align with workspace-head content.
+/// No extra H gutter — content pad compensates for lip+border so meta aligns with the head.
 fn depth_stack_active_inset_slot(child: Box<dyn Element>) -> Box<dyn Element> {
     let inner = Container::new(child)
-        .with_horizontal_padding(DEPTH_STACK_ROW_INSET_H)
+        .with_horizontal_padding(DEPTH_STACK_INSET_CONTENT_PAD_H)
         .with_vertical_padding(5.)
         .with_background(DEPTH_STACK_INSET_BG)
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
@@ -717,7 +724,9 @@ fn depth_stack_active_inset_slot(child: Box<dyn Element>) -> Box<dyn Element> {
         .with_horizontal_padding(DEPTH_STACK_INSET_LIP_PAD)
         .with_vertical_padding(DEPTH_STACK_INSET_LIP_PAD)
         .with_background(DEPTH_STACK_INSET_LIP_BG)
-        .with_border(Border::all(1.).with_border_fill(DEPTH_STACK_INSET_BORDER))
+        .with_border(
+            Border::all(DEPTH_STACK_INSET_BORDER_WIDTH).with_border_fill(DEPTH_STACK_INSET_BORDER),
+        )
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(DEPTH_STACK_INSET_RADIUS)))
         .with_horizontal_margin(DEPTH_STACK_TAB_GUTTER_H)
         .with_margin_top(DEPTH_STACK_TAB_GUTTER_V)
@@ -895,12 +904,12 @@ pub(crate) fn tree_trailing_actions_width() -> f32 {
         + (TREE_TRAILING_ACTION_SLOTS - 1.) * TREE_TRAILING_ACTION_SPACING
 }
 
-/// Right-align `child` inside the shared meta column so tab-count and relative time share an edge.
+/// Center `child` inside the shared meta column so repo/ws/tab counts share one vertical axis.
 fn render_tree_trailing_meta(child: Box<dyn Element>) -> Box<dyn Element> {
     ConstrainedBox::new(
         Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_main_axis_alignment(MainAxisAlignment::Center)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(child)
             .finish(),
@@ -1274,7 +1283,8 @@ impl ProjectTreePanel {
             .with_height(icons::ICON_DIMENSIONS)
             .finish();
 
-        let workspace_count = Container::new(
+        // Plain footnote count in the shared meta column (no pill) — co-axis with ws/tab.
+        let workspace_count = render_tree_trailing_meta(
             Text::new_inline(
                 workspace_count_pill_label(repository.workspaces.len()),
                 appearance.ui_font_family(),
@@ -1282,13 +1292,7 @@ impl ProjectTreePanel {
             )
             .with_color(theme.sub_text_color(theme.background()).into())
             .finish(),
-        )
-        .with_horizontal_padding(5.)
-        .with_vertical_padding(1.)
-        .with_background(theme.surface_overlay_1())
-        .with_border(Border::all(1.).with_border_fill(theme.surface_2()))
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-        .finish();
+        );
 
         let name = Text::new_inline(
             repository.display_name.clone(),
@@ -1323,12 +1327,22 @@ impl ProjectTreePanel {
                     .with_child(folder_icon)
                     .with_child(Shrinkable::new(1.0, name).finish())
                     .finish();
+                // Match workspace trailing: [meta][2-slot actions]; + stays always-on in slot 1.
+                let actions = render_tree_trailing_actions(
+                    Flex::row()
+                        .with_main_axis_size(MainAxisSize::Max)
+                        .with_main_axis_alignment(MainAxisAlignment::End)
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_spacing(TREE_TRAILING_ACTION_SPACING)
+                        .with_child(add_workspace)
+                        .with_child(remove_repository)
+                        .finish(),
+                );
                 let trailing = Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_spacing(TREE_TRAILING_ACTION_SPACING)
                     .with_child(workspace_count)
-                    .with_child(add_workspace)
-                    .with_child(remove_repository)
+                    .with_child(actions)
                     .finish();
                 let row = Flex::row()
                     .with_main_axis_size(MainAxisSize::Max)
@@ -2008,7 +2022,7 @@ impl ProjectTreePanel {
                     close_placeholder
                 };
                 // Match workspace trailing: [model?][meta][2-slot actions] so
-                // relative time and tab-count share one right-edge column.
+                // relative time and tab-count share one centered meta column.
                 let actions = render_tree_trailing_actions(
                     Flex::row()
                         .with_main_axis_size(MainAxisSize::Max)
