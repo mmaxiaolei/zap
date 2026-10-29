@@ -24,6 +24,8 @@ pub enum CLIAgentEventType {
     IdlePrompt,
     /// Agent reported a failed / errored turn (tree: Failed red dot).
     Error,
+    /// Bridge statusLine / hook pushed model · cost · context% (no status change).
+    StatsUpdate,
     Unknown(String),
 }
 
@@ -38,6 +40,17 @@ pub struct CLIAgentEventPayload {
     pub tool_name: Option<String>,
     pub tool_input_preview: Option<String>,
     pub plugin_version: Option<String>,
+    /// Optional live stats from `stats_update` (model / cost / context%).
+    pub stats: Option<CLIAgentStats>,
+}
+
+/// Live session stats carried by [`CLIAgentEventType::StatsUpdate`].
+#[derive(Debug, Clone, Default)]
+pub struct CLIAgentStats {
+    /// Prefer display name, else model id.
+    pub model: Option<String>,
+    pub cost_usd: Option<f64>,
+    pub context_used_pct: Option<f64>,
 }
 
 /// A parsed event from a CLI agent plugin.

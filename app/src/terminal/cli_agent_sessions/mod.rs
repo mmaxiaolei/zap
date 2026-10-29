@@ -77,7 +77,12 @@ pub struct CLIAgentSessionContext {
     pub query: Option<String>,
     pub response: Option<String>,
     /// Model id/name from launch flags (e.g. `--model opus`) when known.
+    /// Overridden by bridge `stats_update` when the agent reports a live model.
     pub model: Option<String>,
+    /// Cumulative USD cost from bridge `stats_update`. Absent when unknown (never faked as 0).
+    pub cost_usd: Option<f64>,
+    /// Context window used percentage (0–100) from bridge `stats_update`.
+    pub context_used_pct: Option<f64>,
 }
 
 /// State of the rich input editor for composing a prompt to send to a CLI agent.
@@ -182,6 +187,48 @@ pub struct CLIAgentSession {
     pub phase_changed_at: instant::Instant,
 }
 
+/// Max char budget for the footer model chip (~14ch + ellipsis).
+pub(crate) const MODEL_CHIP_MAX_CHARS: usize = 14;
+
+/// Footer context-ring color tier from `context_used_pct` (0–100).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContextPctTier {
+    Ok,
+    Warn,
+    Hot,
+}
+
+impl ContextPctTier {
+    pub(crate) fn from_pct(pct: f64) -> Self {
+        if pct >= 85.0 {
+            Self::Hot
+        } else if pct >= 60.0 {
+            Self::Warn
+        } else {
+            Self::Ok
+        }
+    }
+}
+
+/// Format USD amount without a `$` prefix. Returns `None` for non-finite.
+pub(crate) fn format_cost_amount(cost: f64) -> Option<String> {
+    if !cost.is_finite() {
+        return None;
+    }
+    Some(if cost >= 100.0 {
+        format!("{cost:.0}")
+    } else if cost >= 10.0 {
+        format!("{cost:.1}")
+    } else {
+        format!("{cost:.2}")
+    })
+}
+
+/// Ellipsize a model label to [`MODEL_CHIP_MAX_CHARS`] (end truncation).
+pub(crate) fn truncate_model_chip_label(model: &str) -> String {
+    crate::util::truncation::truncate_from_end(model.trim(), MODEL_CHIP_MAX_CHARS)
+}
+
 impl CLIAgentSession {
     pub fn is_remote(&self) -> bool {
         self.remote_host.is_some()
@@ -194,6 +241,30 @@ impl CLIAgentSession {
             .as_deref()
             .map(str::trim)
             .filter(|model| !model.is_empty())
+    }
+
+    /// Formatted cost amount (no `$` — footer paints 💰 separately) when known.
+    pub(crate) fn cost_label(&self) -> Option<String> {
+        let cost = self.session_context.cost_usd?;
+        format_cost_amount(cost)
+    }
+
+    /// Context % tier for footer ring tint: <60 ok, ≥60 warn, ≥85 hot.
+    pub(crate) fn context_pct_tier(&self) -> Option<ContextPctTier> {
+        let pct = self.session_context.context_used_pct?;
+        if !pct.is_finite() {
+            return None;
+        }
+        Some(ContextPctTier::from_pct(pct))
+    }
+
+    /// Formatted context-used percentage chip when known.
+    pub(crate) fn context_pct_label(&self) -> Option<String> {
+        let pct = self.session_context.context_used_pct?;
+        if !pct.is_finite() {
+            return None;
+        }
+        Some(format!("{pct:.1}%"))
     }
 
     /// Applies an event to this session, updating context and status.
@@ -294,6 +365,25 @@ impl CLIAgentSession {
             },
             CLIAgentEventType::SessionStart => {
                 self.plugin_version = event.payload.plugin_version.clone();
+                return None;
+            }
+            CLIAgentEventType::StatsUpdate => {
+                if let Some(stats) = &event.payload.stats {
+                    if let Some(model) = stats
+                        .model
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|m| !m.is_empty())
+                    {
+                        self.session_context.model = Some(model.to_owned());
+                    }
+                    if let Some(cost) = stats.cost_usd.filter(|c| c.is_finite()) {
+                        self.session_context.cost_usd = Some(cost);
+                    }
+                    if let Some(pct) = stats.context_used_pct.filter(|p| p.is_finite()) {
+                        self.session_context.context_used_pct = Some(pct);
+                    }
+                }
                 return None;
             }
             CLIAgentEventType::Unknown(_) => return None,
@@ -503,6 +593,7 @@ impl CLIAgentSessionsModel {
             CLIAgentEventType::SessionStart
                 | CLIAgentEventType::PromptSubmit
                 | CLIAgentEventType::ToolComplete
+                | CLIAgentEventType::StatsUpdate
         ) {
             ctx.emit(CLIAgentSessionsModelEvent::SessionUpdated {
                 terminal_view_id,

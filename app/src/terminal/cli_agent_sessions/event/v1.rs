@@ -2,7 +2,7 @@ use serde::Deserialize;
 
 use crate::terminal::CLIAgent;
 
-use super::{CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventType};
+use super::{CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventType, CLIAgentStats};
 
 /// Resolves a CLI agent from the `"agent"` string in a CLI agent event.
 /// Returns `None` if the string doesn't match any known agent.
@@ -24,6 +24,7 @@ pub(super) fn parse(body: &str) -> Option<CLIAgentEvent> {
         "question_asked" => CLIAgentEventType::QuestionAsked,
         "idle_prompt" => CLIAgentEventType::IdlePrompt,
         "error" | "failed" | "agent_error" | "stop_failure" => CLIAgentEventType::Error,
+        "stats_update" => CLIAgentEventType::StatsUpdate,
         other => CLIAgentEventType::Unknown(other.to_string()),
     };
 
@@ -55,7 +56,30 @@ pub(super) fn parse(body: &str) -> Option<CLIAgentEvent> {
             tool_name: raw.tool_name,
             tool_input_preview,
             plugin_version: raw.plugin_version,
+            stats: raw.stats.and_then(parse_stats),
         },
+    })
+}
+
+fn parse_stats(raw: RawStats) -> Option<CLIAgentStats> {
+    let model = raw
+        .model_display
+        .or(raw.model_id)
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+    let cost_usd = raw.cost_usd.filter(|c| c.is_finite());
+    let context_used_pct = raw
+        .context_used_pct
+        .filter(|p| p.is_finite());
+
+    if model.is_none() && cost_usd.is_none() && context_used_pct.is_none() {
+        return None;
+    }
+
+    Some(CLIAgentStats {
+        model,
+        cost_usd,
+        context_used_pct,
     })
 }
 
@@ -74,4 +98,13 @@ struct RawEvent {
     tool_name: Option<String>,
     tool_input: Option<serde_json::Value>,
     plugin_version: Option<String>,
+    stats: Option<RawStats>,
+}
+
+#[derive(Deserialize)]
+struct RawStats {
+    model_id: Option<String>,
+    model_display: Option<String>,
+    cost_usd: Option<f64>,
+    context_used_pct: Option<f64>,
 }

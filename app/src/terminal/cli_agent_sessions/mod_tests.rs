@@ -1376,3 +1376,118 @@ fn prompt_submit_moves_idle_to_in_progress() {
     );
     assert_eq!(session.status, CLIAgentSessionStatus::InProgress);
 }
+
+
+#[test]
+fn parse_stats_update_notification() {
+    let body = r#"{"v":1,"agent":"claude","event":"stats_update","session_id":"abc","cwd":"/tmp/proj","project":"proj","stats":{"model_id":"claude-opus","model_display":"glm-4.0[1m]","cost_usd":1.77,"context_used_pct":33.3,"source":"claude.statusLine","freshness":"live"}}"#;
+    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+
+    assert_eq!(notif.event, CLIAgentEventType::StatsUpdate);
+    assert_eq!(notif.session_id.as_deref(), Some("abc"));
+    let stats = notif.payload.stats.expect("stats block");
+    assert_eq!(stats.model.as_deref(), Some("glm-4.0[1m]"));
+    assert_eq!(stats.cost_usd, Some(1.77));
+    assert_eq!(stats.context_used_pct, Some(33.3));
+}
+
+#[test]
+fn parse_stats_update_omits_empty_stats() {
+    let body = r#"{"v":1,"agent":"codex","event":"stats_update","session_id":"x","stats":{"source":"codex.hook","freshness":"live"}}"#;
+    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+    assert_eq!(notif.event, CLIAgentEventType::StatsUpdate);
+    assert!(notif.payload.stats.is_none());
+}
+
+#[test]
+fn apply_stats_update_overrides_model_and_fills_cost_pct() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext {
+            model: Some("opus-from-flags".to_owned()),
+            ..Default::default()
+        },
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        remote_host: None,
+        draft_text: None,
+        custom_command_prefix: None,
+        launch_command: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::StatsUpdate,
+        session_id: Some("abc".to_owned()),
+        cwd: Some("/tmp/proj".to_owned()),
+        project: Some("proj".to_owned()),
+        payload: CLIAgentEventPayload {
+            stats: Some(super::event::CLIAgentStats {
+                model: Some("glm-4.0[1m]".to_owned()),
+                cost_usd: Some(177.0),
+                context_used_pct: Some(33.3),
+            }),
+            ..Default::default()
+        },
+    };
+
+    assert_eq!(session.apply_event(&event), None);
+    assert_eq!(session.model_label(), Some("glm-4.0[1m]"));
+    assert_eq!(session.cost_label().as_deref(), Some("177"));
+    assert_eq!(session.context_pct_label().as_deref(), Some("33.3%"));
+    assert_eq!(session.session_context.session_id.as_deref(), Some("abc"));
+    assert_eq!(session.status, CLIAgentSessionStatus::InProgress);
+}
+
+#[test]
+fn cost_and_context_labels_hide_when_missing() {
+    let session = CLIAgentSession {
+        agent: CLIAgent::Codex,
+        status: CLIAgentSessionStatus::Idle,
+        session_context: CLIAgentSessionContext {
+            model: Some("gpt-5".to_owned()),
+            ..Default::default()
+        },
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        remote_host: None,
+        draft_text: None,
+        custom_command_prefix: None,
+        launch_command: None,
+        phase_changed_at: instant::Instant::now(),
+    };
+    assert_eq!(session.model_label(), Some("gpt-5"));
+    assert_eq!(session.cost_label(), None);
+    assert_eq!(session.context_pct_label(), None);
+}
+
+
+#[test]
+fn context_pct_tier_thresholds() {
+    use super::{ContextPctTier, format_cost_amount, truncate_model_chip_label, MODEL_CHIP_MAX_CHARS};
+
+    assert_eq!(ContextPctTier::from_pct(0.0), ContextPctTier::Ok);
+    assert_eq!(ContextPctTier::from_pct(59.9), ContextPctTier::Ok);
+    assert_eq!(ContextPctTier::from_pct(60.0), ContextPctTier::Warn);
+    assert_eq!(ContextPctTier::from_pct(84.9), ContextPctTier::Warn);
+    assert_eq!(ContextPctTier::from_pct(85.0), ContextPctTier::Hot);
+    assert_eq!(ContextPctTier::from_pct(100.0), ContextPctTier::Hot);
+
+    assert_eq!(format_cost_amount(1.77).as_deref(), Some("1.77"));
+    assert_eq!(format_cost_amount(12.34).as_deref(), Some("12.3"));
+    assert_eq!(format_cost_amount(177.0).as_deref(), Some("177"));
+    assert_eq!(format_cost_amount(f64::NAN), None);
+
+    assert_eq!(truncate_model_chip_label("short"), "short");
+    let long = "glm-5.3[1m]-extra-long-name";
+    let truncated = truncate_model_chip_label(long);
+    assert!(truncated.chars().count() <= MODEL_CHIP_MAX_CHARS);
+    assert!(truncated.ends_with('…'));
+}
