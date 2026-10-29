@@ -121,10 +121,18 @@ impl Rasterizer {
             },
         )?;
 
+        let font = self.font_for_id(font_id);
+        #[cfg(target_os = "macos")]
+        let mark_emoji = font.is_colored() || font.is_emoji();
+        #[cfg(not(target_os = "macos"))]
+        let mark_emoji = font.is_colored();
         Ok(RasterizedGlyph {
             canvas: canvas.into(),
             // TODO(alokedesai): Properly support colored glyphs on Windows.
-            is_emoji: self.font_for_id(font_id).is_colored() && !cfg!(windows),
+            // On macOS also treat Apple Color Emoji by family name — some faces
+            // omit kCTFontColorGlyphsTrait and otherwise paint as monochrome
+            // silhouettes tinted by the text color.
+            is_emoji: mark_emoji && !cfg!(windows),
         })
     }
 }
