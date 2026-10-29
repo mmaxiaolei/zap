@@ -391,6 +391,97 @@ fn cli_agent_footer_renders_for_viewer_of_shared_ambient_agent_session() {
                 view.should_render_use_agent_footer(&model, ctx),
                 "footer should render for viewer of shared ambient agent session with CLI agent",
             );
+            assert!(
+                view.should_render_use_agent_footer_as_chrome(&model, ctx),
+                "CLI agent footer must be viewport chrome, not scrollable blocklist content",
+            );
+            let active_block_index = model.block_list().active_block_index();
+            assert!(
+                model
+                    .block_list()
+                    .last_non_hidden_rich_content_block_after_block(Some(active_block_index))
+                    .is_none(),
+                "CLI agent footer must not be inserted into the blocklist",
+            );
+        });
+    })
+}
+
+/// CLI agent footer is viewport chrome: `maybe_show` must not put it in the blocklist.
+#[test]
+fn cli_agent_footer_stays_out_of_blocklist_and_uses_chrome() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            simulate_user_started_long_running_command(view);
+
+            let view_id = view.id();
+            CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.set_session(
+                    view_id,
+                    CLIAgentSession {
+                        agent: CLIAgent::Claude,
+                        status: CLIAgentSessionStatus::InProgress,
+                        session_context: CLIAgentSessionContext::default(),
+                        input_state: CLIAgentInputState::Closed,
+                        listener: None,
+                        plugin_version: None,
+                        remote_host: None,
+                        draft_text: None,
+                        custom_command_prefix: None,
+                        launch_command: None,
+                        phase_changed_at: instant::Instant::now(),
+                        should_auto_toggle_input: false,
+                    },
+                    ctx,
+                );
+            });
+
+            assert!(view.use_agent_footer.as_ref(ctx).has_cli_agent(ctx));
+
+            view.maybe_show_use_agent_footer_in_blocklist(ctx);
+
+            let model = view.model.lock();
+            assert!(view.should_render_use_agent_footer(&model, ctx));
+            assert!(view.should_render_use_agent_footer_as_chrome(&model, ctx));
+            let active_block_index = model.block_list().active_block_index();
+            assert!(
+                model
+                    .block_list()
+                    .last_non_hidden_rich_content_block_after_block(Some(active_block_index))
+                    .is_none(),
+                "CLI agent footer must not live in the scrollable blocklist",
+            );
+        });
+    })
+}
+
+/// Non-CLI "Use agent" / handoff footer still inserts into the blocklist.
+#[test]
+fn non_cli_use_agent_footer_still_inserts_into_blocklist() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            simulate_user_started_long_running_command(view);
+            transition_to_user_handoff_state(view, UserTakeOverReason::Manual, ctx);
+
+            assert!(!view.use_agent_footer.as_ref(ctx).has_cli_agent(ctx));
+
+            view.maybe_show_use_agent_footer_in_blocklist(ctx);
+
+            let model = view.model.lock();
+            assert!(view.should_render_use_agent_footer(&model, ctx));
+            assert!(
+                !view.should_render_use_agent_footer_as_chrome(&model, ctx),
+                "non-CLI handoff footer should remain blocklist content",
+            );
             let active_block_index = model.block_list().active_block_index();
             let rendered_footer_view_id = model
                 .block_list()

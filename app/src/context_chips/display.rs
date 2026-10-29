@@ -5,6 +5,7 @@ use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::context_chips::display_chip::format_git_branch_command;
 use crate::settings::InputSettings;
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::model_events::ModelEventDispatcher;
 use crate::{
     ai::blocklist::{BlocklistAIContextModel, BlocklistAIInputEvent, BlocklistAIInputModel},
@@ -421,10 +422,21 @@ impl View for PromptDisplay {
             )
         };
 
+        // Scheme C: when a CLI agent session owns this pane, diff lives on the
+        // footer only; the UDI top row keeps path / branch as navigation.
+        let hide_diff_for_cli_agent = CLIAgentSessionsModel::as_ref(app)
+            .session(self.terminal_view_id)
+            .is_some();
+
         self.display_chips.iter().for_each(|display_chip| {
             let chip = display_chip.as_ref(app);
             // AgentPlanAndTodoList is only shown in the agent input footer
             if matches!(chip.chip_kind(), ContextChipKind::AgentPlanAndTodoList) {
+                return;
+            }
+            if hide_diff_for_cli_agent
+                && matches!(chip.chip_kind(), ContextChipKind::GitDiffStats)
+            {
                 return;
             }
             if chip.should_render(app) {

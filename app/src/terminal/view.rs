@@ -24876,7 +24876,28 @@ impl View for TerminalView {
             is_alt_screen_active,
         ) {
             (InputMode::Waterfall, Some(active_gap), false) => {
-                self.render_waterfall_gap_element(&model, &viewport, active_gap, appearance, app)
+                let gap_stack = self.render_waterfall_gap_element(
+                    &model,
+                    &viewport,
+                    active_gap,
+                    appearance,
+                    app,
+                );
+                // CLI agent footer must stay pinned in waterfall+gap too
+                // (this arm is never alt-screen). Non-CLI use-agent stays in
+                // the blocklist inside the gap element.
+                if self.should_render_use_agent_footer_as_chrome(&model, app) {
+                    let mut chrome_column = Flex::column();
+                    chrome_column
+                        .add_child(Shrinkable::new(1., gap_stack.finish()).finish());
+                    chrome_column
+                        .add_child(ChildView::new(&self.use_agent_footer).finish());
+                    Stack::new()
+                        .with_constrain_absolute_children()
+                        .with_child(chrome_column.finish())
+                } else {
+                    gap_stack
+                }
             }
             (input_mode, _, _) => {
                 let output_area = if (model.shared_session_status().is_view_pending()
@@ -24900,8 +24921,9 @@ impl View for TerminalView {
 
                 column.add_child(Shrinkable::new(1., output_area).finish());
 
-                if model.is_alt_screen_active() && self.should_render_use_agent_footer(&model, app)
-                {
+                // Alt-screen and CLI agent footers are viewport chrome (outside
+                // the scrollable output) so they stay pinned while scrolling.
+                if self.should_render_use_agent_footer_as_chrome(&model, app) {
                     column.add_child(ChildView::new(&self.use_agent_footer).finish());
                 }
 

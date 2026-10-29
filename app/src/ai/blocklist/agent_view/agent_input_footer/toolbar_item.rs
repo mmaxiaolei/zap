@@ -211,18 +211,28 @@ impl AgentToolbarItemKind {
     }
 
     /// Default right-side items for the CLI agent footer.
+    ///
+    /// Scheme C (Split Mind): path / branch live on the top UDI nav; the footer
+    /// keeps session chrome (diff · settings). Model / cost / context% are
+    /// rendered from session context, not as configurable chips.
     pub fn cli_default_right() -> Vec<Self> {
-        vec![
-            Self::ContextChip(ContextChipKind::WorkingDirectory),
-            Self::ContextChip(ContextChipKind::ShellGitBranch),
-            Self::Settings,
-        ]
+        vec![Self::Settings]
+    }
+
+    /// Path / branch live on the UDI top bar (Scheme C); keep them out of the
+    /// CLI footer configurator so they cannot be re-added as duplicates.
+    pub fn is_cli_nav_duplicate(kind: &ContextChipKind) -> bool {
+        matches!(
+            kind,
+            ContextChipKind::WorkingDirectory | ContextChipKind::ShellGitBranch
+        )
     }
 
     /// All items available for the CLI agent footer configurator.
     pub fn all_available_for_cli_input() -> Vec<Self> {
         let mut items: Vec<Self> = available_chips()
             .into_iter()
+            .filter(|kind| !Self::is_cli_nav_duplicate(kind))
             .map(Self::ContextChip)
             .collect();
         items.extend([
@@ -255,5 +265,39 @@ impl AgentToolbarItemKind {
 impl From<ContextChipKind> for AgentToolbarItemKind {
     fn from(kind: ContextChipKind) -> Self {
         Self::ContextChip(kind)
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context_chips::ContextChipKind;
+
+    #[test]
+    fn cli_default_right_is_settings_only() {
+        assert_eq!(
+            AgentToolbarItemKind::cli_default_right(),
+            vec![AgentToolbarItemKind::Settings]
+        );
+    }
+
+    #[test]
+    fn cli_available_excludes_nav_duplicates() {
+        let available = AgentToolbarItemKind::all_available_for_cli_input();
+        assert!(available.iter().all(|item| {
+            item.context_chip_kind()
+                .map(|k| !AgentToolbarItemKind::is_cli_nav_duplicate(k))
+                .unwrap_or(true)
+        }));
+        assert!(!available.contains(&AgentToolbarItemKind::ContextChip(
+            ContextChipKind::WorkingDirectory
+        )));
+        assert!(!available.contains(&AgentToolbarItemKind::ContextChip(
+            ContextChipKind::ShellGitBranch
+        )));
+        assert!(available.contains(&AgentToolbarItemKind::ContextChip(
+            ContextChipKind::GitDiffStats
+        )));
     }
 }

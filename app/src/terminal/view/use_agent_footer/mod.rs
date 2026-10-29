@@ -341,6 +341,22 @@ impl TerminalView {
                 || active_block.is_eligible_for_agent_handoff())
     }
 
+    /// Whether the use-agent / CLI footer should be rendered as viewport chrome
+    /// (column sibling outside the scrollable output), rather than as blocklist
+    /// rich content that scrolls with scrollback.
+    ///
+    /// Alt-screen already used this path; CLI agent sessions now do too so the
+    /// model/%/$ chrome stays pinned while the user scrolls.
+    pub(super) fn should_render_use_agent_footer_as_chrome(
+        &self,
+        model: &TerminalModel,
+        app: &AppContext,
+    ) -> bool {
+        self.should_render_use_agent_footer(model, app)
+            && (model.is_alt_screen_active()
+                || self.use_agent_footer.as_ref(app).has_cli_agent(app))
+    }
+
     /// Returns the detected CLI agent for the active block's command, if any.
     ///
     /// This method resolves aliases before detecting the CLI agent. For example,
@@ -508,18 +524,23 @@ impl TerminalView {
             return;
         }
 
-        let should_insert_after_block = !InputModeSettings::as_ref(ctx).is_pinned_to_top();
-
-        // Send telemetry when showing CLI agent footer
-        if let Some(session) = CLIAgentSessionsModel::as_ref(ctx).session(self.view_id) {
-            let cli_agent_type: CLIAgentType = session.agent.into();
-            send_telemetry_from_ctx!(
-                TelemetryEvent::CLIAgentToolbarShown {
-                    cli_agent: cli_agent_type,
-                },
-                ctx
-            );
+        // CLI agent chrome is rendered as a viewport column sibling (see
+        // `should_render_use_agent_footer_as_chrome`) so it stays pinned while
+        // scrolling. Keep it out of the blocklist to avoid a double footer.
+        if self.use_agent_footer.as_ref(ctx).has_cli_agent(ctx) {
+            if let Some(session) = CLIAgentSessionsModel::as_ref(ctx).session(self.view_id) {
+                let cli_agent_type: CLIAgentType = session.agent.into();
+                send_telemetry_from_ctx!(
+                    TelemetryEvent::CLIAgentToolbarShown {
+                        cli_agent: cli_agent_type,
+                    },
+                    ctx
+                );
+            }
+            return;
         }
+
+        let should_insert_after_block = !InputModeSettings::as_ref(ctx).is_pinned_to_top();
 
         self.insert_rich_content(
             None,
@@ -1186,7 +1207,6 @@ impl UseAgentToolbar {
     }
 
     /// Returns whether there's a current CLI agent (like Claude Code).
-    #[cfg(feature = "voice_input")]
     pub fn has_cli_agent(&self, app: &AppContext) -> bool {
         self.cli_agent(app).is_some()
     }

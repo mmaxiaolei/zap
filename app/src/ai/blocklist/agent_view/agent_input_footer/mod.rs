@@ -19,7 +19,7 @@ use crate::{
     completer::SessionContext,
     context_chips::{
         self,
-        display_chip::{DisplayChip, DisplayChipConfig},
+        display_chip::{udi_font_size, DisplayChip, DisplayChipConfig},
         prompt_type::PromptType,
         ContextChipKind,
     },
@@ -31,8 +31,8 @@ use crate::{
     settings_view::SettingsSection,
     terminal::{
         cli_agent_sessions::{
-            listener::session_supports_rich_status, CLIAgentInputState, CLIAgentSessionsModel,
-            CLIAgentSessionsModelEvent,
+            listener::session_supports_rich_status, truncate_model_chip_label, CLIAgentInputState,
+            CLIAgentSessionsModel, CLIAgentSessionsModelEvent, ContextPctTier,
         },
         input::{models::InlineModelSelectorTab, MenuPositioningProvider},
         model_events::ModelEvent,
@@ -93,13 +93,15 @@ use warp_core::{
 #[cfg(feature = "voice_input")]
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{
+    assets::asset_cache::AssetSource,
     elements::{
-        Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Expanded, Flex,
+        Border, CacheOption, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
+        CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Expanded, Flex, Image,
         MainAxisAlignment, MainAxisSize, OffsetPositioning, ParentElement, PositionedElementAnchor,
         PositionedElementOffsetBounds, Radius, Shrinkable, Stack, Text, Wrap, WrapFill,
         WrapFillEntireRun, DEFAULT_UI_LINE_HEIGHT_RATIO,
     },
+    fonts::{Properties, Weight},
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
@@ -1216,6 +1218,121 @@ impl AgentInputFooter {
         }
     }
 
+    /// Compact session stats from bridge `stats_update` (Scheme C / V2′ footer).
+    /// Layout: 🤖 model · context ring+% · 💰 cost. Missing fields are omitted.
+    fn render_cli_session_stats_chips(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Vec<Box<dyn Element>> {
+        let Some(session) = CLIAgentSessionsModel::as_ref(app).session(self.terminal_view_id)
+        else {
+            return Vec::new();
+        };
+
+        let theme = appearance.theme();
+        let font = appearance.ui_font_family();
+        let font_size = udi_font_size(appearance);
+        let muted = Fill::Solid(internal_colors::neutral_6(theme));
+        let gold = Fill::Solid(theme.ansi_fg_yellow());
+        let mut chips = Vec::new();
+
+        let chip_pad = |child: Box<dyn Element>| {
+            Container::new(child)
+                .with_vertical_padding(context_chips::spacing::UDI_CHIP_VERTICAL_PADDING)
+                .with_horizontal_padding(context_chips::spacing::UDI_CHIP_HORIZONTAL_PADDING)
+                .finish()
+        };
+
+        // 💰: Text emoji (Apple Color Emoji is naturally vivid). Do not tint.
+        // 🤖: Apple's robot glyph is gray metal and often reads as "B&W"; app
+        // Noto Color Emoji fallback also fails to load on Mac (CBDT + no 'm'
+        // glyph). Use bundled Twemoji SVG so the model chip is multi-color.
+        let emoji_text = |emoji: &str| {
+            Text::new_inline(emoji.to_owned(), font, font_size)
+                .with_line_height_ratio(appearance.line_height_ratio())
+                .finish()
+        };
+        let model_robot_icon = || {
+            ConstrainedBox::new(
+                Image::new(
+                    AssetSource::Bundled {
+                        path: "bundled/svg/emoji-robot.svg",
+                    },
+                    CacheOption::BySize,
+                )
+                .finish(),
+            )
+            .with_width(font_size)
+            .with_height(font_size)
+            .finish()
+        };
+
+        let value_text = |label: String, color: Fill| {
+            Text::new_inline(label, font, font_size)
+                .with_color(color.into())
+                .with_line_height_ratio(appearance.line_height_ratio())
+                .with_style(Properties::default().weight(Weight::Semibold))
+                .finish()
+        };
+
+        if let Some(model) = session.model_label() {
+            let label = truncate_model_chip_label(model);
+            chips.push(chip_pad(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(context_chips::spacing::UDI_CHIP_ICON_GAP)
+                    .with_child(model_robot_icon())
+                    .with_child(value_text(label, muted))
+                    .finish(),
+            ));
+        }
+
+        if let Some(pct_label) = session.context_pct_label() {
+            let pct = session.session_context.context_used_pct.unwrap_or(0.0);
+            let tier = session
+                .context_pct_tier()
+                .unwrap_or(ContextPctTier::Ok);
+            let ring_color = match tier {
+                ContextPctTier::Ok => theme.ansi_fg_blue(),
+                ContextPctTier::Warn => theme.ansi_fg_yellow(),
+                ContextPctTier::Hot => theme.ansi_fg_red(),
+            };
+            // ConversationContext* SVGs are discrete 10% rings; fraction is 0–1.
+            let usage_fraction = (pct / 100.0).clamp(0.0, 1.0) as f32;
+            let ring = ConstrainedBox::new(
+                icon_for_context_window_usage(usage_fraction)
+                    .to_warpui_icon(Fill::Solid(ring_color))
+                    .finish(),
+            )
+            .with_width(font_size)
+            .with_height(font_size)
+            .finish();
+
+            chips.push(chip_pad(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(context_chips::spacing::UDI_CHIP_ICON_GAP)
+                    .with_child(ring)
+                    .with_child(value_text(pct_label, Fill::Solid(ring_color)))
+                    .finish(),
+            ));
+        }
+
+        if let Some(cost) = session.cost_label() {
+            chips.push(chip_pad(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(context_chips::spacing::UDI_CHIP_ICON_GAP)
+                    .with_child(emoji_text("💰"))
+                    .with_child(value_text(cost, gold))
+                    .finish(),
+            ));
+        }
+
+        chips
+    }
+
     fn render_cli_mode_footer(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let cli_icon_size = ButtonSize::AgentInputButton.icon_size(appearance, app);
@@ -1273,6 +1390,11 @@ impl AgentInputFooter {
                 .with_padding_right(8.)
                 .finish(),
             );
+        }
+
+        // Scheme C / V2′ session chips: model · context% · cost.
+        for chip in self.render_cli_session_stats_chips(appearance, app) {
+            left_buttons.add_child(chip);
         }
 
         if let Some(chip_kind) = self.plugin_chip_kind(app) {

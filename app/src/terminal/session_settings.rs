@@ -262,17 +262,33 @@ impl ToolbarChipSelection for CLIAgentToolbarChipSelection {
     }
 
     fn left_items(&self) -> Vec<AgentToolbarItemKind> {
-        match self {
+        let items = match self {
             Self::Default => Self::default_left_items(),
             Self::Custom { left, .. } => left.clone(),
-        }
+        };
+        Self::without_nav_duplicates(items)
     }
 
     fn right_items(&self) -> Vec<AgentToolbarItemKind> {
-        match self {
+        let items = match self {
             Self::Default => Self::default_right_items(),
             Self::Custom { right, .. } => right.clone(),
-        }
+        };
+        Self::without_nav_duplicates(items)
+    }
+}
+
+impl CLIAgentToolbarChipSelection {
+    /// Scheme C: strip path / branch that already live on the UDI top bar,
+    /// including older Custom layouts that still stored them.
+    fn without_nav_duplicates(items: Vec<AgentToolbarItemKind>) -> Vec<AgentToolbarItemKind> {
+        items
+            .into_iter()
+            .filter(|item| match item.context_chip_kind() {
+                Some(kind) => !AgentToolbarItemKind::is_cli_nav_duplicate(kind),
+                None => true,
+            })
+            .collect()
     }
 }
 
@@ -418,3 +434,37 @@ settings::macros::implement_setting_for_enum!(
     max_table_depth: 1,
     description: "Controls the working directory used when opening new sessions.",
 );
+
+
+#[cfg(test)]
+mod cli_scheme_c_tests {
+    use super::*;
+    use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
+    use crate::context_chips::ContextChipKind;
+
+    #[test]
+    fn cli_custom_selection_strips_nav_duplicates() {
+        let selection = CLIAgentToolbarChipSelection::Custom {
+            left: vec![
+                AgentToolbarItemKind::FileAttach,
+                AgentToolbarItemKind::ContextChip(ContextChipKind::WorkingDirectory),
+                AgentToolbarItemKind::ContextChip(ContextChipKind::GitDiffStats),
+            ],
+            right: vec![
+                AgentToolbarItemKind::ContextChip(ContextChipKind::ShellGitBranch),
+                AgentToolbarItemKind::Settings,
+            ],
+        };
+        assert_eq!(
+            selection.left_items(),
+            vec![
+                AgentToolbarItemKind::FileAttach,
+                AgentToolbarItemKind::ContextChip(ContextChipKind::GitDiffStats),
+            ]
+        );
+        assert_eq!(
+            selection.right_items(),
+            vec![AgentToolbarItemKind::Settings]
+        );
+    }
+}
