@@ -9,6 +9,7 @@ use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
 // Zap Wave 3-1:`ServerApiProvider` 不再被本文件使用,`debug_create_anonymous_user`
 // debug action 随 AuthClient 一同物理删。
 use ::settings::ToggleableSetting;
+use warp_core::channel::ChannelState;
 use warp_core::execution_mode::AppExecutionMode;
 
 use crate::ai::agent::conversation::AIConversationId;
@@ -181,6 +182,13 @@ pub(crate) fn flush_app_snapshot(ctx: &mut AppContext) {
 
 fn save_app_snapshot_now(ctx: &mut AppContext) {
     if !AppExecutionMode::as_ref(ctx).can_save_session() {
+        return;
+    }
+
+    // Unpackaged zap-oss shares Zap.app's session DB. It skips restore on
+    // startup; it must also skip save, or quit would wipe the formal app's
+    // persisted windows/agent tabs via delete-then-insert.
+    if ChannelState::should_skip_session_restore() {
         return;
     }
 

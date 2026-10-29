@@ -74,19 +74,51 @@ impl ChannelState {
         cfg!(feature = "release_bundle")
     }
 
-    /// Whether startup should skip restoring the previous session (windows / agent tabs).
+    /// True when this process should be treated as a packaged Zap install for
+    /// session restore/save: either compiled with `release_bundle`, or running
+    /// from a macOS `.app/Contents/MacOS/` path (belt-and-suspenders so a
+    /// mis-wired feature flag cannot make Zap.app skip or wipe sessions).
+    pub fn is_packaged_for_session_persistence() -> bool {
+        Self::is_release_bundle() || Self::is_running_inside_macos_app_bundle()
+    }
+
+    /// Runtime check: executable lives under `Something.app/Contents/MacOS/`.
+    pub fn is_running_inside_macos_app_bundle() -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(exe) = std::env::current_exe() {
+                if exe
+                    .to_string_lossy()
+                    .contains(".app/Contents/MacOS/")
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Whether startup should skip restoring the previous session (windows / agent tabs),
+    /// and whether this process must also refrain from writing the shared session DB.
     ///
-    /// Local/test `zap-oss` builds use [`Channel::Oss`] without the `release_bundle`
-    /// feature, while packaged Zap.app enables `release_bundle`. Both share the same
-    /// session DB under `.zap`, so skipping restore on unpackaged OSS keeps test
-    /// launches from resurrecting agent sessions left by Zap.app.
+    /// Local/test unpackaged `zap-oss` shares Zap.app's session DB. Skipping restore
+    /// alone is not enough: if test builds still save on quit they delete-then-insert
+    /// a sparse snapshot and wipe the formal app's sessions. So both restore and save
+    /// are gated by this predicate. Packaged Zap.app (release_bundle and/or `.app`
+    /// path) must never skip.
     pub fn should_skip_session_restore() -> bool {
-        Self::should_skip_session_restore_for(Self::channel(), Self::is_release_bundle())
+        Self::should_skip_session_restore_for(
+            Self::channel(),
+            Self::is_packaged_for_session_persistence(),
+        )
     }
 
     /// Pure/testable core of [`Self::should_skip_session_restore`].
-    pub fn should_skip_session_restore_for(channel: Channel, is_release_bundle: bool) -> bool {
-        matches!(channel, Channel::Oss) && !is_release_bundle
+    ///
+    /// `is_packaged` is true for release_bundle builds and for processes running
+    /// inside a macOS `.app` bundle.
+    pub fn should_skip_session_restore_for(channel: Channel, is_packaged: bool) -> bool {
+        matches!(channel, Channel::Oss) && !is_packaged
     }
 
     pub fn enable_debug_features() -> bool {

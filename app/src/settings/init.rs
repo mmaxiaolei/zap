@@ -145,8 +145,8 @@ pub fn init(
     let tips_skipped_or_completed = *general_settings.welcome_tips_skipped_or_completed;
     let user_default_shell_unsupported_banner_state =
         *general_settings.user_default_shell_unsupported_banner_state;
-    // Unpackaged/test zap-oss must not auto-restore agent/window sessions even
-    // when the user setting is on (shares DB with packaged Zap.app).
+    // Unpackaged/test zap-oss must not auto-restore (or save) agent/window
+    // sessions even when the user setting is on (shares DB with packaged Zap.app).
     let should_restore_session = *general_settings.restore_session
         && !warp_core::channel::ChannelState::should_skip_session_restore();
 

@@ -596,11 +596,12 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
         };
 
         // Check whether user has enabled session restoration.
-        // Unpackaged/test zap-oss shares Zap.app's session DB; skip restore so
-        // local test launches don't reopen previous agent sessions.
+        // Unpackaged/test zap-oss shares Zap.app's session DB; skip restore
+        // (and save — see save_app_snapshot_now) so test launches neither
+        // reopen nor wipe formal Zap.app sessions.
         if ChannelState::should_skip_session_restore() {
             log::info!(
-                "Skipping session restore: unpackaged zap-oss test build (not Zap.app release_bundle)"
+                "Skipping session restore/save: unpackaged zap-oss test build (not packaged Zap.app)"
             );
         } else if *GeneralSettings::as_ref(ctx).restore_session {
             let mut active_index = None;

@@ -18,8 +18,9 @@ fn unpackaged_oss_skips_session_restore() {
 }
 
 #[test]
-fn packaged_oss_release_bundle_restores_session() {
+fn packaged_oss_restores_session() {
     use super::Channel;
+    // release_bundle and/or running inside Zap.app both pass is_packaged=true.
     assert!(!ChannelState::should_skip_session_restore_for(Channel::Oss, true));
 }
 
@@ -39,4 +40,12 @@ fn non_oss_channels_do_not_skip_session_restore() {
         );
         assert!(!ChannelState::should_skip_session_restore_for(channel, true));
     }
+}
+
+#[test]
+fn macos_app_bundle_path_detection_helper_is_safe_off_macos_path() {
+    // Pure helper: when current_exe is not under .app/Contents/MacOS, returns false
+    // unless release_bundle is compiled in. Just smoke that the API exists.
+    let _ = ChannelState::is_running_inside_macos_app_bundle();
+    let _ = ChannelState::is_packaged_for_session_persistence();
 }
