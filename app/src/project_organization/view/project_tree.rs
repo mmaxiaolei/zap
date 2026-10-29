@@ -589,12 +589,12 @@ fn workspace_group_is_selected(
 }
 
 /// Legacy per-row accent fill. Depth Stack never paints accent on the workspace head —
-/// selection chrome lives on the elevated group wrapper (and active-tab chip).
+/// selection chrome lives on the elevated group wrapper (and active-tab inset).
 fn workspace_row_shows_selection_accent(_workspace: &WorkspaceTreeNode, _is_selected: bool) -> bool {
     false
 }
 
-// Depth Stack tokens (from 2026-10-20-zap-selection-aesthetic.html `.ds .ws-group.is-sel`).
+// Depth Stack tokens (group from 2026-10-20 aesthetic; active tab = S2 fake inset slot).
 const DEPTH_STACK_GROUP_BG: ColorU = ColorU {
     r: 34,
     g: 34,
@@ -609,28 +609,42 @@ const DEPTH_STACK_GROUP_HAIRLINE: ColorU = ColorU {
 }; // rgba(255,255,255,.1)
 const DEPTH_STACK_GROUP_RADIUS: f32 = 14.;
 const DEPTH_STACK_GROUP_PAD_Y: f32 = 5.;
-/// Active chip — one step brighter than old `#32323a` so it reads as solid vs hover wash.
-const DEPTH_STACK_CHIP_BG: ColorU = ColorU {
-    r: 64,
-    g: 64,
-    b: 74,
+/// S2 fake inset slot — outer dark lip ring (1px) + inner deeper fill (no DropShadow inset).
+/// Outer lip sits darker than the slot face so the tab reads pressed into Depth Stack.
+const DEPTH_STACK_INSET_LIP_BG: ColorU = ColorU {
+    r: 8,
+    g: 8,
+    b: 10,
     a: 255,
-}; // #40404a
-const DEPTH_STACK_CHIP_RADIUS: f32 = 9.;
-const DEPTH_STACK_CHIP_HAIRLINE: ColorU = ColorU {
-    r: 255,
-    g: 255,
-    b: 255,
-    a: 28,
-}; // rgba(255,255,255,~.11)
-/// Inactive hover: light white wash — never a solid gray pill like the chip.
+}; // #08080a dark slot lip
+const DEPTH_STACK_INSET_LIP_PAD: f32 = 1.;
+const DEPTH_STACK_INSET_BG: ColorU = ColorU {
+    r: 20,
+    g: 20,
+    b: 24,
+    a: 255,
+}; // #141418 (S2 slot face — deeper than prior #1a1a1f)
+const DEPTH_STACK_INSET_RADIUS: f32 = 9.;
+const DEPTH_STACK_INSET_INNER_RADIUS: f32 = 8.;
+const DEPTH_STACK_INSET_BORDER: ColorU = ColorU {
+    r: 0,
+    g: 0,
+    b: 0,
+    a: 140,
+}; // rgba(0,0,0,.55) — S2 slot lip edge
+/// Shared horizontal inset inside Depth Stack: workspace head pad + tab slot/wash gutter.
+/// Slot outer edge lines up with the head row's content box (render_workspace_row H pad).
+const DEPTH_STACK_ROW_INSET_H: f32 = 8.;
+const DEPTH_STACK_TAB_GUTTER_H: f32 = DEPTH_STACK_ROW_INSET_H;
+const DEPTH_STACK_TAB_GUTTER_V: f32 = 1.;
+/// Inactive hover: light white wash — never a solid gray pill like the old raised chip.
 const DEPTH_STACK_TAB_HOVER_WASH: ColorU = ColorU {
     r: 255,
     g: 255,
     b: 255,
-    a: 14,
-}; // ~5.5% white
-const DEPTH_STACK_TAB_HOVER_RADIUS: f32 = 5.;
+    a: 8,
+}; // ~3% white (v4 `.d3 .tab:hover`)
+const DEPTH_STACK_TAB_HOVER_RADIUS: f32 = 8.;
 const DEPTH_STACK_HEAD_LABEL: ColorU = ColorU {
     r: 244,
     g: 244,
@@ -638,32 +652,39 @@ const DEPTH_STACK_HEAD_LABEL: ColorU = ColorU {
     a: 255,
 }; // #f4f4f8
 const DEPTH_STACK_ACTIVE_TAB_LABEL: ColorU = ColorU {
-    r: 255,
-    g: 255,
-    b: 255,
+    r: 246,
+    g: 246,
+    b: 248,
     a: 255,
-};
+}; // #f6f6f8
 const DEPTH_STACK_INACTIVE_TAB_LABEL: ColorU = ColorU {
-    r: 160,
-    g: 160,
-    b: 170,
+    r: 120,
+    g: 120,
+    b: 128,
     a: 255,
-}; // #a0a0aa
+}; // #787880
+/// Model accessory on the right — secondary type, never a gray pill.
+const DEPTH_STACK_MODEL_LABEL: ColorU = ColorU {
+    r: 154,
+    g: 154,
+    b: 164,
+    a: 255,
+}; // #9a9aa4
 
-/// Static fill policy for Depth Stack tabs (hover is render-time; chip must not match wash).
+/// Static fill policy for Depth Stack tabs (hover is render-time; inset must not match wash).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DepthStackTabFill {
-    /// Solid elevated chip + hairline + shadow (no accent rail).
-    ActiveChip,
-    /// Faint white wash, radius 5, no border / no shadow.
+    /// S2 fake inset slot: outer dark lip + inner deeper fill (no outer / inset DropShadow).
+    ActiveInset,
+    /// Faint white wash, no border / no shadow.
     HoverWash,
     None,
 }
 
-/// Active always wins: hovering the active tab keeps the chip (no extra wash).
+/// Active always wins: hovering the active tab keeps the inset (no extra wash).
 fn depth_stack_tab_fill(is_active: bool, is_hovered: bool) -> DepthStackTabFill {
     if is_active {
-        DepthStackTabFill::ActiveChip
+        DepthStackTabFill::ActiveInset
     } else if is_hovered {
         DepthStackTabFill::HoverWash
     } else {
@@ -681,14 +702,27 @@ fn depth_stack_group_drop_shadow() -> DropShadow {
     }
 }
 
-fn depth_stack_chip_drop_shadow() -> DropShadow {
-    // Slightly stronger than before so chip reads as floating vs flat hover wash.
-    DropShadow {
-        color: ColorU::new(0, 0, 0, 110),
-        offset: vec2f(0., 2.),
-        blur_radius: 10.,
-        spread_radius: 0.,
-    }
+/// S2 fake inset slot: outer 1px dark lip + inner `#141418` face (WarpUI has no inset shadow).
+/// H gutter = DEPTH_STACK_ROW_INSET_H so slot outer edges align with workspace-head content.
+fn depth_stack_active_inset_slot(child: Box<dyn Element>) -> Box<dyn Element> {
+    let inner = Container::new(child)
+        .with_horizontal_padding(DEPTH_STACK_ROW_INSET_H)
+        .with_vertical_padding(5.)
+        .with_background(DEPTH_STACK_INSET_BG)
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+            DEPTH_STACK_INSET_INNER_RADIUS,
+        )))
+        .finish();
+    Container::new(inner)
+        .with_horizontal_padding(DEPTH_STACK_INSET_LIP_PAD)
+        .with_vertical_padding(DEPTH_STACK_INSET_LIP_PAD)
+        .with_background(DEPTH_STACK_INSET_LIP_BG)
+        .with_border(Border::all(1.).with_border_fill(DEPTH_STACK_INSET_BORDER))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(DEPTH_STACK_INSET_RADIUS)))
+        .with_horizontal_margin(DEPTH_STACK_TAB_GUTTER_H)
+        .with_margin_top(DEPTH_STACK_TAB_GUTTER_V)
+        .with_margin_bottom(DEPTH_STACK_TAB_GUTTER_V)
+        .finish()
 }
 
 /// Elevated Depth Stack chrome wrapping the selected workspace head + tabs.
@@ -1805,7 +1839,7 @@ impl ProjectTreePanel {
                     )
                     .finish();
                 let mut row_container = Container::new(row_content)
-                    .with_horizontal_padding(8.)
+                    .with_horizontal_padding(DEPTH_STACK_ROW_INSET_H)
                     .with_vertical_padding(5.)
                     .with_corner_radius(CornerRadius::with_all(Radius::Pixels(5.)));
                 // Depth Stack: never paint row-level accent fill/frame on the head.
@@ -1872,6 +1906,12 @@ impl ProjectTreePanel {
                 .model_chip_tooltip()
                 .unwrap_or(label.as_str())
                 .to_owned();
+            // Secondary type only — never a gray pill competing with the inset.
+            let model_color = if tab.is_active {
+                DEPTH_STACK_MODEL_LABEL
+            } else {
+                sub_text
+            };
             let chip = ConstrainedBox::new(
                 Text::new_inline(
                     label,
@@ -1879,7 +1919,7 @@ impl ProjectTreePanel {
                     appearance.ui_font_footnote(),
                 )
                 .with_clip(ClipConfig::ellipsis())
-                .with_color(sub_text.into())
+                .with_color(model_color.into())
                 .finish(),
             )
             .with_max_width(MODEL_CHIP_MAX_WIDTH)
@@ -1994,39 +2034,30 @@ impl ProjectTreePanel {
                     .with_child(Shrinkable::new(1.0, labeled_content).finish())
                     .with_child(trailing.finish())
                     .finish();
-                // Depth Stack: active chip ≠ hover wash (see depth_stack_tab_fill).
+                // Depth Stack: active inset ≠ hover wash (see depth_stack_tab_fill).
                 let fill = depth_stack_tab_fill(
                     visual_state.should_render_active_tab_chip(),
                     mouse_state.is_hovered(),
                 );
                 let row_el: Box<dyn Element> = match fill {
-                    DepthStackTabFill::ActiveChip => Container::new(row_content)
-                        .with_horizontal_padding(8.)
-                        .with_vertical_padding(4.)
-                        .with_background(DEPTH_STACK_CHIP_BG)
-                        .with_border(
-                            Border::all(1.).with_border_fill(DEPTH_STACK_CHIP_HAIRLINE),
-                        )
-                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
-                            DEPTH_STACK_CHIP_RADIUS,
-                        )))
-                        .with_drop_shadow(depth_stack_chip_drop_shadow())
-                        .finish(),
+                    DepthStackTabFill::ActiveInset => depth_stack_active_inset_slot(row_content),
                     DepthStackTabFill::HoverWash => Container::new(row_content)
-                        .with_horizontal_padding(8.)
-                        .with_vertical_padding(4.)
+                        .with_horizontal_padding(DEPTH_STACK_ROW_INSET_H)
+                        .with_vertical_padding(5.)
                         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
                             DEPTH_STACK_TAB_HOVER_RADIUS,
                         )))
                         // Light sweep only — no border, no shadow, not overlay_2 gray pill.
                         .with_background(DEPTH_STACK_TAB_HOVER_WASH)
+                        .with_horizontal_margin(DEPTH_STACK_TAB_GUTTER_H)
                         .finish(),
                     DepthStackTabFill::None => Container::new(row_content)
-                        .with_horizontal_padding(8.)
-                        .with_vertical_padding(4.)
+                        .with_horizontal_padding(DEPTH_STACK_ROW_INSET_H)
+                        .with_vertical_padding(5.)
                         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
                             DEPTH_STACK_TAB_HOVER_RADIUS,
                         )))
+                        .with_horizontal_margin(DEPTH_STACK_TAB_GUTTER_H)
                         .finish(),
                 };
 

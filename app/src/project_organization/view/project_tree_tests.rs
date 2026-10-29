@@ -47,7 +47,9 @@ use super::{
     workspace_group_is_selected, workspace_row_is_selected, workspace_row_position_id,
     workspace_row_shows_selection_accent, workspace_shows_branch_subtitle, DepthStackTabFill,
     ProjectTreeEvent, ProjectTreePanel, ProjectTreeState, RepositoryTreeNode, TabLayout,
-    WorkspaceTreeNode, WorkspaceVisualState, DEPTH_STACK_CHIP_BG, DEPTH_STACK_TAB_HOVER_WASH,
+    WorkspaceTreeNode, WorkspaceVisualState, DEPTH_STACK_GROUP_BG, DEPTH_STACK_INSET_BG,
+    DEPTH_STACK_INSET_BORDER, DEPTH_STACK_INSET_LIP_BG, DEPTH_STACK_ROW_INSET_H,
+    DEPTH_STACK_TAB_GUTTER_H, DEPTH_STACK_TAB_HOVER_WASH,
     TREE_TRAILING_ACTION_SPACING, TREE_TRAILING_META_WIDTH,
 };
 
@@ -620,15 +622,15 @@ fn depth_stack_group_selection_matches_active_workspace() {
 }
 
 #[test]
-fn depth_stack_tab_fill_keeps_chip_distinct_from_hover_wash() {
-    // Active always chip — even while hovered (no second wash layer).
+fn depth_stack_tab_fill_keeps_inset_distinct_from_hover_wash() {
+    // Active always inset — even while hovered (no second wash layer).
     assert_eq!(
         depth_stack_tab_fill(true, false),
-        DepthStackTabFill::ActiveChip
+        DepthStackTabFill::ActiveInset
     );
     assert_eq!(
         depth_stack_tab_fill(true, true),
-        DepthStackTabFill::ActiveChip
+        DepthStackTabFill::ActiveInset
     );
     assert_eq!(
         depth_stack_tab_fill(false, true),
@@ -636,12 +638,41 @@ fn depth_stack_tab_fill_keeps_chip_distinct_from_hover_wash() {
     );
     assert_eq!(depth_stack_tab_fill(false, false), DepthStackTabFill::None);
 
-    // Solid chip bg must not equal the translucent hover wash (different look on elevated group).
-    assert_ne!(DEPTH_STACK_CHIP_BG, DEPTH_STACK_TAB_HOVER_WASH);
-    assert!(DEPTH_STACK_CHIP_BG.a == 255, "chip is opaque elevated fill");
+    // S2 slot: opaque inner face darker than group; lip darker than face; dark border (not hairline).
+    assert_ne!(DEPTH_STACK_INSET_BG, DEPTH_STACK_TAB_HOVER_WASH);
+    assert_eq!(DEPTH_STACK_INSET_BG.a, 255, "inset slot face is opaque recessed fill");
+    assert_eq!(DEPTH_STACK_INSET_BG.r, 20);
+    assert_eq!(DEPTH_STACK_INSET_BG.g, 20);
+    assert_eq!(DEPTH_STACK_INSET_BG.b, 24); // #141418
     assert!(
-        DEPTH_STACK_TAB_HOVER_WASH.a <= 18,
+        DEPTH_STACK_INSET_BG.r < DEPTH_STACK_GROUP_BG.r
+            && DEPTH_STACK_INSET_BG.g < DEPTH_STACK_GROUP_BG.g
+            && DEPTH_STACK_INSET_BG.b < DEPTH_STACK_GROUP_BG.b,
+        "slot face must sit darker than Depth Stack group"
+    );
+    assert_eq!(DEPTH_STACK_INSET_LIP_BG.a, 255, "slot lip is opaque");
+    assert!(
+        DEPTH_STACK_INSET_LIP_BG.r < DEPTH_STACK_INSET_BG.r
+            && DEPTH_STACK_INSET_LIP_BG.g < DEPTH_STACK_INSET_BG.g
+            && DEPTH_STACK_INSET_LIP_BG.b < DEPTH_STACK_INSET_BG.b,
+        "outer lip must be darker than inner slot face (fake inset ring)"
+    );
+    assert_eq!(DEPTH_STACK_INSET_BORDER.r, 0);
+    assert_eq!(DEPTH_STACK_INSET_BORDER.g, 0);
+    assert_eq!(DEPTH_STACK_INSET_BORDER.b, 0);
+    assert!(
+        DEPTH_STACK_INSET_BORDER.a >= 100 && DEPTH_STACK_INSET_BORDER.a <= 160,
+        "S2 lip edge uses a stronger dark border (~rgba 0,0,0,.55)"
+    );
+    assert!(
+        DEPTH_STACK_TAB_HOVER_WASH.a <= 12,
         "hover wash stays a light sweep"
+    );
+    // Slot/wash gutter matches workspace-head horizontal content inset (same column).
+    assert_eq!(DEPTH_STACK_ROW_INSET_H, 8.);
+    assert_eq!(
+        DEPTH_STACK_TAB_GUTTER_H, DEPTH_STACK_ROW_INSET_H,
+        "tab gutter must match Depth Stack workspace-head H inset"
     );
 }
 
