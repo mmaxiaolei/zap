@@ -611,6 +611,17 @@ impl LocalRepoMetadataModel {
             let is_ignored = Self::path_is_ignored(path_to_add, gitignores);
 
             if path_to_add.is_dir() {
+                // Gitignored directories must not be re-walked on every watcher event
+                // (e.g. cargo `target/` churn). Insert an unloaded placeholder instead,
+                // matching how the initial index represents ignored dirs (IncludeLazy).
+                if is_ignored {
+                    mutations.push(FileTreeMutation::AddEmptyDirectory {
+                        path: path_to_add.clone(),
+                        is_ignored,
+                    });
+                    continue;
+                }
+
                 let mut files = Vec::new();
                 let mut gitignores = gitignores.to_owned();
                 let mut file_limit = MAX_FILES_PER_REPO;
@@ -693,7 +704,11 @@ impl LocalRepoMetadataModel {
                     let Some(std_path) = StandardizedPath::try_from_local(path).ok() else {
                         continue;
                     };
-                    if lazy_load && !Self::is_parent_loaded_in_entry(root_entry, &std_path) {
+                    // Gitignored paths are lazy like `lazy_load`: don't materialize
+                    // beneath an unloaded (collapsed) ancestor.
+                    if (lazy_load || is_ignored)
+                        && !Self::is_parent_loaded_in_entry(root_entry, &std_path)
+                    {
                         continue;
                     }
                     let Some(parent) = std_path.parent() else {
@@ -770,7 +785,19 @@ impl LocalRepoMetadataModel {
                     let Some(std_path) = StandardizedPath::try_from_local(path).ok() else {
                         continue;
                     };
-                    if lazy_load && !Self::is_parent_loaded_in_entry(root_entry, &std_path) {
+                    // Don't collapse an already-expanded directory back to an unloaded
+                    // placeholder (e.g. a deep event under an expanded ignored dir).
+                    if matches!(
+                        root_entry.get(&std_path),
+                        Some(FileTreeEntryState::Directory(dir)) if dir.loaded
+                    ) {
+                        continue;
+                    }
+                    // Gitignored placeholders are lazy: like `lazy_load`, don't
+                    // materialize one beneath an unloaded (collapsed) ignored ancestor.
+                    if (lazy_load || is_ignored)
+                        && !Self::is_parent_loaded_in_entry(root_entry, &std_path)
+                    {
                         continue;
                     }
                     let Some(parent) = std_path.parent() else {
