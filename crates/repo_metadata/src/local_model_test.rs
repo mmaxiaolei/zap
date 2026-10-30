@@ -6,7 +6,7 @@ mod tests {
     use crate::entry::{DirectoryEntry, Entry, FileMetadata};
     use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState, FileTreeState};
     use crate::local_model::{
-        GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoUpdate,
+        FileTreeMutation, GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoUpdate,
         RepositoryMetadataEvent,
     };
     use crate::repositories::DetectedRepositories;
@@ -607,6 +607,180 @@ mod tests {
                 .get(&StandardizedPath::try_from_local(&target_dir).unwrap())
                 .unwrap()
                 .loaded());
+        });
+    }
+
+    /// Ignored directories must become unloaded placeholders, never full subtree walks.
+    #[test]
+    fn test_ignored_directory_addition_skips_subtree_walk() {
+        VirtualFS::test("ignored_dir_skip_walk", |dirs, mut fs| {
+            fs.mkdir("repo/target/debug/.fingerprint")
+                .mkdir("repo/src")
+                .with_files(vec![
+                    Stub::FileWithContent("repo/.gitignore", "target/\n"),
+                    Stub::FileWithContent("repo/target/debug/.fingerprint/x.json", "{}"),
+                    Stub::FileWithContent("repo/src/main.rs", "fn main() {}"),
+                ]);
+
+            let repo_local = dirs.tests().join("repo");
+            let target_local = repo_local.join("target");
+            let src_local = repo_local.join("src");
+            let gitignores = crate::gitignores_for_directory(&repo_local);
+
+            let update = RepoUpdate {
+                added: vec![target_local.clone(), src_local.clone()],
+                deleted: vec![],
+                moved: HashMap::new(),
+            };
+            let mutations = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                &update,
+                &gitignores,
+            ));
+
+            let target_mut = mutations.iter().find(|m| match m {
+                FileTreeMutation::AddEmptyDirectory { path, is_ignored } => {
+                    path == &target_local && *is_ignored
+                }
+                FileTreeMutation::AddDirectorySubtree { dir_path, .. } => dir_path == &target_local,
+                _ => false,
+            });
+            assert!(
+                matches!(
+                    target_mut,
+                    Some(FileTreeMutation::AddEmptyDirectory { is_ignored: true, .. })
+                ),
+                "ignored target/ must be AddEmptyDirectory, got {mutations:?}"
+            );
+
+            assert!(
+                mutations.iter().any(|m| matches!(
+                    m,
+                    FileTreeMutation::AddDirectorySubtree { dir_path, .. } if dir_path == &src_local
+                )),
+                "non-ignored src/ should still be walked as a subtree"
+            );
+        });
+    }
+
+    /// A deep event under an unloaded ignored placeholder must not materialize descendants.
+    #[test]
+    fn test_deep_event_under_unloaded_ignored_dir_stays_collapsed() {
+        VirtualFS::test("deep_under_unloaded_ignored", |dirs, mut vfs| {
+            vfs.mkdir("repo/target/debug/.fingerprint").with_files(vec![
+                Stub::FileWithContent("repo/.gitignore", "target/\n"),
+                Stub::FileWithContent("repo/target/debug/.fingerprint/x.json", "{}"),
+            ]);
+
+            let repo_local = dirs.tests().join("repo");
+            let target_local = repo_local.join("target");
+            let deep_dir_local = target_local.join("debug").join(".fingerprint");
+            let deep_file_local = deep_dir_local.join("x.json");
+
+            let repo_std = StandardizedPath::try_from_local(&repo_local).unwrap();
+            let target_std = StandardizedPath::try_from_local(&target_local).unwrap();
+            let debug_std =
+                StandardizedPath::try_from_local(&target_local.join("debug")).unwrap();
+
+            let root_entry = Entry::Directory(DirectoryEntry {
+                path: repo_std,
+                children: vec![Entry::Directory(DirectoryEntry {
+                    path: target_std.clone(),
+                    children: vec![],
+                    ignored: true,
+                    loaded: false,
+                })],
+                ignored: false,
+                loaded: true,
+            });
+            let mut tree = FileTreeEntry::from(root_entry);
+            let gitignores = crate::gitignores_for_directory(&repo_local);
+
+            let update = RepoUpdate {
+                added: vec![deep_dir_local, deep_file_local],
+                deleted: vec![],
+                moved: HashMap::new(),
+            };
+            let mutations = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                &update,
+                &gitignores,
+            ));
+            LocalRepoMetadataModel::apply_file_tree_mutations(&mut tree, mutations, false, false);
+
+            match tree.get(&target_std).expect("target should remain") {
+                FileTreeEntryState::Directory(directory) => {
+                    assert!(!directory.loaded, "target must stay unloaded");
+                    assert!(directory.ignored, "target must stay ignored");
+                }
+                FileTreeEntryState::File(_) => panic!("target should be a directory"),
+            }
+            assert!(
+                tree.get(&debug_std).is_none(),
+                "nothing below unloaded ignored target should materialize"
+            );
+        });
+    }
+
+    /// An event under an already-expanded ignored dir must still deliver the new file
+    /// and must not collapse the expanded dir back to an unloaded placeholder.
+    #[test]
+    fn test_event_under_expanded_ignored_dir_delivers_file() {
+        VirtualFS::test("event_under_expanded_ignored", |dirs, mut vfs| {
+            vfs.mkdir("repo/target/debug").with_files(vec![
+                Stub::FileWithContent("repo/.gitignore", "target/\n"),
+                Stub::FileWithContent("repo/target/debug/new.rs", "fn x() {}"),
+            ]);
+
+            let repo_local = dirs.tests().join("repo");
+            let target_local = repo_local.join("target");
+            let debug_local = target_local.join("debug");
+            let new_file_local = debug_local.join("new.rs");
+
+            let repo_std = StandardizedPath::try_from_local(&repo_local).unwrap();
+            let target_std = StandardizedPath::try_from_local(&target_local).unwrap();
+            let debug_std = StandardizedPath::try_from_local(&debug_local).unwrap();
+            let new_file_std = StandardizedPath::try_from_local(&new_file_local).unwrap();
+
+            let root_entry = Entry::Directory(DirectoryEntry {
+                path: repo_std,
+                children: vec![Entry::Directory(DirectoryEntry {
+                    path: target_std.clone(),
+                    children: vec![Entry::Directory(DirectoryEntry {
+                        path: debug_std,
+                        children: vec![],
+                        ignored: true,
+                        loaded: true,
+                    })],
+                    ignored: true,
+                    loaded: true,
+                })],
+                ignored: false,
+                loaded: true,
+            });
+            let mut tree = FileTreeEntry::from(root_entry);
+            let gitignores = crate::gitignores_for_directory(&repo_local);
+
+            let update = RepoUpdate {
+                added: vec![new_file_local],
+                deleted: vec![],
+                moved: HashMap::new(),
+            };
+            let mutations = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                &update,
+                &gitignores,
+            ));
+            LocalRepoMetadataModel::apply_file_tree_mutations(&mut tree, mutations, false, false);
+
+            match tree.get(&target_std).expect("expanded target remains") {
+                FileTreeEntryState::Directory(directory) => {
+                    assert!(directory.loaded, "must not collapse expanded ignored dir");
+                    assert!(directory.ignored);
+                }
+                FileTreeEntryState::File(_) => panic!("target should be a directory"),
+            }
+            assert!(
+                tree.get(&new_file_std).is_some(),
+                "new file under expanded ignored dir should be delivered"
+            );
         });
     }
 
